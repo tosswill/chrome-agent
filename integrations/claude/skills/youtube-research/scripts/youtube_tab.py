@@ -12,9 +12,12 @@ CLI (each command prints JSON):
     youtube_tab.py open [--wait [SECONDS]]                 claim a window -> {"target": ID}
     youtube_tab.py search ID QUERY [--sort relevance|views] [--upload hour|today|week|month|year] [--shorts]
     youtube_tab.py video ID URL                            metadata, disclosure signals, chapters, description
-    youtube_tab.py transcript ID [--grep TERM ...] [--context N]   segments (all, or matching terms +/- N)
+    youtube_tab.py transcript ID [--context N] [--grep TERM ...]   segments with timestamped links
+                       (--grep: case-insensitive plain-text substrings, any of them; not regex)
     youtube_tab.py comments ID [--max N]                   top comments of the loaded video (default 20)
-    youtube_tab.py frame ID AT [--out PATH]                theater mode, pause, jump to AT (e.g. 6:17), capture the player
+    youtube_tab.py frame ID AT [AT ...] [--out-dir DIR | --out PATH]
+                       theater mode, pause, jump to each AT (e.g. 6:17), capture the player;
+                       files are named from the time actually landed on
     youtube_tab.py shot ID [--out PATH]                    screenshot of the visible page
     youtube_tab.py channel ID URL|@handle                  channel header + recent uploads
     youtube_tab.py nav ID URL | eval ID JS|@file.js        escape hatches (paced load / run JS)
@@ -39,7 +42,7 @@ from urllib.parse import parse_qs, quote, urlencode, urlparse
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parents[2] / "lib"))
-from research_core import Fail, Site, common_cli, opt, run_cli  # noqa: E402
+from research_core import Fail, Site, common_cli, opt, pause, run_cli  # noqa: E402
 
 SORTS = {"relevance": None, "views": 3}
 UPLOADS = {"hour": 1, "today": 2, "week": 3, "month": 4, "year": 5}
@@ -164,7 +167,7 @@ def _hover_player(full_id: str, st: dict) -> None:
     pl = st.get("player")
     if pl:
         SITE.move(full_id, pl["x"] + pl["width"] * 0.55, pl["y"] + pl["height"] * 0.5)
-        time.sleep(0.4)
+        pause(0.4)
 
 
 def _ensure_muted(full_id: str) -> bool:
@@ -176,7 +179,7 @@ def _ensure_muted(full_id: str) -> bool:
     r = SITE.rect(full_id, ".ytp-mute-button")
     if r:
         SITE.click(full_id, r["x"] + r["width"] / 2, r["y"] + r["height"] / 2)
-        time.sleep(0.4)
+        pause(0.4)
     return bool(_state(full_id).get("muted"))
 
 
@@ -191,16 +194,31 @@ def _clear_ads(full_id: str, timeout: float = 30) -> dict:
         seen = True
         if st.get("skip"):
             SITE.move(full_id, st["skip"][0] - 4, st["skip"][1] - 3)
-            time.sleep(0.2)
+            pause(0.2)
             SITE.click(full_id, *st["skip"])
             skipped = True
-            time.sleep(1.5)
+            pause(1.5)
         else:
-            time.sleep(1)
+            pause(1)
     still = bool(_state(full_id).get("ad"))
     if not still:
         _ensure_muted(full_id)
     return {"ad_seen": seen, "ad_skipped": skipped, "ad_still_playing": still}
+
+
+_BUFFERING_JS = """(() => { const sp = document.querySelector('.ytp-spinner'), v = document.querySelector('video');
+  const spin = !!sp && getComputedStyle(sp).display !== 'none' && sp.getBoundingClientRect().width > 0;
+  return spin || (!!v && v.readyState < 3); })()"""
+
+
+def _wait_buffered(full_id: str, timeout: float = 10) -> bool:
+    """Wait until the frame is decoded (no spinner). Returns True if still buffering."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if not SITE.evaluate(full_id, _BUFFERING_JS):
+            return False
+        pause(0.5)
+    return bool(SITE.evaluate(full_id, _BUFFERING_JS))
 
 
 def _ensure_theater(full_id: str) -> bool:
@@ -227,7 +245,7 @@ def _ensure_paused(full_id: str) -> bool:
     r = SITE.rect(full_id, ".ytp-play-button")
     if r:
         SITE.click(full_id, r["x"] + r["width"] / 2, r["y"] + r["height"] / 2)
-        time.sleep(0.5)
+        pause(0.5)
     return bool(_state(full_id).get("paused"))
 
 
@@ -245,9 +263,9 @@ def _seek_by_click(full_id: str, sec: float) -> float | None:
         x = bar["x"] + bar["width"] * min(max(sec / dur, 0), 0.999)
         y = bar["y"] + bar["height"] / 2
         SITE.move(full_id, x, y)
-        time.sleep(0.25)
+        pause(0.25)
         SITE.click(full_id, x, y)
-        time.sleep(1.2)
+        pause(1.2)
         t = _state(full_id).get("t") or 0
         if abs(t - sec) <= max(3, 2 * dur / bar["width"]):
             return t
@@ -256,17 +274,32 @@ def _seek_by_click(full_id: str, sec: float) -> float | None:
     return _state(full_id).get("t")
 
 
-def _open_transcript(full_id: str) -> bool:
-    seg = "transcript-segment-view-model, ytd-transcript-segment-renderer"
-    if SITE.evaluate(full_id, f"!!document.querySelector({json.dumps(seg)})"):
-        return True
+_SEG = "transcript-segment-view-model, ytd-transcript-segment-renderer"
+_TRANSCRIPT_ERR_JS = ("Math.max(0, ...performance.getEntriesByType('resource')"
+                      ".filter(e => e.name.includes('/get_transcript')).map(e => e.responseStatus || 0))")
+
+
+def _open_transcript(full_id: str) -> tuple[bool, str | None]:
+    """Open the transcript with real clicks. Returns (ok, reason-if-not)."""
+    if SITE.evaluate(full_id, f"!!document.querySelector({json.dumps(_SEG)})"):
+        return True, None
     btn = "ytd-video-description-transcript-section-renderer button"
     if not SITE.rect(full_id, btn):
         SITE.click_on(full_id, "#description-inline-expander #expand, tp-yt-paper-button#expand")
-        time.sleep(0.8)
+        pause(0.8)
     if not SITE.click_on(full_id, btn):
-        return False
-    return SITE.wait_for(full_id, f"!!document.querySelector({json.dumps(seg)})", timeout=15)
+        return False, "no_transcript: this video has no 'Show transcript' button."
+    deadline = time.time() + 15
+    while time.time() < deadline:
+        if SITE.evaluate(full_id, f"!!document.querySelector({json.dumps(_SEG)})"):
+            return True, None
+        status = SITE.evaluate(full_id, _TRANSCRIPT_ERR_JS) or 0
+        if status >= 400:
+            return False, (f"youtube_error: YouTube's transcript service returned HTTP {status} for this video, "
+                           "so the panel never loads (a person would see the same endless spinner). "
+                           "Use chapters, the description, comments and frames instead.")
+        pause(1)
+    return False, "timeout: the transcript panel did not load within 15 s."
 
 
 # -------------------------------------------------------------------------
@@ -286,6 +319,51 @@ def search(target: str, query: str, sort: str = "relevance", upload: str | None 
     return {"page": page, "results": results}
 
 
+_NEGATED = re.compile(r"\b(not|no|never|isn'?t|wasn'?t|un)[ -]?(sponsor|paid|gifted|provided|affiliat)|"
+                      r"\bbought (it |this |them )?(myself|with my own)|\bmy own money|\bpaid for (it|this|them) myself", re.I)
+_SPONSOR = re.compile(r"\b(sponsored|sponsor(ed)? by|paid partnership|in partnership with|#ad\b|#sponsored|"
+                      r"brought to you by|thanks to \S+ for sponsoring)", re.I)
+_UNIT = re.compile(r"\b(provided by|sent (to )?(me|us)|loaned|review (unit|sample)|gifted|early access|embargo)", re.I)
+
+
+def _sentences(text: str) -> list[str]:
+    return [x.strip() for x in re.split(r"(?<=[.!?])\s+|\n+", text or "") if x.strip()]
+
+
+def sponsor_bias(data: dict) -> dict:
+    """Heuristic 0.0-1.0 likelihood that a video is sponsored or sponsor-influenced, from what the
+    page shows (paid-promotion label, description wording, affiliate links). A starting point:
+    the agent should adjust it with transcript and channel evidence."""
+    score, evidence = 0.1, []
+    d = data.get("disclosure") or {}
+    if d.get("paid_promotion_label"):
+        score += 0.6
+        evidence.append({"signal": "paid_promotion_label", "weight": 0.6, "text": d.get("paid_promotion_text")})
+    seen = set()
+    for sent in _sentences(data.get("description", "")):
+        if _NEGATED.search(sent):
+            score -= 0.1
+            evidence.append({"signal": "claims_not_sponsored", "weight": -0.1, "text": sent[:200]})
+            continue
+        if _SPONSOR.search(sent) and "sponsor" not in seen:
+            seen.add("sponsor")
+            score += 0.35
+            evidence.append({"signal": "sponsor_wording", "weight": 0.35, "text": sent[:200]})
+        elif _UNIT.search(sent) and "unit" not in seen:
+            seen.add("unit")
+            score += 0.25
+            evidence.append({"signal": "review_unit_or_access", "weight": 0.25, "text": sent[:200]})
+    if d.get("affiliate_links"):
+        score += 0.15
+        evidence.append({"signal": "affiliate_links", "weight": 0.15, "text": ", ".join(d["affiliate_links"][:5])})
+    score = round(min(1.0, max(0.0, score)), 2)
+    level = "high" if score >= 0.6 else "medium" if score >= 0.3 else "low"
+    return {"score": score, "level": level, "evidence": evidence,
+            "note": "Page-only estimate. Raise it for review units, early access or embargo mentions in the "
+                    "transcript, brand-owned channels (1.0) or channels mostly covering one brand; lower it "
+                    "for credible 'bought it myself' evidence. Report the final score with reasons."}
+
+
 def video(target: str, url: str) -> dict:
     if not url.startswith("http"):
         url = f"https://www.youtube.com/watch?v={url}"
@@ -296,6 +374,8 @@ def video(target: str, url: str) -> dict:
         return {"page": page, "video": None}
     full_id = SITE.resolve(target)
     data = SITE.evaluate(full_id, _js("video.js"))
+    if data:
+        data["sponsor_bias"] = sponsor_bias(data)
     st = _state(full_id)
     muted = _ensure_muted(full_id) if not st.get("ad") else st.get("muted")
     return {"page": page, "video": data, "ad_playing": bool(st.get("ad")), "muted": muted}
@@ -303,12 +383,17 @@ def video(target: str, url: str) -> dict:
 
 def transcript(target: str, grep: list[str] | None = None, context: int = 0) -> dict:
     full_id = SITE.resolve(target)
-    _require_watch(full_id)
     SITE.touch(full_id)
-    if not _open_transcript(full_id):
-        return {"available": False, "segments": [], "note": "this video has no transcript button"}
+    vid = _require_watch(full_id)
+    ok, reason = _open_transcript(full_id)
+    if not ok:
+        SITE.scroll_to_top(full_id)
+        return {"available": False, "segments": [], "reason": reason}
     res = SITE.evaluate(full_id, _js("transcript.js")) or {"available": False, "segments": []}
     SITE.scroll_to_top(full_id)
+    for seg in res["segments"]:
+        if seg.get("sec") is not None:
+            seg["link"] = f"https://www.youtube.com/watch?v={vid}&t={seg['sec']}s"
     segs = res["segments"]
     if grep and segs:
         pat = re.compile("|".join(re.escape(g) for g in grep), re.I)
@@ -333,13 +418,7 @@ def comments(target: str, max_comments: int = 20) -> dict:
     return res
 
 
-def frame(target: str, at, out: str | None = None) -> dict:
-    """Jump to `at`, wait for the frame (and for any ad the jump triggers), capture the player."""
-    full_id = SITE.resolve(target)
-    vid = _require_watch(full_id)
-    SITE.touch(full_id)
-    sec = _seconds(at)
-    SITE.scroll_to_top(full_id)
+def _capture(full_id: str, vid: str, sec: float, out: str | None, out_dir: str | None) -> dict:
     before = _clear_ads(full_id)
     theater = _ensure_theater(full_id)
     _ensure_paused(full_id)
@@ -357,32 +436,60 @@ def frame(target: str, at, out: str | None = None) -> dict:
         after = {"ad_seen": after["ad_seen"] or again["ad_seen"],
                  "ad_skipped": after["ad_skipped"] or again["ad_skipped"],
                  "ad_still_playing": again["ad_still_playing"]}
+    buffering = _wait_buffered(full_id)
     # Move the pointer off the player so its controls fade out (the video stays paused).
     SITE.move(full_id, 5, 5)
-    time.sleep(2.5)
+    pause(2.5)
     final = _state(full_id)
+    actual = final.get("t") or 0
     rect = final.get("player") or SITE.rect(full_id, "#movie_player")
-    path = Path(out) if out else SHOTS / f"{date.today().isoformat()}_{vid}_{_mmss(sec).replace(':', '')}.png"
+    if out:
+        path = Path(out)
+    else:
+        path = Path(out_dir or SHOTS) / f"{date.today().isoformat()}_{vid}_{_mmss(actual).replace(':', '')}.png"
     SITE.screenshot(full_id, path, clip=rect)
     result = {
         "path": str(path.expanduser()),
-        "requested": _mmss(sec), "actual": _mmss(final.get("t") or 0),
+        "requested": _mmss(sec), "actual": _mmss(actual), "landing_error_s": round(actual - sec, 1),
+        "link": f"https://www.youtube.com/watch?v={vid}&t={int(actual)}s",
         "ad_seen": before["ad_seen"] or after["ad_seen"],
         "ad_skipped": before["ad_skipped"] or after["ad_skipped"],
         "ad_in_frame": bool(final.get("ad")),
+        "buffering": buffering,
         "paused": bool(final.get("paused")),
         "theater": theater,
         "player_css_px": [round(rect["width"]), round(rect["height"])],
-        "link": f"https://www.youtube.com/watch?v={vid}&t={int(sec)}s",
         "check": "Look at the image before using it: it must show the expected content, not an ad, "
-                 "sponsor segment, b-roll or a transition.",
+                 "sponsor segment, b-roll, a buffering spinner or a transition.",
     }
+    warnings = []
     if result["ad_in_frame"]:
-        result["warning"] = "An ad was still playing when the frame was captured; this image shows the ad."
-    elif rect["width"] < MIN_PLAYER_WIDTH:
-        result["warning"] = (f"The player is only {round(rect['width'])} px wide, so details may be hard to read. "
-                             "Tell the user the research window is small (a window manager may be tiling it).")
+        warnings.append("An ad was still playing when the frame was captured; this image shows the ad.")
+    if buffering:
+        warnings.append("The video was still buffering; the image may show a spinner or a blurry frame.")
+    if abs(result["landing_error_s"]) > 3:
+        warnings.append(f"Landed {result['landing_error_s']:+} s from the requested time; "
+                        "cite `actual`/`link`, or retry.")
+    if rect["width"] < MIN_PLAYER_WIDTH:
+        warnings.append(f"The player is only {round(rect['width'])} px wide, so details may be hard to read. "
+                        "Tell the user the research window is small (a window manager may be tiling it).")
+    if warnings:
+        result["warning"] = " ".join(warnings)
     return result
+
+
+def frame(target: str, at, out: str | None = None, out_dir: str | None = None):
+    """Jump to `at` (one timestamp, or a list), wait out ads and buffering, capture the player.
+    Returns one result, or a list for several timestamps."""
+    full_id = SITE.resolve(target)
+    vid = _require_watch(full_id)
+    SITE.touch(full_id)
+    times = at if isinstance(at, (list, tuple)) else [at]
+    if out and len(times) > 1:
+        raise Fail("--out names one file; use --out-dir for several timestamps.")
+    SITE.scroll_to_top(full_id)
+    results = [_capture(full_id, vid, _seconds(t), out, out_dir) for t in times]
+    return results if isinstance(at, (list, tuple)) else results[0]
 
 
 def shot(target: str, out: str | None = None) -> dict:
@@ -446,10 +553,10 @@ def _dispatch(cmd: str, args: list[str]):
             raise Fail("usage: comments ID [--max N]")
         return comments(args[0], n)
     if cmd == "frame":
-        out = opt(args, "--out")
-        if len(args) != 2:
-            raise Fail("usage: frame ID AT [--out PATH]")
-        return frame(args[0], args[1], out)
+        out, out_dir = opt(args, "--out"), opt(args, "--out-dir")
+        if len(args) < 2:
+            raise Fail("usage: frame ID AT [AT ...] [--out-dir DIR | --out PATH]")
+        return frame(args[0], args[1] if len(args) == 2 else args[1:], out, out_dir)
     if cmd == "shot":
         out = opt(args, "--out")
         if len(args) != 1:

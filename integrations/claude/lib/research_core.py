@@ -16,6 +16,7 @@ import base64
 import fcntl
 import json
 import os
+import random
 import shutil
 import subprocess
 import time
@@ -25,6 +26,12 @@ from typing import Callable
 from urllib.parse import urlparse
 
 BIN = shutil.which("chrome-agent") or str(Path.home() / ".local/bin/chrome-agent")
+
+
+def pause(seconds: float, fuzz: float = 0.1) -> None:
+    """Sleep for about `seconds`, varied by +/- `fuzz` (10%) so timing isn't mechanical."""
+    if seconds > 0:
+        time.sleep(seconds * random.uniform(1 - fuzz, 1 + fuzz))
 
 
 class Fail(Exception):
@@ -126,7 +133,7 @@ class Site:
                 return r
             step = max(-700, min(700, top - r["vh"] * 0.3))
             self.wheel(target, step, x=r["vw"] / 2, y=r["vh"] / 2)
-            time.sleep(0.35)
+            pause(0.35)
         return self.rect(target, selector)
 
     def scroll_to_top(self, target: str, max_steps: int = 40) -> None:
@@ -134,7 +141,7 @@ class Site:
             if (self.evaluate(target, "window.scrollY") or 0) <= 0:
                 return
             self.wheel(target, -800)
-            time.sleep(0.25)
+            pause(0.25)
 
     def click_on(self, target: str, selector: str) -> bool:
         """Scroll an element into view and click its center with a trusted click."""
@@ -142,7 +149,7 @@ class Site:
         if r is None:
             return False
         self.move(target, r["x"] + r["width"] / 2 - 3, r["y"] + r["height"] / 2 - 2)
-        time.sleep(0.15)
+        pause(0.15)
         self.click(target, r["x"] + r["width"] / 2, r["y"] + r["height"] / 2)
         return True
 
@@ -184,7 +191,7 @@ class Site:
             req = urllib.request.Request(f"http://127.0.0.1:{inst['port']}/json/new?about:blank",
                                          method="PUT")
             urllib.request.urlopen(req, timeout=10).read()
-            time.sleep(1)
+            pause(1)
             inst = self._status() or inst
         return inst.get("targets", [])
 
@@ -262,7 +269,7 @@ class Site:
                 last = float(f.read().strip() or 0)
             except ValueError:
                 last = 0.0
-            wait = last + self.gap - time.time()
+            wait = last + self.gap * random.uniform(0.9, 1.1) - time.time()
             if wait > 0:
                 time.sleep(wait)
             f.seek(0)
@@ -276,11 +283,11 @@ class Site:
             try:
                 if self.evaluate(target, expr, timeout=10):
                     if settle:
-                        time.sleep(settle)
+                        pause(settle)
                     return True
             except Fail:
                 pass
-            time.sleep(1)
+            pause(1)
         return False
 
     # ---------------------------------------------------------------------
@@ -308,7 +315,7 @@ class Site:
             if time.time() >= deadline:
                 raise Fail(f"all {self.max_claims} research windows are in use. Wait and retry "
                            "(open --wait), or ask the user.")
-            time.sleep(min(15, max(1, deadline - time.time())))
+            pause(min(15, max(1, deadline - time.time())))
         if self.on_open:
             self.on_open(self, full_id)
         return {"target": full_id, "slots_in_use": busy + 1, "max_slots": self.max_claims}
@@ -418,6 +425,9 @@ def run_cli(doc: str, dispatch: Callable[[str, list[str]], object], argv: list[s
     if len(argv) < 2:
         print(doc.strip(), file=sys.stderr)
         return 2
+    if argv[1] in ("-h", "--help", "help"):
+        print(doc.strip())
+        return 0
     try:
         result = dispatch(argv[1], argv[2:])
         if result is NotImplemented:

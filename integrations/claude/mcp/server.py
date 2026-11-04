@@ -74,7 +74,10 @@ def _with_image(fn, *args, **kwargs):
         res = fn(*args, **kwargs)
     except youtube_tab.Fail as e:
         return json.dumps({"error": str(e)})
-    return [json.dumps(res, ensure_ascii=False), Image(path=res["path"])]
+    items = res if isinstance(res, list) else [res]
+    out = [json.dumps(res, ensure_ascii=False)]
+    out += [Image(path=r["path"]) for r in items]
+    return out
 
 
 # -------------------------------------------------------------------------
@@ -232,9 +235,11 @@ def youtube_transcript(target: str, grep: list[str] | None = None, context: int 
 
 
 @mcp.tool()
-def youtube_frame(target: str, at: str):
+def youtube_frame(target: str, at: str | list[str]):
     """Switch to theater mode (larger frame), pause (play/pause button), jump to timestamp `at` (e.g. "6:17") by clicking the progress bar, wait
-    out or skip any ad, and capture the player (lands within about a second of `at`). Returns JSON (path, requested/actual time, ad_seen, ad_in_frame,
+    out or skip any ad and buffering, and capture the player (lands within about a second of `at`).
+    `at` may be a list of timestamps (one image each). Files are named, and `link` points, at the time
+    actually landed on; include `link` in the report so the user can open that moment. Returns JSON (path, requested/actual time, ad_seen, ad_in_frame,
     timestamped link, warning?) and the image. LOOK AT THE IMAGE: it must show the expected content, not
     an ad, sponsor segment, b-roll or transition. If wrong, try a few seconds later, or move on."""
     return _with_image(youtube_tab.frame, target, at)

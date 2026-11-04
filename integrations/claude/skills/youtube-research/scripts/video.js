@@ -6,7 +6,6 @@
   const desc = vd.shortDescription || "";
   const links = [...new Set(desc.match(/https?:\/\/[^\s)]+/g) || [])];
   const affiliate = links.filter(l => /amzn\.to|amazon\.[a-z.]+\/.*(tag=|ref=)|geni\.us|bit\.ly|howl\.me|shareasale|impact\.com|go\.skimresources|[?&](tag|ref|aff|affiliate|utm_[a-z]+)=/i.test(l));
-  const phrases = [...new Set((desc.match(/\b(sponsored( by)?|#ad\b|paid partnership|in partnership with|provided by|sent (to )?me( by)?|loaned|review (unit|sample)|affiliate|commission|discount code|use code|promo code|thanks to [A-Z][\w-]+ for)/gi) || []).map(s => s.toLowerCase()))];
   const paidText = document.querySelector(".ytp-paid-content-overlay-text")?.innerText.trim() || "";
   const chapters = [...document.querySelectorAll("ytd-macro-markers-list-item-renderer")].map(c => {
     const t = c.innerText.replace(/\s+/g, " ").trim();
@@ -29,7 +28,7 @@
     captions: (pr.captions?.playerCaptionsTracklistRenderer?.captionTracks || []).map(c => c.languageCode + (c.kind === "asr" ? " (auto)" : "")),
     chapters: chapters.filter(c => !seenCh.has(c.title + c.at) && seenCh.add(c.title + c.at)),
     disclosure: { paid_promotion_label: !!paidText, paid_promotion_text: paidText || null,
-                  description_phrases: phrases, affiliate_links: affiliate },
+                  affiliate_links: affiliate },
     description: desc,
     description_links: links,
   };

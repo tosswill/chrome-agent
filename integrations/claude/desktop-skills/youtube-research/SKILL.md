@@ -22,8 +22,8 @@ If the `youtube_*` tools aren't available, say so and stop. Don't fall back to w
 - `youtube_open(wait_seconds?)` → `{"target": ID}`. Pass the ID to every call.
 - `youtube_search(target, query, sort?, upload?, shorts?)`. `sort`: relevance or views. `upload`: hour, today, week, month, or year (use this for recency; date sorting isn't honored). `shorts`: include Shorts (keep them minor).
 - `youtube_video(target, url)`: metadata, chapters, description, disclosure signals (1 page load).
-- `youtube_transcript(target, grep?, context?)`: segments with timestamps, optionally filtered by terms.
-- `youtube_frame(target, at)`: jump to e.g. `"6:17"` and capture the player. Returns JSON plus the image.
+- `youtube_transcript(target, grep?, context?)`: segments, each with a timestamped `link`. `grep` matches case-insensitive plain-text substrings (any term; not regex). Transcripts are speech-to-text, so write numbers both ways and prefer words to symbols. If unavailable, `reason` says why: `youtube_error` means YouTube's own transcript service failed, so don't retry; use chapters, the description, comments, and frames.
+- `youtube_frame(target, at)`: jump to e.g. `"6:17"` (or a list of timestamps) and capture the player. Returns JSON (actual time, `landing_error_s`, `link`, ad and buffering flags) plus the images.
 - `youtube_comments(target, max_comments?)`, `youtube_channel(target, url_or_@handle)` (1 page load), `youtube_shot(target)`.
 - `youtube_close(target)`.
 
@@ -48,7 +48,7 @@ Quantity, quality, and spread of videos vary a lot by subject. Cast a wide net w
    - **Owner pulse:** `youtube_comments`.
    - **Creator context:** `youtube_channel`, to see how much of the channel covers one brand.
 
-   Cite claims with timestamped links.
+   **Every claim and every frame gets a timestamped link** (the `link` from transcript segments and frames) so the user can open YouTube at that moment.
 4. **Frames:**
    - **Look at every returned image before using it.** It must show the expected content, not an ad, sponsor segment, b-roll, or transition. The tool waits out or skips ads and reports `ad_seen` and `ad_in_frame`, but the image is the check. If it's wrong, try a few seconds later; if ads persist, retry once, then move on.
    - If `warning` says the player is small, tell the user the research window is too small.
@@ -59,7 +59,9 @@ Quantity, quality, and spread of videos vary a lot by subject. Cast a wide net w
 
 **Creators are marketing-adjacent until shown otherwise.** Lean on videos for features, demos, interest level, comparisons, and alternatives, more than for verdicts.
 
-- Report every disclosure signal (paid-promotion label, sponsor phrases, affiliate links), plus review units mentioned in transcripts (grep "sent me", "provided", "sponsor", "embargo").
+- **`sponsor_bias`** (0.0–1.0, from `youtube_video`, with evidence) is a page-only estimate.
+  - **Adjust it:** raise it for review units, early access or embargo mentions in the transcript (grep "sent me", "provided", "sponsor", "embargo", "early access"), set it to 1.0 for brand-owned channels, and raise it for channels mostly covering one brand. Lower it for credible "bought it myself" evidence.
+  - **Report the final score and reasons.**
 - Continued access depends on staying positive. "Unsponsored" in a title is a claim, not proof. Pinned and hearted comments are curated. Claims every reviewer repeats may come from the brand's reviewer guide.
 - **Official brand videos:** verify what's claimed, but expect best-case positivity.
 - **Large channels:** polished, but brand-dependent.
@@ -76,7 +78,7 @@ Quantity, quality, and spread of videos vary a lot by subject. Cast a wide net w
 
 1. **Key findings:** linked with timestamps, with frames inline where useful.
 2. **Interest read:** with the sample.
-3. **Sources table:** video, channel and subscribers, type, published date, views, disclosure, takeaway.
+3. **Sources table:** video (linked), channel and subscribers, type, published date, views, sponsor bias (final score and reasons), takeaway.
 4. **Caveats.**
 5. **Sample size:** videos, transcripts, frames, page loads.
 

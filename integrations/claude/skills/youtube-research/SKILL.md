@@ -27,8 +27,8 @@ Y=~/.claude/skills/youtube-research/scripts/youtube_tab.py
 $Y open --wait                                   # -> {"target": "<ID>"}
 $Y search <ID> '"XREAL One Pro" review'          # --sort relevance|views  --upload hour|today|week|month|year  --shorts
 $Y video <ID> '<watch url>'                      # metadata, chapters, description, disclosure signals (1 page load)
-$Y transcript <ID> --context 1 --grep battery "sent me"   # matching segments with timestamps
-$Y frame <ID> 6:17                               # theater mode, pause, jump, capture -> {path, actual, paused, theater, ad_seen, ad_in_frame, link, warning?}
+$Y transcript <ID> --context 1 --grep battery "sent me"   # matching segments, each with a timestamped `link`
+$Y frame <ID> 2:43 6:17 --out-dir <report dir>   # theater, pause, jump, capture each -> {path, actual, landing_error_s, link, ad_seen, ad_in_frame, buffering, warning?}
 $Y comments <ID> --max 20                        # one batch of top comments
 $Y shot <ID>                                     # screenshot of the visible page
 $Y channel <ID> @handle                          # channel header + recent uploads (1 page load)
@@ -36,6 +36,9 @@ $Y close <ID>
 ```
 
 Quote URLs and queries. YouTube no longer honors sorting by date, so use `--upload` for recency.
+
+- **`--grep`** matches case-insensitive plain-text substrings (any term; not regex). Transcripts are speech-to-text, so write numbers both ways (`1000`, `thousand`) and prefer words to symbols (`dollars`, not `$`).
+- **Transcript unavailable:** `reason` says why. `youtube_error` means YouTube's own transcript service failed for that video (a person would see the same endless spinner), so don't retry. Fall back to chapters, the description, comments, and frames, and note it in the sample size.
 
 ## Workflow: a guide, not a quota
 
@@ -70,14 +73,15 @@ Always start with `video`: disclosure signals, chapters, description, metadata. 
 | **Owner pulse** | You need real-world experience | `comments`: recurring problems, "fixed in update", owners contradicting the review |
 | **Creator context** | A glowing review from an unfamiliar channel | `channel`: how much of their recent output covers this brand |
 
-Cite claims with timestamped links (`frame` returns one; otherwise `…watch?v=<id>&t=<seconds>s`).
+**Every claim and every frame gets a timestamped link** so the user can open YouTube at that moment and watch. Use the `link` from transcript segments and frames (it uses the time actually landed on), or `https://www.youtube.com/watch?v=<id>&t=<seconds>s`.
 
 ### 4. Frames and screenshots
 
 - **Capture** stat tables, benchmark charts, spec slides, side-by-side comparisons, a feature in use, visible defects, UI, and telling search pages.
 - **Look at every image with Read before using it.** It must show the expected content, not an ad, sponsor segment, b-roll, talking head, or transition. `frame` waits out or skips ads and reports `ad_seen` and `ad_in_frame`, but the image is the check. If it's wrong, try a few seconds later; if an ad keeps appearing, retry once, then move on.
 - **If `warning` says the player is small**, tell the user the research window is too small, even in theater mode (a tiling window manager may have shrunk it).
-- **Save** into the report's folder with `--out <dir>/YYYY-MM-DD_<topic>_<channel>_<mmss>.png`, and caption each image with video, channel, and timestamp. A handful of telling images beats dozens.
+- **Save** into the report's folder with `--out-dir <dir>`. Files are named `YYYY-MM-DD_<videoid>_<mmss>.png` from the time actually landed on; rename if you like. Caption each image with video, channel, and the timestamped link. A handful of telling images beats dozens.
+- **Several moments in one video:** pass several timestamps to one `frame` call.
 
 ### 5. Close
 
@@ -87,7 +91,9 @@ Cite claims with timestamped links (`frame` returns one; otherwise `…watch?v=<
 
 **Creators are marketing-adjacent until shown otherwise.** Lean on videos for features, demos, interest level, comparisons, and alternatives, more than for verdicts.
 
-- **Report every disclosure signal** `video` finds (paid-promotion label, sponsor phrases, affiliate links), plus review units mentioned in transcripts (`--grep "sent me" "sent us" "provided" "sponsor" "embargo"`).
+- **`sponsor_bias`** (0.0–1.0, from `video`) estimates how likely a video is sponsored or sponsor-influenced, with the evidence behind it: the paid-promotion label, sponsor or review-unit wording in the description, affiliate links, and "not sponsored / bought it myself" claims, which lower it.
+  - It only sees the page. **Adjust it:** raise it for review units, early access or embargo mentions in the transcript (`--grep "sent me" "sent us" "provided" "sponsor" "embargo" "early access"`), set it to 1.0 for brand-owned channels, and raise it for channels mostly covering one brand. Lower it for credible "bought it myself" evidence.
+  - **Report the final score and its reasons** in the sources table.
 - **Continued access depends on staying positive.** Many prior videos on one brand is a pattern. "Unsponsored" or "honest" in a title is a claim, not proof. Pinned and hearted comments are chosen by the creator. Claims every reviewer repeats may come from the brand's reviewer guide.
 
 | Source | Use it for | Watch out for |
@@ -109,9 +115,9 @@ Cite claims with timestamped links (`frame` returns one; otherwise `…watch?v=<
 
 1. **Key findings:** features shown, recurring praise and complaints, alternatives raised, each with timestamped links. Frames inline where they add something.
 2. **Interest read:** what volume, velocity, views, and engagement suggest, with the sample.
-3. **Sources table:** video (linked), channel and subscribers, type (official, large, small, Short), published date, views, disclosure (paid label, affiliate, review unit, none found), one-line takeaway.
+3. **Sources table:** video (linked), channel and subscribers, type (official, large, small, Short), published date, views, sponsor bias (final score and the main reasons), one-line takeaway.
 4. **Caveats:** sponsorship or affiliate dependence, embargo clustering, preliminary information, dates spanned.
-5. **Sample size:** videos read, transcripts used, frames captured, page loads used.
+5. **Sample size:** videos read, transcripts used (and how many were unavailable), frames captured, page loads used.
 
 **YouTube among other sources:** fold the findings in, attributed as YouTube creator or commenter claims with their disclosure status. Use video evidence mainly for features, demos, and comparisons, and say where it agrees or conflicts with owner reports (e.g. Reddit) and vendor information.
 
