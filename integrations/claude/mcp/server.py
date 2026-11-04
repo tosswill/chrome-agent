@@ -234,10 +234,12 @@ def youtube_video(target: str, url: str) -> str:
 
 
 @mcp.tool()
-def youtube_transcript(target: str, grep: list[str] | None = None, context: int = 0) -> str:
+def youtube_transcript(target: str, grep: list[str] | None = None, context: int = 0,
+                       start: str | None = None, end: str | None = None) -> str:
     """Transcript of the loaded video as [{at, sec, text}]. With grep, only segments matching any term
-    (case-insensitive), plus `context` neighboring segments each side. Use it to find moments to frame."""
-    return _reddit(youtube_tab.transcript, target, grep, context)
+    (case-insensitive), plus `context` neighboring segments each side. start/end (e.g. "4:00", "6:30")
+    limit it to a time window. Also returns disclosure_mentions and an updated sponsor_bias."""
+    return _reddit(youtube_tab.transcript, target, grep, context, start, end)
 
 
 @mcp.tool()
@@ -269,6 +271,14 @@ def youtube_channel(target: str, url: str) -> str:
     """A channel's header (subscribers, video count) and recent uploads (one page load). url may be a
     channel URL or @handle. Use it to judge how much of a channel covers one brand."""
     return _reddit(youtube_tab.channel, target, url)
+
+
+@mcp.tool()
+def youtube_tally(target: str, names: list[str]) -> str:
+    """For each candidate product name, how many channels (and independent channels, sponsor score
+    below 0.6) feature it among everything this window has seen: search results and loaded videos'
+    titles, descriptions and links. No page load. Use it to pick the top products in a landscape pass."""
+    return _reddit(youtube_tab.tally, target, names)
 
 
 @mcp.tool()

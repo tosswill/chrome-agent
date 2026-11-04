@@ -14,7 +14,7 @@ If the `youtube_*` tools aren't available, say so and stop. Don't fall back to w
 1. **Use the `youtube_*` tools only.** Not web fetch, other browser tools, or the generic chrome-agent `run`/`screenshot` tools on the YouTube browser.
 2. **Read-only.** Never like, dislike, subscribe, comment, save to playlists, report, or change settings.
 3. **If a result contains `stop` or `error`, stop and tell the user why.** Never retry another way.
-4. **Budget:** 40 page loads for a YouTube-focused task, 15 when YouTube is one source among several (`page.loads` in each result). `youtube_transcript`, `youtube_frame`, `youtube_comments` and `youtube_shot` work on the loaded video and don't count, but keep them purposeful. Ask before exceeding the budget.
+4. **Budget:** 40 page loads for a YouTube-focused task, 15 when YouTube is one source among several, about 20 for a landscape question within a broader task (`page.loads` in each result). `youtube_transcript`, `youtube_frame`, `youtube_comments` and `youtube_shot` work on the loaded video and don't count, but keep them purposeful. Ask before exceeding the budget.
 5. **Always `youtube_close` your window** when done, even after errors.
 
 ## Tools
@@ -31,18 +31,21 @@ If the `youtube_*` tools aren't available, say so and stop. Don't fall back to w
   `youtube_transcript` also scans the whole transcript for disclosure mentions (sponsor reads, "they sent me", "use my code", "bought it myself", "they didn't see the video first") and returns an updated `sponsor_bias`.
 - `youtube_frame(target, at, burst?)`: jump to e.g. `"6:17"` (or a list of timestamps) and capture the player, within about ±2.5 s. Returns JSON (actual time, `landing_error_s`, `link`, ad and buffering flags) plus the images. With `burst: 5`, the video then plays on muted and a candidate is captured about every second. Use this for demos, animated charts and changing slides; keep the best candidate and ignore the rest.
 - `youtube_comments(target, max_comments?)`, `youtube_channel(target, url_or_@handle)` (1 page load), `youtube_shot(target)`.
+- `youtube_tally(target, names)`: for each candidate product name, how many channels and independent channels feature it among everything this window has seen. No page load. Use it in the landscape pass.
 - `youtube_close(target)`.
 
 ## Landscape: establish the field first (when warranted)
 
 Use a **full landscape pass** when no products are named, the user asks what the options are, or the question is about a category. Use a **light pass** (2–3 page loads) when products are given, to check for a missing major alternative, and report it under "Also consider".
 
-1. **Search for roundups and comparisons:** "best <category> <year>", "buyer's guide", "comparison", "tier list", "<product> vs", "<product> alternatives". Use `sort: views` and `upload: year`, plus one `upload: month` search for newcomers.
+1. **Search for roundups and comparisons.** **Start with the use case** ("AR glasses for coding"), then "best <category> <year>", "buyer's guide", "comparison", "tier list", "<product> vs", "<product> alternatives".
+   - Use `upload: year`, and `sort: views` once at most, since it can pull in off-topic viral videos.
+   - Skip AI listicle channels: future-dated titles, slideshow thumbnails, near-identical "Top 10" uploads.
 2. **Read 2–4 roundup or comparison videos:** chapters often list the products, and transcript grep for "best", "pick", "alternative", "instead", "vs" shows the verdicts.
-3. **Tally candidates:** how many *independent* creators feature each product, and how recently. Products only seen in their own sponsored videos don't count as standing.
+3. **Tally candidates** with `youtube_tally`: independent channels per product name. Description affiliate links are often the cleanest product list. Products only seen in their own sponsored or referral-code videos don't count as standing.
 4. **Pick the top 4–6** and list the notable products left out, with reasons.
 5. **Find the 3–5 dividing lines:** genuine trade-offs where buyers must give something up (e.g. tethered vs standalone, display vs camera-only, field of view vs weight, open vs closed, price tier). Look at what comparisons argue about and what owners complain about. Separate them from table stakes and marketing-only differences.
-6. **Position each product** against them, then continue with the workflow.
+6. **Position each product** against them, then continue with the workflow. If the field is really two categories, say so, make that the primary dividing line, and pick top products within each.
 
 A full pass usually takes 8–12 page loads.
 
@@ -71,6 +74,7 @@ Quantity, quality, and spread of videos vary a lot by subject. Cast a wide net w
 4. **Frames:**
    - **Look at every returned image before using it.** It must show the expected content, not an ad, sponsor segment, b-roll, or transition. The tool waits out or skips ads and reports `ad_seen` and `ad_in_frame`, but the image is the check. If it's wrong, try a few seconds later; if ads persist, retry once, then move on.
    - If `warning` says the player is small, tell the user the research window is too small.
+   - Label real through-the-lens or screen captures separately from editing composites and mock-ups. Most "what you see" shots in reviews are composites.
    - Use a handful of telling frames, each captioned with video, channel, and timestamp.
 5. **Close** with `youtube_close`.
 
@@ -81,6 +85,8 @@ Quantity, quality, and spread of videos vary a lot by subject. Cast a wide net w
 - **`sponsor_bias`** (0.0–1.0, with evidence) starts from the page in `youtube_video` and is updated by `youtube_transcript`. Page signals: paid label, "Earns commission" products, campaign and affiliate links, disclosure wording.
   - Its `confidence` is low until the transcript is scanned, so a low page-only score isn't a clean bill.
   - A sponsor read for a brand other than the one reviewed is a `third_party_sponsor`, with lower weight.
+  - Brand-owned channels score 1.0, and the reviewed brand's own affiliate links and codes weigh more than generic ones.
+  - Auto-captions garble numbers ("$3.99" may be $399), so verify prices and specs against another source.
   - **Adjust it:** raise it for review units, early access or embargo mentions in the transcript (grep "sent me", "provided", "sponsor", "embargo", "early access"), set it to 1.0 for brand-owned channels, and raise it for channels mostly covering one brand. Lower it for credible "bought it myself" evidence.
   - **Report the final score and reasons.**
 - Continued access depends on staying positive. "Unsponsored" in a title is a claim, not proof. Pinned and hearted comments are curated. Claims every reviewer repeats may come from the brand's reviewer guide.

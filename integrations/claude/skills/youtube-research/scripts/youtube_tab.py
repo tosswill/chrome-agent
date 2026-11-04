@@ -13,7 +13,8 @@ CLI (each command prints JSON):
     youtube_tab.py search ID QUERY [--sort relevance|views] [--upload hour|today|week|month|year] [--shorts]
                        (`open` and `list` cost no page load; search, video, channel and nav cost one each)
     youtube_tab.py video ID URL                            metadata, disclosure signals, chapters, description
-    youtube_tab.py transcript ID [--context N] [--grep TERM ...]   segments with timestamped links
+    youtube_tab.py transcript ID [--from T] [--to T] [--context N] [--grep TERM ...]
+                       segments ({at, sec, text, link}); --from/--to limit to a time window
                        (--grep: case-insensitive plain-text substrings, any of them; not regex)
     youtube_tab.py comments ID [--max N]                   top comments of the loaded video (default 20)
     youtube_tab.py frame ID AT [AT ...] [--burst SECONDS] [--full] [--out-dir DIR | --out PATH]
@@ -24,6 +25,8 @@ CLI (each command prints JSON):
     youtube_tab.py shot ID [--full] [--out-dir DIR | --out PATH]   visible page content (top bar and
                        account sidebar excluded), any page
     youtube_tab.py channel ID URL|@handle                  channel header + recent uploads
+    youtube_tab.py tally ID NAME [NAME ...]                independent channels covering each name, among
+                       everything this window has seen (no page load)
     youtube_tab.py nav ID URL | eval ID JS|@file.js        escape hatches (paced load / run JS)
     youtube_tab.py close ID | list | gc                    release window / show / clean up claims
 
@@ -145,6 +148,45 @@ def _mmss(sec: float) -> str:
     sec = int(sec)
     h, m, s = sec // 3600, sec % 3600 // 60, sec % 60
     return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
+
+
+def _seen_add(full_id: str, items: list[dict]) -> None:
+    """Keep a light record of what this window has seen (for `tally`)."""
+    c = SITE.claims().get(full_id)
+    if c is None:
+        return
+    seen = c.get("seen", [])
+    urls = {x["url"] for x in seen}
+    seen += [x for x in items if x.get("url") and x["url"] not in urls]
+    c["seen"] = seen[-400:]
+    SITE._write_claim(full_id, c)
+
+
+def tally(target: str, terms: list[str]) -> dict:
+    """For each candidate name, which independent channels covered it among everything this window
+    has seen (search results, and the titles, descriptions and links of loaded videos). No page loads."""
+    full_id = SITE.resolve(target)
+    seen = (SITE.claims().get(full_id) or {}).get("seen", [])
+    out = []
+    for term in terms:
+        t = term.lower()
+        hits = [x for x in seen if t in (x.get("title", "") + " " + x.get("text", "")).lower()]
+        chans: dict[str, dict] = {}
+        for h in hits:
+            ch = h.get("channel") or "?"
+            e = chans.setdefault(ch, {"channel": ch, "items": 0, "brand_owned_or_sponsored": False})
+            e["items"] += 1
+            if (h.get("sponsor_score") or 0) >= 0.6:
+                e["brand_owned_or_sponsored"] = True
+        independent = [c for c in chans.values() if not c["brand_owned_or_sponsored"]]
+        out.append({"term": term, "channels": len(chans), "independent_channels": len(independent),
+                    "items": len(hits), "by_channel": sorted(chans.values(), key=lambda c: -c["items"])[:12],
+                    "examples": [{"title": h.get("title"), "url": h.get("url"), "age": h.get("age"), "via": h.get("via")}
+                                 for h in hits[:5]]})
+    out.sort(key=lambda r: (-r["independent_channels"], -r["items"]))
+    return {"seen_items": len(seen), "tally": out,
+            "note": "Counts come only from what this window has seen; search more to widen the base. "
+                    "Use name variants (e.g. 'One Pro' and 'XREAL One') as separate terms if needed."}
 
 
 def _remember(full_id: str, data: dict) -> None:
@@ -341,9 +383,10 @@ def _open_transcript(full_id: str) -> tuple[bool, str | None]:
         return True, None
     btn = "ytd-video-description-transcript-section-renderer button"
     if not SITE.rect(full_id, btn):
-        SITE.click_on(full_id, "#description-inline-expander #expand, tp-yt-paper-button#expand")
-        pause(0.8)
-    if not SITE.click_on(full_id, btn):
+        SITE.click_on(full_id, "#description-inline-expander #expand, tp-yt-paper-button#expand",
+                      look=random.uniform(0.8, 2.0))
+        pause(random.uniform(2.5, 6.0), fuzz=0)  # skim the description before looking for the button
+    if not SITE.click_on(full_id, btn, look=random.uniform(1.0, 2.5)):
         return False, "no_transcript: this video has no 'Show transcript' button."
     deadline = time.time() + 15
     while time.time() < deadline:
@@ -371,7 +414,10 @@ def search(target: str, query: str, sort: str = "relevance", upload: str | None 
     page = SITE.nav(target, search_url(query, sort, upload))
     if "stop" in page:
         return {"page": page, "results": []}
-    results = SITE.evaluate(SITE.resolve(target), _call("search_results.js", {"shorts": shorts})) or []
+    full_id = SITE.resolve(target)
+    results = SITE.evaluate(full_id, _call("search_results.js", {"shorts": shorts})) or []
+    _seen_add(full_id, [{"url": r["url"], "title": r.get("title", ""), "channel": r.get("channel"),
+                         "age": r.get("age"), "via": "search"} for r in results])
     return {"page": page, "results": results}
 
 
@@ -384,8 +430,8 @@ _SIGNALS = [
     ("use_my_link_or_code", 0.15, r"\b(use my (link|code)|use (the )?code \S+|code \S+ (at checkout|for \d+ ?%)|discount code|promo code|\d+ ?% off (with|using)|(buy|get|order|grab|pick up) (one|yours|it|them|a pair)? ?(through|using|with|from|via) (my|the) (link|affiliate))"),
     ("affiliate_disclosure", 0.1, r"(\baffiliate links?\b|\(affiliate\)|\bi (may )?earn (a )?(small )?commission|commission (from|on) (any|qualifying) purchases|as an amazon associate)"),
     ("bought_it_myself", -0.15, r"\b(i (bought|purchased|paid for) (it|this|them|these|my own|.{0,20}with my own money)|with my own money|bought (it|them|this|these) myself|i bought)"),
-    ("claims_not_sponsored", -0.1, r"\b(not (sponsored|paid|gifted)|no(body| one) (paid|sponsored)|un-?sponsored|isn'?t sponsored|wasn'?t (sponsored|paid))"),
-    ("editorial_independence", -0.05, r"\b((did ?n'?o?t|do ?n'?o?t|never|no) (see|review|approve|preview|get to see|have (any )?(input|say|editorial))( the video| this video| it)?( before| ahead| in advance)?|no editorial control|without (their|any) (input|review|approval))"),
+    ("claims_not_sponsored", -0.1, r"\b(not (an? )?(sponsored|paid|gifted)|no(body| one) (paid|sponsored)|un-?sponsored|isn'?t (an? )?sponsored|wasn'?t (an? )?(sponsored|paid)|no sponsors?\b)"),
+    ("editorial_independence", -0.05, r"\b((they|\w+) (did ?n'?o?t|do ?n'?o?t|never) (see|review|approve|preview|get to see) (the|this|my) (video|review)( before| ahead| in advance)?|(did ?n'?o?t|do ?n'?o?t|never) (have|get) (any )?(input|say|editorial (control|input))|no editorial (control|input|say)|without (their|any) (input|review|approval))"),
 ]
 _COMPILED = [(c, w, re.compile(p, re.I)) for c, w, p in _SIGNALS]
 _GUIDE = ("Estimate from the page and transcript. Set 1.0 for brand-owned channels; raise it for channels mostly "
@@ -432,6 +478,36 @@ def _score(page: list[dict], extra: list[dict]) -> dict:
             "evidence": kept, "note": _GUIDE}
 
 
+_GENERIC = {"the", "and", "official", "channel", "tech", "review", "reviews", "glasses", "smart", "video",
+            "videos", "best", "new", "with", "for", "pro", "max", "plus", "ultra", "air", "one", "app", "apps"}
+
+
+def _brand_tokens(subject: str) -> set[str]:
+    return {w.lower() for w in re.findall(r"[A-Za-z][A-Za-z0-9]{2,}", subject or "")} - _GENERIC
+
+
+def _brand_adjust(hits: list[dict], subject: str, channel: str | None) -> list[dict]:
+    """Make signals brand-aware: brand-owned channels, brand affiliate links and codes weigh more;
+    "I bought it myself" counts only when it is about the reviewed product."""
+    toks = _brand_tokens(subject)
+    out = []
+    for h in hits:
+        txt = (h.get("text") or "").lower()
+        about_brand = any(re.search(rf"\b{re.escape(t)}", txt) for t in toks)
+        if h["signal"] == "affiliate_links" and about_brand:
+            h = {**h, "signal": "brand_affiliate_links", "weight": 0.25}
+        elif h["signal"] == "use_my_link_or_code" and about_brand:
+            h = {**h, "signal": "brand_code_or_link", "weight": 0.2}
+        elif h["signal"] == "bought_it_myself" and not about_brand and h.get("source") != "title":
+            h = {**h, "signal": "bought_something_myself", "weight": -0.05}
+        out.append(h)
+    ch = (channel or "").lower().replace("official", "").strip()
+    if ch and len(ch) >= 3 and (ch in (subject or "").lower() or any(t == ch.replace(" ", "") for t in toks)):
+        out.insert(0, {"signal": "brand_owned_channel", "weight": 1.0, "source": "channel",
+                       "text": f"Channel '{channel}' appears to be the brand itself"})
+    return out
+
+
 def sponsor_bias(data: dict, transcript_hits: list[dict] | None = None) -> dict:
     """0.0-1.0 likelihood that a video is sponsored or sponsor-influenced, with its evidence."""
     d = data.get("disclosure") or {}
@@ -448,7 +524,10 @@ def sponsor_bias(data: dict, transcript_hits: list[dict] | None = None) -> dict:
                      "text": f"{d['products_earning_commission']} tagged product(s) marked 'Earns commission'"})
     if d.get("campaign_links"):
         page.append({"signal": "campaign_tracking", "weight": 0.2, "source": "description", "text": ", ".join(d["campaign_links"][:3])})
-    res = _score(page, transcript_hits or [])
+    subj = " ".join([data.get("title") or ""] + list(data.get("keywords") or [])[:8])
+    page = _brand_adjust(page, subj, data.get("channel"))
+    extra = _brand_adjust(list(transcript_hits or []), subj, None)
+    res = _score(page, extra)
     res["transcript_scanned"] = transcript_hits is not None
     if transcript_hits is None:
         res["confidence"] = "low"
@@ -474,7 +553,11 @@ def video(target: str, url: str) -> dict:
     data = SITE.evaluate(full_id, _js("video.js"))
     if data:
         data["sponsor_bias"] = sponsor_bias(data)
+        _seen_add(full_id, [{"url": data.get("url"), "title": data.get("title", ""), "channel": data.get("channel"),
+                             "text": (data.get("description") or "") + " " + " ".join(data.get("description_links") or []),
+                             "age": data.get("published"), "via": "video", "sponsor_score": data["sponsor_bias"]["score"]}])
         _remember(full_id, {"video_id": data.get("video_id"), "title": data.get("title"), "keywords": data.get("keywords"),
+                            "channel": data.get("channel"),
                             "description": data.get("description"), "disclosure": data.get("disclosure")})
     st = _state(full_id)
     muted = _ensure_muted(full_id) if not st.get("ad") else st.get("muted")
@@ -483,7 +566,8 @@ def video(target: str, url: str) -> dict:
     return {"page": page, "video": data, "ad_playing": bool(st.get("ad")), "muted": muted}
 
 
-def transcript(target: str, grep: list[str] | None = None, context: int = 0) -> dict:
+def transcript(target: str, grep: list[str] | None = None, context: int = 0,
+               start: str | None = None, end: str | None = None) -> dict:
     full_id = SITE.resolve(target)
     SITE.touch(full_id)
     vid = _require_watch(full_id)
@@ -508,6 +592,11 @@ def transcript(target: str, grep: list[str] | None = None, context: int = 0) -> 
     res["disclosure_mentions"] = mentions
     if page:
         res["sponsor_bias"] = sponsor_bias(page, mentions)
+    if start or end:
+        lo = _seconds(start) if start else 0
+        hi = _seconds(end) if end else float("inf")
+        segs = [sg for sg in segs if sg.get("sec") is not None and lo <= sg["sec"] <= hi]
+        res = {**res, "window": [_mmss(lo), _mmss(hi) if hi != float("inf") else "end"], "segments": segs}
     if grep and segs:
         terms = [g.lower() for g in grep]
         hit_idx = {i: [t for t in terms if t in sg["text"].lower()] for i, sg in enumerate(segs)}
@@ -554,7 +643,7 @@ def _burst(full_id: str, vid: str, seconds: float, out_dir: str | None, full: bo
     Started with the keyboard so the pointer stays away and the controls stay hidden."""
     for typ in ("keyDown", "keyUp"):
         SITE.cdp(full_id, "Input.dispatchKeyEvent", {"type": typ, "key": "k", "code": "KeyK", "windowsVirtualKeyCode": 75})
-    pause(0.8)  # let the play icon fade
+    pause(2.6)  # the key press shows the controls briefly; let them fade before capturing
     out, end = [], time.time() + seconds
     while time.time() < end:
         st = _state(full_id)
@@ -709,15 +798,20 @@ def _dispatch(cmd: str, args: list[str]):
         return search(args[0], " ".join(args[1:]), sort, upload, shorts)
     if cmd == "video" and len(args) == 2:
         return video(*args)
+    if cmd == "tally":
+        if len(args) < 2:
+            raise Fail("usage: tally ID NAME [NAME ...]")
+        return tally(args[0], args[1:])
     if cmd == "transcript":
         ctx = int(opt(args, "--context", 0))
+        frm, to = opt(args, "--from"), opt(args, "--to")
         terms: list[str] = []
         if "--grep" in args:
             i = args.index("--grep")
             terms, args = args[i + 1:], args[:i]
         if len(args) != 1:
             raise Fail("usage: transcript ID [--context N] [--grep TERM ...]")
-        return transcript(args[0], terms or None, ctx)
+        return transcript(args[0], terms or None, ctx, frm, to)
     if cmd == "comments":
         n = int(opt(args, "--max", 20))
         if len(args) != 1:

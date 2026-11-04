@@ -20,11 +20,12 @@ Y=~/.claude/skills/youtube-research/scripts/youtube_tab.py
    - Audio is muted with the player's mute button, and theater mode is turned on with its button for larger frames.
    - Before a jump, playback is paused with the play/pause button.
    - Jumps are progress-bar clicks, finished with the arrow keys. This lands within about ±2 s even when YouTube snaps a click to a chapter start.
+   - Every click follows a human-like mouse path (curved, uneven speed, sometimes a small overshoot) after a moment to find the target. YouTube refuses some requests, transcripts in particular, when the pointer jumps straight to buttons.
    - Between frames, the video plays for a moment.
    - Ads are waited out, or skipped after a human-like delay. Don't script the player or page yourself (`eval` is for reading).
 4. **No downloading, no internal APIs** (the helper refuses `youtubei`, `timedtext` and similar).
 5. **If a result contains `stop`, stop and tell the user why.** This covers bot checks, CAPTCHAs, "unusual traffic", consent or age gates, and signed-out sessions. Never retry another way.
-6. **Budget:** 40 page loads for a YouTube-focused task, 15 when YouTube is one source among several. Each result reports `loads`. `transcript`, `frame`, `comments` and `shot` work on the loaded video and don't count, but keep them purposeful. Ask before exceeding the budget.
+6. **Budget:** 40 page loads for a YouTube-focused task, 15 when YouTube is one source among several, and about 20 for a category or landscape question within a broader task. Each result reports `loads`. `transcript`, `frame`, `comments` and `shot` work on the loaded video and don't count, but keep them purposeful. Ask before exceeding the budget.
 7. **Always `$Y close` your window** when done, even after errors. Never stop the browser itself.
 
 ## Commands
@@ -33,12 +34,14 @@ Y=~/.claude/skills/youtube-research/scripts/youtube_tab.py
 $Y open --wait                                   # -> {"target": "<ID>"}
 $Y search <ID> '"XREAL One Pro" review'          # --sort relevance|views  --upload hour|today|week|month|year  --shorts
 $Y video <ID> '<watch url>'                      # metadata, chapters, description, disclosure signals (1 page load)
-$Y transcript <ID> --context 1 --grep battery "sent me"   # matching segments, each with a timestamped `link`
+$Y transcript <ID> --context 1 --grep battery "sent me"   # segments {at, sec, text, link}; grep hits tagged `matched`
 $Y frame <ID> 2:43 6:17 --out-dir <report dir>   # theater, pause, jump, capture each -> {path, actual, landing_error_s, link, ad_seen, ad_in_frame, buffering, warning?}
 $Y frame <ID> 6:17 --burst 5 --out-dir <dir>     # land, then let it play 5 s capturing ~1 candidate/second -> candidates[]
 $Y comments <ID> --max 20                        # one batch of top comments
 $Y shot <ID> --out-dir <report dir>              # visible page content, any page (account top bar/sidebar left out)
 $Y channel <ID> @handle                          # channel header + recent uploads (1 page load)
+$Y tally <ID> XREAL VITURE "Even G2"             # independent channels covering each name, from what this window has seen (no load)
+$Y transcript <ID> --from 4:00 --to 6:30         # only a time window (e.g. one chapter)
 $Y close <ID>
 $Y list                                          # active research windows across all agents
 $Y gc                                            # release windows left behind by crashed agents
@@ -50,8 +53,9 @@ Images are ~1600 px JPEGs (`--full` for full-resolution PNG). `open`, `list`, `t
 
 Quote URLs and queries. YouTube no longer honors sorting by date, so use `--upload` for recency.
 
-- **`--grep`** matches case-insensitive plain-text substrings (any term; not regex). Transcripts are speech-to-text, and captions vary: grep both forms (`$799` and `799`, `1000` and `thousand`). Results: `matched_segments` (segments containing a term, each tagged `matched: [terms]`), `returned_segments` (including `context: true` neighbors), `total_segments`.
-- **Transcript unavailable:** `reason` says why. `youtube_error` means YouTube's own transcript service failed for that video; a person would see the same endless spinner, and it often affects every video on a channel.
+- **`--grep`** matches case-insensitive plain-text substrings (any term; not regex). With `--grep`, the output adds counts: `matched_segments` (how many segments contain a term; each such segment is tagged `matched: [terms]`), `returned_segments` (including `context: true` neighbors), `total_segments`. Every segment has `at` ("4:11"), `sec` (251) and `link`.
+- **Auto-captions garble numbers:** "$3.99" may really be $399, and "1,0" may be 1,000. Grep both forms (`$799` and `799`, `1000` and `thousand`), and verify prices and specs against a frame, the description, or another source before citing them.
+- **Transcript unavailable:** `reason` says why. The helper opens transcripts the way a person does (skims the description, finds the button, mouse path and all), which is what lets YouTube serve them; if it still fails, `youtube_error` means YouTube refused it.
   1. **Don't retry**, and don't try other ways to get captions.
   2. **Note it** for that video ("transcript: unavailable, youtube_error").
   3. **Carry on:** use chapters, the description, comments, and frames at chapter starts for that video. If its spoken content is essential, pick another video on the same angle.
@@ -61,16 +65,20 @@ Quote URLs and queries. YouTube no longer honors sorting by date, so use `--uplo
 
 Use a **full landscape pass** when the user names no products, asks what the options are, or the question is about a category. Use a **light pass** (2–3 page loads) when products are given, to check that no major alternative is missing; mention any you find under "Also consider".
 
-1. **Find roundups and comparisons:** `"best <category> <year>"`, `"<category> buyer's guide"`, `"<category> comparison"` or `"tier list"`, `"<product> vs"`, `"<product> alternatives"`. Use `--sort views` and `--upload year`, plus one `--upload month` search for newcomers.
+1. **Find roundups and comparisons.** **Start with the use case** (`"AR glasses for coding"`, `"<category> for <task>"`): it finds people actually doing the thing. Then `"best <category> <year>"`, `"<category> buyer's guide"`, `"<category> comparison"` or `"tier list"`, `"<product> vs"`, `"<product> alternatives"`.
+   - Use `--upload year`. `--sort views` can pull in off-topic viral videos, so use it once at most.
+   - **Skip AI listicle channels:** future-dated titles ("2027"), slideshow or stock b-roll thumbnails, many near-identical "Top 10" uploads, synthetic narration. Recent-upload searches are full of them; don't count their mentions.
 2. **Read 2–4 roundup or comparison videos.** Their chapters often list the products; `transcript --grep "best" "pick" "alternative" "instead" "vs"` shows the verdicts.
-3. **Tally candidates:** how many *independent* creators feature each product, how recently, and whether the product leads or is a footnote. Weigh sponsor bias: a product appearing only in its own sponsored videos isn't evidence of standing.
+3. **Tally candidates** with `$Y tally <ID> <name> <name> ...`. It counts, among everything this window has seen (search results, and loaded videos' titles, descriptions and links), how many channels and how many *independent* channels (sponsor score below 0.6) feature each name. Description affiliate links are often the cleanest product list. A product appearing only in its own sponsored or referral-code videos isn't evidence of standing.
 4. **Pick the top handful** (usually 4–6) and say why. List notable products you left out, with the reason (niche, discontinued, unreleased, little coverage).
 5. **Find the dividing lines:** the 3–5 features or design choices where products genuinely split and buyers must give something up (e.g. tethered vs standalone, display vs camera-only, field of view vs weight, open SDK vs closed ecosystem, price tier).
    - Find them in what comparison videos argue about, what owners complain about, and where reviewers say "if you need X, get Y".
    - Separate these from **table stakes** (everyone has them) and from **marketing differences** that don't change real use. Say which is which.
 6. **Position each product** against the dividing lines, then continue with the normal workflow for the products that matter to the question.
 
-Budget: a full landscape pass usually takes 8–12 page loads, so plan the rest of the research around it.
+**When the field is really two or more categories** (e.g. virtual-monitor glasses vs heads-up display glasses), say so first. Treat the top split as the primary dividing line, and choose the top products within each category rather than ranking across them.
+
+Budget: a full landscape pass usually takes 8–12 page loads on its own, so allow about 20 for a landscape question, or tell the user the landscape will be thinner.
 
 ## Workflow: a guide, not a quota
 
@@ -110,9 +118,10 @@ Always start with `video`: disclosure signals, chapters, description, metadata. 
 ### 4. Frames and screenshots
 
 - **Capture** stat tables, benchmark charts, spec slides, side-by-side comparisons, a feature in use, visible defects, UI, and telling search pages.
+- **Label what an image really shows.** Separate real through-the-lens or screen captures from editing composites and mock-ups (overlays added in editing, renders, marketing animations). Most "what you see" shots in reviews are composites; say so in the caption.
 - **Look at every image with Read before using it.** It must show the expected content, not an ad, sponsor segment, b-roll, talking head, or transition. `frame` waits out or skips ads and reports `ad_seen` and `ad_in_frame`, but the image is the check. If it's wrong, try a few seconds later; if an ad keeps appearing, retry once, then move on.
 - **If `warning` says the player is small**, tell the user the research window is too small, even in theater mode (a tiling window manager may have shrunk it).
-- **Save** into the report's folder with `--out-dir <dir>`. Files are named `YYYY-MM-DD_<videoid>_<mmss>.png` from the time actually landed on; rename if you like. Caption each image with video, channel, and the timestamped link. A handful of telling images beats dozens.
+- **Save** into the report's folder with `--out-dir <dir>`. Files are ~1600 px JPEGs named `YYYY-MM-DD_<videoid>_at03m49s.jpg` from the time actually landed on (`--full` for PNG); rename if you like. Caption each image with video, channel, and the timestamped link. A handful of telling images beats dozens.
 - **Several moments in one video:** pass several timestamps to one `frame` call.
 - **Busy or moving moments** (a demo, a chart that animates in, a slide that changes): use `--burst 5`. The video lands, plays on muted, and a candidate is captured about every second. Look at the candidates, keep the best, and delete the rest. This beats jumping repeatedly, which looks odd. Frames land within about ±2.5 s, since YouTube can snap a click to a chapter start, so a burst also covers that.
 
@@ -134,7 +143,9 @@ Always start with `video`: disclosure signals, chapters, description, metadata. 
     - "they didn't see the video before it went live"
   - Raising signals: sponsor reads, campaign links, review units, affiliate links and disclosures, link or code pitches. Lowering signals: bought it myself, claims of not being sponsored, editorial-independence claims. Each counts once.
   - **Whose sponsor?** A sponsor read names the sponsor (`sponsor`). If it isn't the brand being reviewed (e.g. an accessory maker sponsoring a Meta review), it's recorded as `third_party_sponsor` with a lower weight: it shows commercial ties, not bias toward the product.
-  - **Adjust the result yourself:** 1.0 for brand-owned channels; higher for channels mostly covering one brand (`channel`); lower only for credible evidence of independent purchase.
+  - **Brand-aware:** a channel that is the brand itself scores 1.0 (`brand_owned_channel`). Affiliate links and codes tied to the reviewed brand (`brand_affiliate_links`, `brand_code_or_link`) weigh more than generic ones. "I bought it myself" lowers the score only when it is about the reviewed product, which matters in multi-product roundups.
+  - **Adjust the result yourself:** higher for channels mostly covering one brand (`channel`); lower only for credible evidence of independent purchase.
+  - `video` puts `sponsor_bias` under `video`; `transcript` returns the updated one at the top level.
   - **Report the final score and its main reasons** in the sources table.
 - **Continued access depends on staying positive.** Many prior videos on one brand is a pattern. "Unsponsored" or "honest" in a title is a claim, not proof. Pinned and hearted comments are chosen by the creator. Claims every reviewer repeats may come from the brand's reviewer guide.
 

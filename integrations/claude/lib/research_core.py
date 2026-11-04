@@ -99,14 +99,69 @@ class Site:
             raise Fail(json.dumps(res["exceptionDetails"])[:500])
         return res.get("result", {}).get("value")
 
-    def click(self, target: str, x: float, y: float) -> None:
-        """A trusted click (press + release), as a person would make."""
-        for t in ("mouseMoved", "mousePressed", "mouseReleased"):
-            self.cdp(target, "Input.dispatchMouseEvent",
-                     {"type": t, "x": x, "y": y, "button": "left", "clickCount": 1})
+    # ---------------------------------------------------------------------
+    # Human-like pointer: curved paths, uneven speed, occasional overshoot.
+    # The last position is kept per window (in its claim) so paths start where
+    # the pointer actually is.
+    # ---------------------------------------------------------------------
+
+    def _mouse_pos(self, target: str) -> tuple[float, float]:
+        c = self.claims().get(target) or {}
+        if "mouse" in c:
+            return tuple(c["mouse"])
+        vp = self.evaluate(target, "[innerWidth, innerHeight]") or [1200, 800]
+        return (vp[0] * random.uniform(0.3, 0.7), vp[1] * random.uniform(0.3, 0.7))
+
+    def _save_mouse(self, target: str, x: float, y: float) -> None:
+        c = self.claims().get(target)
+        if c is not None:
+            c["mouse"] = [x, y]
+            self._write_claim(target, c)
+
+    def _path(self, x0: float, y0: float, x1: float, y1: float) -> list[tuple[float, float]]:
+        dx, dy = x1 - x0, y1 - y0
+        dist = (dx * dx + dy * dy) ** 0.5
+        if dist < 3:
+            return [(x1, y1)]
+        steps = int(min(26, max(6, dist / 30))) + random.randint(0, 3)
+        # A bowed cubic Bezier: control points pushed off the straight line.
+        nx, ny = -dy / dist, dx / dist
+        bow = random.uniform(0.05, 0.25) * dist * random.choice((-1, 1))
+        c1 = (x0 + dx * random.uniform(0.2, 0.4) + nx * bow, y0 + dy * random.uniform(0.2, 0.4) + ny * bow)
+        c2 = (x0 + dx * random.uniform(0.6, 0.8) + nx * bow * 0.5, y0 + dy * random.uniform(0.6, 0.8) + ny * bow * 0.5)
+        pts = []
+        for i in range(1, steps + 1):
+            t = i / steps
+            t = t * t * (3 - 2 * t)  # ease in and out: slow start, fast middle, slow finish
+            mt = 1 - t
+            px = mt**3 * x0 + 3 * mt * mt * t * c1[0] + 3 * mt * t * t * c2[0] + t**3 * x1
+            py = mt**3 * y0 + 3 * mt * mt * t * c1[1] + 3 * mt * t * t * c2[1] + t**3 * y1
+            pts.append((px + random.uniform(-0.8, 0.8), py + random.uniform(-0.8, 0.8)))
+        if dist > 120 and random.random() < 0.35:
+            # Overshoot a little, then settle back onto the target.
+            over = random.uniform(4, 10)
+            pts[-1] = (x1 + dx / dist * over, y1 + dy / dist * over)
+            pts += [(x1 + dx / dist * over * 0.4, y1 + dy / dist * over * 0.4), (x1, y1)]
+        else:
+            pts[-1] = (x1, y1)
+        return pts
 
     def move(self, target: str, x: float, y: float) -> None:
-        self.cdp(target, "Input.dispatchMouseEvent", {"type": "mouseMoved", "x": x, "y": y})
+        """Move the pointer to (x, y) along a human-like path."""
+        x0, y0 = self._mouse_pos(target)
+        for px, py in self._path(x0, y0, x, y):
+            self.cdp(target, "Input.dispatchMouseEvent", {"type": "mouseMoved", "x": px, "y": py})
+            if random.random() < 0.15:
+                time.sleep(random.uniform(0.02, 0.09))
+        self._save_mouse(target, x, y)
+
+    def click(self, target: str, x: float, y: float) -> None:
+        """Move there like a person, hover a moment, then press and release (a trusted click)."""
+        self.move(target, x, y)
+        pause(random.uniform(0.12, 0.35), fuzz=0)
+        self.cdp(target, "Input.dispatchMouseEvent", {"type": "mousePressed", "x": x, "y": y, "button": "left", "clickCount": 1})
+        time.sleep(random.uniform(0.06, 0.14))
+        self.cdp(target, "Input.dispatchMouseEvent", {"type": "mouseReleased", "x": x, "y": y, "button": "left", "clickCount": 1})
 
     def wheel(self, target: str, dy: float, x: float = 400, y: float = 400) -> None:
         """Scroll with the mouse wheel, as a person would."""
@@ -143,14 +198,17 @@ class Site:
             self.wheel(target, -800)
             pause(0.25)
 
-    def click_on(self, target: str, selector: str) -> bool:
-        """Scroll an element into view and click its center with a trusted click."""
+    def click_on(self, target: str, selector: str, look: float = 0) -> bool:
+        """Scroll an element into view, take `look` seconds to find it, and click a point
+        inside it (not dead center) with a human-like pointer path."""
         r = self.scroll_into_view(target, selector)
         if r is None:
             return False
-        self.move(target, r["x"] + r["width"] / 2 - 3, r["y"] + r["height"] / 2 - 2)
-        pause(0.15)
-        self.click(target, r["x"] + r["width"] / 2, r["y"] + r["height"] / 2)
+        if look:
+            pause(look)
+        x = r["x"] + r["width"] * random.uniform(0.3, 0.7)
+        y = r["y"] + r["height"] * random.uniform(0.35, 0.65)
+        self.click(target, x, y)
         return True
 
     def screenshot(self, target: str, out: Path, clip: dict | None = None,
