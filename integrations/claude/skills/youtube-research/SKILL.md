@@ -35,8 +35,9 @@ $Y search <ID> '"XREAL One Pro" review'          # --sort relevance|views  --upl
 $Y video <ID> '<watch url>'                      # metadata, chapters, description, disclosure signals (1 page load)
 $Y transcript <ID> --context 1 --grep battery "sent me"   # matching segments, each with a timestamped `link`
 $Y frame <ID> 2:43 6:17 --out-dir <report dir>   # theater, pause, jump, capture each -> {path, actual, landing_error_s, link, ad_seen, ad_in_frame, buffering, warning?}
+$Y frame <ID> 6:17 --burst 5 --out-dir <dir>     # land, then let it play 5 s capturing ~1 candidate/second -> candidates[]
 $Y comments <ID> --max 20                        # one batch of top comments
-$Y shot <ID> --out-dir <report dir>              # screenshot of what's visible in the window (any page)
+$Y shot <ID> --out-dir <report dir>              # visible page content, any page (account top bar/sidebar left out)
 $Y channel <ID> @handle                          # channel header + recent uploads (1 page load)
 $Y close <ID>
 $Y list                                          # active research windows across all agents
@@ -45,11 +46,11 @@ $Y nav <ID> '<youtube url>'                      # escape hatch: paced load of a
 $Y eval <ID> '<js>'                              # escape hatch: read something the commands don't return
 ```
 
-Errors are JSON (`{"error": "..."}`) with exit code 1. `video` accepts watch, `youtu.be` and Shorts links. Search results never carry `t=`; on a signed-in account that would be a watch-history resume point, not a citation.
+Images are ~1600 px JPEGs (`--full` for full-resolution PNG). `open`, `list`, `transcript`, `frame`, `comments` and `shot` cost no page load; `search`, `video`, `channel` and `nav` cost one each. Errors are JSON (`{"error": "..."}`) with exit code 1. `video` accepts watch, `youtu.be` and Shorts links. Search results never carry `t=`; on a signed-in account that would be a watch-history resume point, not a citation.
 
 Quote URLs and queries. YouTube no longer honors sorting by date, so use `--upload` for recency.
 
-- **`--grep`** matches case-insensitive plain-text substrings (any term; not regex). Transcripts are speech-to-text, so write numbers both ways (`1000`, `thousand`) and prefer words to symbols (`dollars`, not `$`).
+- **`--grep`** matches case-insensitive plain-text substrings (any term; not regex). Transcripts are speech-to-text, and captions vary: grep both forms (`$799` and `799`, `1000` and `thousand`). Results: `matched_segments` (segments containing a term, each tagged `matched: [terms]`), `returned_segments` (including `context: true` neighbors), `total_segments`.
 - **Transcript unavailable:** `reason` says why. `youtube_error` means YouTube's own transcript service failed for that video; a person would see the same endless spinner, and it often affects every video on a channel.
   1. **Don't retry**, and don't try other ways to get captions.
   2. **Note it** for that video ("transcript: unavailable, youtube_error").
@@ -113,6 +114,7 @@ Always start with `video`: disclosure signals, chapters, description, metadata. 
 - **If `warning` says the player is small**, tell the user the research window is too small, even in theater mode (a tiling window manager may have shrunk it).
 - **Save** into the report's folder with `--out-dir <dir>`. Files are named `YYYY-MM-DD_<videoid>_<mmss>.png` from the time actually landed on; rename if you like. Caption each image with video, channel, and the timestamped link. A handful of telling images beats dozens.
 - **Several moments in one video:** pass several timestamps to one `frame` call.
+- **Busy or moving moments** (a demo, a chart that animates in, a slide that changes): use `--burst 5`. The video lands, plays on muted, and a candidate is captured about every second. Look at the candidates, keep the best, and delete the rest. This beats jumping repeatedly, which looks odd. Frames land within about ±2.5 s, since YouTube can snap a click to a chapter start, so a burst also covers that.
 
 ### 5. Close
 
@@ -123,7 +125,7 @@ Always start with `video`: disclosure signals, chapters, description, metadata. 
 **Creators are marketing-adjacent until shown otherwise.** Lean on videos for features, demos, interest level, comparisons, and alternatives, more than for verdicts.
 
 - **`sponsor_bias`** (0.0–1.0) estimates how likely a video is sponsored or sponsor-influenced, and lists the evidence (each with its source and, for the transcript, a link).
-  - `video` scores the page: the paid-promotion label, campaign-tracking links, affiliate links and disclosures, and sponsor, review-unit or "use my code" wording in the title and description.
+  - `video` scores the page: the paid-promotion label, YouTube Shopping products marked "Earns commission", campaign-tracking links, affiliate links (networks and brand `/affiliates/` paths) and "(affiliate link)" labels, and sponsor, review-unit or "use my code" wording in the title and description. Its `confidence` is **low** until the transcript is scanned, so a low page-only score is not a clean bill.
   - `transcript` rescans the **whole** transcript (whatever you grep) and returns an updated `sponsor_bias` plus `disclosure_mentions`:
     - sponsor reads ("thanks to X for sponsoring")
     - review units, early access, embargoes ("they sent me")
@@ -131,6 +133,7 @@ Always start with `video`: disclosure signals, chapters, description, metadata. 
     - "I bought it with my own money"
     - "they didn't see the video before it went live"
   - Raising signals: sponsor reads, campaign links, review units, affiliate links and disclosures, link or code pitches. Lowering signals: bought it myself, claims of not being sponsored, editorial-independence claims. Each counts once.
+  - **Whose sponsor?** A sponsor read names the sponsor (`sponsor`). If it isn't the brand being reviewed (e.g. an accessory maker sponsoring a Meta review), it's recorded as `third_party_sponsor` with a lower weight: it shows commercial ties, not bias toward the product.
   - **Adjust the result yourself:** 1.0 for brand-owned channels; higher for channels mostly covering one brand (`channel`); lower only for credible evidence of independent purchase.
   - **Report the final score and its main reasons** in the sources table.
 - **Continued access depends on staying positive.** Many prior videos on one brand is a pattern. "Unsponsored" or "honest" in a title is a claim, not proof. Pinned and hearted comments are chosen by the creator. Claims every reviewer repeats may come from the brand's reviewer guide.

@@ -11,14 +11,18 @@ CLI (each command prints JSON):
 
     youtube_tab.py open [--wait [SECONDS]]                 claim a window -> {"target": ID}
     youtube_tab.py search ID QUERY [--sort relevance|views] [--upload hour|today|week|month|year] [--shorts]
+                       (`open` and `list` cost no page load; search, video, channel and nav cost one each)
     youtube_tab.py video ID URL                            metadata, disclosure signals, chapters, description
     youtube_tab.py transcript ID [--context N] [--grep TERM ...]   segments with timestamped links
                        (--grep: case-insensitive plain-text substrings, any of them; not regex)
     youtube_tab.py comments ID [--max N]                   top comments of the loaded video (default 20)
-    youtube_tab.py frame ID AT [AT ...] [--out-dir DIR | --out PATH]
-                       theater mode, pause, jump to each AT (e.g. 6:17), capture the player;
-                       files are named from the time actually landed on
-    youtube_tab.py shot ID [--out-dir DIR | --out PATH]    screenshot of what's visible in the window (any page)
+    youtube_tab.py frame ID AT [AT ...] [--burst SECONDS] [--full] [--out-dir DIR | --out PATH]
+                       theater mode, pause, jump to each AT (e.g. 6:17), capture the player
+                       (within about +/-2.5 s; clicks can snap to a chapter start). --burst N then
+                       lets it play N s (max 15), capturing a candidate about every second.
+                       Images are ~1600 px JPEGs; --full saves full-resolution PNGs.
+    youtube_tab.py shot ID [--full] [--out-dir DIR | --out PATH]   visible page content (top bar and
+                       account sidebar excluded), any page
     youtube_tab.py channel ID URL|@handle                  channel header + recent uploads
     youtube_tab.py nav ID URL | eval ID JS|@file.js        escape hatches (paced load / run JS)
     youtube_tab.py close ID | list | gc                    release window / show / clean up claims
@@ -109,12 +113,18 @@ def search_url(query: str, sort: str = "relevance", upload: str | None = None) -
                    "use --upload to restrict to recent videos)")
     if upload is not None and upload not in UPLOADS:
         raise Fail(f"upload must be one of {tuple(UPLOADS)}")
-    # The `sp` parameter is a base64 protobuf: field 1 = sort, field 2 = filters
-    # {field 1 = upload date, field 2 = type (1 = video)}.
-    filters = (b"\x08" + _varint(UPLOADS[upload]) if upload else b"") + b"\x10\x01"
-    sp = (b"\x08" + _varint(SORTS[sort]) if SORTS[sort] else b"") + b"\x12" + _varint(len(filters)) + filters
-    return ("https://www.youtube.com/results?"
-            + urlencode({"search_query": query, "sp": base64.b64encode(sp).decode()}, quote_via=quote))
+    # The `sp` parameter is a base64 protobuf: field 1 = sort, field 2 = filters {field 1 = upload date}.
+    # No type filter: casual searchers don't set one, and Shorts are separated when parsing results.
+    sp = b""
+    if SORTS[sort]:
+        sp += b"\x08" + _varint(SORTS[sort])
+    if upload:
+        filters = b"\x08" + _varint(UPLOADS[upload])
+        sp += b"\x12" + _varint(len(filters)) + filters
+    params = {"search_query": query}
+    if sp:
+        params["sp"] = base64.b64encode(sp).decode()
+    return "https://www.youtube.com/results?" + urlencode(params, quote_via=quote)
 
 
 def _seconds(at) -> float:
@@ -371,8 +381,8 @@ _SIGNALS = [
     # (category, weight, pattern)
     ("sponsor_read", 0.5, r"\b(this (video|episode) is sponsored by|sponsored by|thanks? (you )?to \S+( \S+)? for sponsoring|today'?s sponsor|in (paid )?partnership with|paid partnership|#ad\b|#sponsored|brought to you by)"),
     ("review_unit", 0.25, r"\b(sent (it |this |them |these )?(to )?(me|us)|provided (by|to me)|loaned|on loan|review (unit|sample)|gifted|early access|under embargo|embargo (lift|ends))"),
-    ("use_my_link_or_code", 0.15, r"\b(use (my|the) (link|code)|link (is )?in (the )?description|links? below|use code \S+|code \S+ at checkout|discount code|promo code|% off with|percent off with)"),
-    ("affiliate_disclosure", 0.1, r"\b(affiliate links?|i (may )?earn (a )?(small )?commission|commission (from|on) (any|qualifying) purchases|as an amazon associate)"),
+    ("use_my_link_or_code", 0.15, r"\b(use my (link|code)|use (the )?code \S+|code \S+ (at checkout|for \d+ ?%)|discount code|promo code|\d+ ?% off (with|using)|(buy|get|order|grab|pick up) (one|yours|it|them|a pair)? ?(through|using|with|from|via) (my|the) (link|affiliate))"),
+    ("affiliate_disclosure", 0.1, r"(\baffiliate links?\b|\(affiliate\)|\bi (may )?earn (a )?(small )?commission|commission (from|on) (any|qualifying) purchases|as an amazon associate)"),
     ("bought_it_myself", -0.15, r"\b(i (bought|purchased|paid for) (it|this|them|these|my own|.{0,20}with my own money)|with my own money|bought (it|them|this|these) myself|i bought)"),
     ("claims_not_sponsored", -0.1, r"\b(not (sponsored|paid|gifted)|no(body| one) (paid|sponsored)|un-?sponsored|isn'?t sponsored|wasn'?t (sponsored|paid))"),
     ("editorial_independence", -0.05, r"\b((did ?n'?o?t|do ?n'?o?t|never|no) (see|review|approve|preview|get to see|have (any )?(input|say|editorial))( the video| this video| it)?( before| ahead| in advance)?|no editorial control|without (their|any) (input|review|approval))"),
@@ -382,16 +392,29 @@ _GUIDE = ("Estimate from the page and transcript. Set 1.0 for brand-owned channe
           "covering one brand; report the final score with reasons.")
 
 
-def _scan_text(text: str, source: str, link: str | None = None) -> list[dict]:
+_SPONSOR_NAME = re.compile(r"(?i:sponsored by|thanks? (?:you )?to|brought to you by|in (?:paid )?partnership with|today'?s sponsor(?: is)?)\s+([A-Z][\w&.+-]*(?:\s+[A-Z][\w&.+-]*){0,2})")
+
+
+def _scan_text(text: str, source: str, link: str | None = None, subject: str = "") -> list[dict]:
+    """Find disclosure signals. A sponsor read for a brand that isn't the video's subject is
+    recorded as a weaker third-party sponsorship."""
     hits = []
     for sent in re.split(r"(?<=[.!?])\s+|\n+", text or ""):
         for cat, w, pat in _COMPILED:
             m = pat.search(sent)
-            if m:
-                # A negated sponsorship line is a claim of independence, not a sponsor read.
-                if cat in ("sponsor_read", "review_unit") and re.search(r"\b(not|no|never|un-?)\s*(sponsor|gift|paid|provid|sent)", sent, re.I):
-                    continue
-                hits.append({"signal": cat, "weight": w, "source": source, "text": sent.strip()[:220], **({"link": link} if link else {})})
+            if not m:
+                continue
+            # A negated sponsorship line is a claim of independence, not a sponsor read.
+            if cat in ("sponsor_read", "review_unit") and re.search(r"\b(not|no|never|un-?)\s*(sponsor|gift|paid|provid|sent)", sent, re.I):
+                continue
+            hit = {"signal": cat, "weight": w, "source": source, "text": sent.strip()[:220], **({"link": link} if link else {})}
+            if cat == "sponsor_read":
+                nm = _SPONSOR_NAME.search(sent)
+                name = nm.group(1).strip().rstrip(".,!;:") if nm else None
+                hit["sponsor"] = name
+                if name and subject and not any(tok.lower() in subject.lower() for tok in re.findall(r"[A-Za-z0-9]{3,}", name)):
+                    hit.update(signal="third_party_sponsor", weight=0.15)
+            hits.append(hit)
     return hits
 
 
@@ -415,14 +438,24 @@ def sponsor_bias(data: dict, transcript_hits: list[dict] | None = None) -> dict:
     page: list[dict] = []
     if d.get("paid_promotion_label"):
         page.append({"signal": "paid_promotion_label", "weight": 0.6, "source": "player", "text": d.get("paid_promotion_text")})
-    page += _scan_text(data.get("title", ""), "title")
-    page += _scan_text(data.get("description", ""), "description")
+    subject = " ".join([data.get("title") or ""] + list(data.get("keywords") or [])[:8])
+    page += _scan_text(data.get("title", ""), "title", subject=subject)
+    page += _scan_text(data.get("description", ""), "description", subject=subject)
     if d.get("affiliate_links"):
         page.append({"signal": "affiliate_links", "weight": 0.15, "source": "description", "text": ", ".join(d["affiliate_links"][:5])})
+    if d.get("products_earning_commission"):
+        page.append({"signal": "shopping_commission", "weight": 0.15, "source": "product shelf",
+                     "text": f"{d['products_earning_commission']} tagged product(s) marked 'Earns commission'"})
     if d.get("campaign_links"):
         page.append({"signal": "campaign_tracking", "weight": 0.2, "source": "description", "text": ", ".join(d["campaign_links"][:3])})
     res = _score(page, transcript_hits or [])
     res["transcript_scanned"] = transcript_hits is not None
+    if transcript_hits is None:
+        res["confidence"] = "low"
+        res["confidence_note"] = ("Page only: the transcript hasn't been scanned (or couldn't be), so spoken "
+                                  "sponsor reads and review-unit mentions are unknown. A low score here is not a clean bill.")
+    else:
+        res["confidence"] = "medium"
     return res
 
 
@@ -441,7 +474,7 @@ def video(target: str, url: str) -> dict:
     data = SITE.evaluate(full_id, _js("video.js"))
     if data:
         data["sponsor_bias"] = sponsor_bias(data)
-        _remember(full_id, {"video_id": data.get("video_id"), "title": data.get("title"),
+        _remember(full_id, {"video_id": data.get("video_id"), "title": data.get("title"), "keywords": data.get("keywords"),
                             "description": data.get("description"), "disclosure": data.get("disclosure")})
     st = _state(full_id)
     muted = _ensure_muted(full_id) if not st.get("ad") else st.get("muted")
@@ -457,7 +490,11 @@ def transcript(target: str, grep: list[str] | None = None, context: int = 0) -> 
     ok, reason = _open_transcript(full_id)
     if not ok:
         SITE.scroll_to_top(full_id)
-        return {"available": False, "segments": [], "reason": reason}
+        res = {"available": False, "segments": [], "reason": reason}
+        page = _recall(full_id, vid)
+        if page:
+            res["sponsor_bias"] = sponsor_bias(page)  # page-only, flagged low confidence
+        return res
     res = SITE.evaluate(full_id, _js("transcript.js")) or {"available": False, "segments": []}
     SITE.scroll_to_top(full_id)
     for seg in res["segments"]:
@@ -465,9 +502,10 @@ def transcript(target: str, grep: list[str] | None = None, context: int = 0) -> 
             seg["link"] = f"https://www.youtube.com/watch?v={vid}&t={seg['sec']}s"
     segs = res["segments"]
     # Disclosure mentions anywhere in the transcript (independent of --grep), and the updated bias.
-    mentions = [h for sg in segs for h in _scan_text(sg["text"], f"transcript {sg['at']}", sg.get("link"))]
-    res["disclosure_mentions"] = mentions
     page = _recall(full_id, vid)
+    subject = " ".join([(page or {}).get("title") or ""] + list((page or {}).get("keywords") or [])[:8])
+    mentions = [h for sg in segs for h in _scan_text(sg["text"], f"transcript {sg['at']}", sg.get("link"), subject)]
+    res["disclosure_mentions"] = mentions
     if page:
         res["sponsor_bias"] = sponsor_bias(page, mentions)
     if grep and segs:
@@ -502,7 +540,37 @@ def comments(target: str, max_comments: int = 20) -> dict:
     return res
 
 
-def _capture(full_id: str, vid: str, sec: float, out: str | None, out_dir: str | None) -> dict:
+IMG_WIDTH = int(os.environ.get("YOUTUBE_TAB_IMG_WIDTH", "1600"))
+
+
+def _img_path(out: str | None, out_dir: str | None, stem: str, full: bool) -> Path:
+    if out:
+        return Path(out)
+    return Path(out_dir or SHOTS) / f"{stem}.{'png' if full else 'jpg'}"
+
+
+def _burst(full_id: str, vid: str, seconds: float, out_dir: str | None, full: bool, rect: dict) -> list[dict]:
+    """Let the video play (muted) for `seconds`, capturing a candidate about every second.
+    Started with the keyboard so the pointer stays away and the controls stay hidden."""
+    for typ in ("keyDown", "keyUp"):
+        SITE.cdp(full_id, "Input.dispatchKeyEvent", {"type": typ, "key": "k", "code": "KeyK", "windowsVirtualKeyCode": 75})
+    pause(0.8)  # let the play icon fade
+    out, end = [], time.time() + seconds
+    while time.time() < end:
+        st = _state(full_id)
+        t = st.get("t") or 0
+        if not st.get("ad"):
+            path = _img_path(None, out_dir, f"{date.today().isoformat()}_{vid}_at{_stamp(t)}", full)
+            if not any(c["path"] == str(path) for c in out):
+                SITE.screenshot(full_id, path, clip=st.get("player") or rect, max_width=None if full else IMG_WIDTH)
+                out.append({"path": str(path), "at": _mmss(t),
+                            "link": f"https://www.youtube.com/watch?v={vid}&t={int(t)}s"})
+        pause(1.0)
+    return out
+
+
+def _capture(full_id: str, vid: str, sec: float, out: str | None, out_dir: str | None,
+             burst: float = 0, full: bool = False) -> dict:
     before = _clear_ads(full_id)
     theater = _ensure_theater(full_id)
     _ensure_paused(full_id)
@@ -527,11 +595,8 @@ def _capture(full_id: str, vid: str, sec: float, out: str | None, out_dir: str |
     final = _state(full_id)
     actual = final.get("t") or 0
     rect = final.get("player") or SITE.rect(full_id, "#movie_player")
-    if out:
-        path = Path(out)
-    else:
-        path = Path(out_dir or SHOTS) / f"{date.today().isoformat()}_{vid}_at{_stamp(actual)}.png"
-    SITE.screenshot(full_id, path, clip=rect)
+    path = _img_path(out, out_dir, f"{date.today().isoformat()}_{vid}_at{_stamp(actual)}", full)
+    SITE.screenshot(full_id, path, clip=rect, max_width=None if full else IMG_WIDTH)
     result = {
         "path": str(path.expanduser()),
         "requested": _mmss(sec), "actual": _mmss(actual), "landing_error_s": round(actual - sec, 1),
@@ -559,10 +624,15 @@ def _capture(full_id: str, vid: str, sec: float, out: str | None, out_dir: str |
                         "Tell the user the research window is small (a window manager may be tiling it).")
     if warnings:
         result["warning"] = " ".join(warnings)
+    if burst > 0 and not result["ad_in_frame"]:
+        result["candidates"] = _burst(full_id, vid, burst, out_dir, full, rect)
+        result["check"] = ("`path` is the paused frame at the landing time; `candidates` were captured while it "
+                           "played on. Look at them, keep the best, and delete the rest.")
     return result
 
 
-def frame(target: str, at, out: str | None = None, out_dir: str | None = None):
+def frame(target: str, at, out: str | None = None, out_dir: str | None = None,
+          burst: float = 0, full: bool = False):
     """Jump to `at` (one timestamp, or a list), wait out ads and buffering, capture the player.
     Returns one result, or a list for several timestamps."""
     full_id = SITE.resolve(target)
@@ -574,23 +644,34 @@ def frame(target: str, at, out: str | None = None, out_dir: str | None = None):
     SITE.scroll_to_top(full_id)
     results = []
     for i, t in enumerate(times):
-        results.append(_capture(full_id, vid, _seconds(t), out, out_dir))
-        if i < len(times) - 1:
+        results.append(_capture(full_id, vid, _seconds(t), out, out_dir, min(burst, 15), full))
+        if i < len(times) - 1 and not burst:
             _resume_briefly(full_id)
     return results if isinstance(at, (list, tuple)) else results[0]
 
 
-def shot(target: str, out: str | None = None, out_dir: str | None = None) -> dict:
-    """Screenshot of what is visible in the window (any page: results, a video, a channel)."""
+_CONTENT_RECT_JS = """(() => { const vw = innerWidth, vh = innerHeight;
+  const top = (document.querySelector('#masthead-container')?.getBoundingClientRect().bottom) || 0;
+  const pm = document.querySelector('ytd-page-manager, #page-manager');
+  const left = pm ? Math.max(0, pm.getBoundingClientRect().left) : 0;
+  return {x: left, y: top, width: vw - left, height: vh - top}; })()"""
+
+
+def shot(target: str, out: str | None = None, out_dir: str | None = None, full: bool = False) -> dict:
+    """Screenshot of the page content visible in the window (any page). The top bar and the
+    sidebar, which show the signed-in account and its subscriptions, are left out."""
     full_id = SITE.resolve(target)
     SITE.touch(full_id)
     vid = _video_id(full_id)
-    name = f"{date.today().isoformat()}_{vid or 'page'}_shot{int(time.time()) % 100000}.png"
-    path = Path(out) if out else Path(out_dir or SHOTS) / name
-    SITE.screenshot(full_id, path)
+    url = SITE.evaluate(full_id, "location.href") or ""
+    slug = vid or (re.search(r"/(@[\w.-]+|results)", url) or [None, "page"])[1].lstrip("@") or "page"
+    path = _img_path(out, out_dir, f"{date.today().isoformat()}_{slug}_shot-{time.strftime('%H%M%S')}", full)
+    rect = SITE.evaluate(full_id, _CONTENT_RECT_JS)
+    SITE.screenshot(full_id, path, clip=rect, max_width=None if full else IMG_WIDTH)
     st = _state(full_id)
-    res = {"path": str(path.expanduser()), "url": SITE.evaluate(full_id, "location.href"),
-           "check": "Look at the image before using it."}
+    res = {"path": str(path.expanduser()), "url": url,
+           "check": "Look at the image before using it. The account's top bar and sidebar are excluded, "
+                    "but a comment box or account avatar inside the page can still appear."}
     if st.get("ad"):
         res["warning"] = "An ad is playing in the player on this page."
     return res
@@ -644,14 +725,15 @@ def _dispatch(cmd: str, args: list[str]):
         return comments(args[0], n)
     if cmd == "frame":
         out, out_dir = opt(args, "--out"), opt(args, "--out-dir")
+        burst, full = float(opt(args, "--burst", 0)), bool(opt(args, "--full", False))
         if len(args) < 2:
-            raise Fail("usage: frame ID AT [AT ...] [--out-dir DIR | --out PATH]")
-        return frame(args[0], args[1] if len(args) == 2 else args[1:], out, out_dir)
+            raise Fail("usage: frame ID AT [AT ...] [--burst SECONDS] [--full] [--out-dir DIR | --out PATH]")
+        return frame(args[0], args[1] if len(args) == 2 else args[1:], out, out_dir, burst, full)
     if cmd == "shot":
-        out, out_dir = opt(args, "--out"), opt(args, "--out-dir")
+        out, out_dir, full = opt(args, "--out"), opt(args, "--out-dir"), bool(opt(args, "--full", False))
         if len(args) != 1:
-            raise Fail("usage: shot ID [--out-dir DIR | --out PATH]")
-        return shot(args[0], out, out_dir)
+            raise Fail("usage: shot ID [--full] [--out-dir DIR | --out PATH]")
+        return shot(args[0], out, out_dir, full)
     if cmd == "channel" and len(args) == 2:
         return channel(*args)
     return common_cli(SITE, cmd, args)

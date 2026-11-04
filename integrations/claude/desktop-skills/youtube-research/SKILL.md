@@ -29,7 +29,7 @@ If the `youtube_*` tools aren't available, say so and stop. Don't fall back to w
   - Report the count in the sample size and caveats.
 
   `youtube_transcript` also scans the whole transcript for disclosure mentions (sponsor reads, "they sent me", "use my code", "bought it myself", "they didn't see the video first") and returns an updated `sponsor_bias`.
-- `youtube_frame(target, at)`: jump to e.g. `"6:17"` (or a list of timestamps) and capture the player. Returns JSON (actual time, `landing_error_s`, `link`, ad and buffering flags) plus the images.
+- `youtube_frame(target, at, burst?)`: jump to e.g. `"6:17"` (or a list of timestamps) and capture the player, within about ±2.5 s. Returns JSON (actual time, `landing_error_s`, `link`, ad and buffering flags) plus the images. With `burst: 5`, the video then plays on muted and a candidate is captured about every second. Use this for demos, animated charts and changing slides; keep the best candidate and ignore the rest.
 - `youtube_comments(target, max_comments?)`, `youtube_channel(target, url_or_@handle)` (1 page load), `youtube_shot(target)`.
 - `youtube_close(target)`.
 
@@ -78,7 +78,9 @@ Quantity, quality, and spread of videos vary a lot by subject. Cast a wide net w
 
 **Creators are marketing-adjacent until shown otherwise.** Lean on videos for features, demos, interest level, comparisons, and alternatives, more than for verdicts.
 
-- **`sponsor_bias`** (0.0–1.0, with evidence) starts from the page in `youtube_video` (paid label, campaign and affiliate links, disclosure wording) and is updated by `youtube_transcript`.
+- **`sponsor_bias`** (0.0–1.0, with evidence) starts from the page in `youtube_video` and is updated by `youtube_transcript`. Page signals: paid label, "Earns commission" products, campaign and affiliate links, disclosure wording.
+  - Its `confidence` is low until the transcript is scanned, so a low page-only score isn't a clean bill.
+  - A sponsor read for a brand other than the one reviewed is a `third_party_sponsor`, with lower weight.
   - **Adjust it:** raise it for review units, early access or embargo mentions in the transcript (grep "sent me", "provided", "sponsor", "embargo", "early access"), set it to 1.0 for brand-owned channels, and raise it for channels mostly covering one brand. Lower it for credible "bought it myself" evidence.
   - **Report the final score and reasons.**
 - Continued access depends on staying positive. "Unsponsored" in a title is a claim, not proof. Pinned and hearted comments are curated. Claims every reviewer repeats may come from the brand's reviewer guide.

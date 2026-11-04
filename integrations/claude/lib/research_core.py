@@ -153,12 +153,24 @@ class Site:
         self.click(target, r["x"] + r["width"] / 2, r["y"] + r["height"] / 2)
         return True
 
-    def screenshot(self, target: str, out: Path, clip: dict | None = None) -> Path:
-        params: dict = {"format": "png"}
-        if clip:
-            params["clip"] = {**clip, "scale": clip.get("scale", 1)}
-        data = self.cdp(target, "Page.captureScreenshot", params)["data"]
+    def screenshot(self, target: str, out: Path, clip: dict | None = None,
+                   max_width: int | None = None, quality: int = 85) -> Path:
+        """Capture the viewport (or `clip`). JPEG when `out` ends in .jpg, scaled down so the
+        image is at most `max_width` pixels wide; PNG at full resolution otherwise."""
         out = Path(out).expanduser()
+        jpeg = out.suffix.lower() in (".jpg", ".jpeg")
+        params: dict = {"format": "jpeg", "quality": quality} if jpeg else {"format": "png"}
+        if clip is None and max_width:
+            vp = self.evaluate(target, "({x: 0, y: 0, width: innerWidth, height: innerHeight})")
+            clip = vp
+        if clip:
+            scale = clip.get("scale", 1)
+            if max_width:
+                dpr = self.evaluate(target, "devicePixelRatio") or 1
+                scale = min(1.0, max_width / (clip["width"] * dpr))
+            params["clip"] = {"x": clip["x"], "y": clip["y"], "width": clip["width"],
+                              "height": clip["height"], "scale": scale}
+        data = self.cdp(target, "Page.captureScreenshot", params)["data"]
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_bytes(base64.b64decode(data))
         return out

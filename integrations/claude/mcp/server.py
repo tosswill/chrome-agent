@@ -68,16 +68,22 @@ def _reddit(fn, *args, **kwargs) -> str:
         return json.dumps({"error": str(e)})
 
 
+def _frame_images(target, at, burst):
+    """frame() plus a flat list of every image it produced (landing frames and burst candidates)."""
+    res = youtube_tab.frame(target, at, burst=min(burst, 15))
+    items = res if isinstance(res, list) else [res]
+    return {"result": res, "images": [p for r in items for p in [r["path"]] + [c["path"] for c in r.get("candidates", [])]]}
+
+
 def _with_image(fn, *args, **kwargs):
     """Run a capture and return its JSON plus the image itself, so the model can check it."""
     try:
         res = fn(*args, **kwargs)
     except youtube_tab.Fail as e:
         return json.dumps({"error": str(e)})
-    items = res if isinstance(res, list) else [res]
-    out = [json.dumps(res, ensure_ascii=False)]
-    out += [Image(path=r["path"]) for r in items]
-    return out
+    if isinstance(res, dict) and "images" in res:
+        return [json.dumps(res["result"], ensure_ascii=False)] + [Image(path=p) for p in res["images"]]
+    return [json.dumps(res, ensure_ascii=False), Image(path=res["path"])]
 
 
 # -------------------------------------------------------------------------
@@ -235,14 +241,15 @@ def youtube_transcript(target: str, grep: list[str] | None = None, context: int 
 
 
 @mcp.tool()
-def youtube_frame(target: str, at: str | list[str]):
+def youtube_frame(target: str, at: str | list[str], burst: float = 0):
     """Switch to theater mode (larger frame), pause (play/pause button), jump to timestamp `at` (e.g. "6:17") by clicking the progress bar, wait
     out or skip any ad and buffering, and capture the player (lands within about a second of `at`).
-    `at` may be a list of timestamps (one image each). Files are named, and `link` points, at the time
+    `at` may be a list of timestamps (one image each). burst=N (max 15) then lets it play N s and
+    captures a candidate about every second; pick the best. Files are named, and `link` points, at the time
     actually landed on; include `link` in the report so the user can open that moment. Returns JSON (path, requested/actual time, ad_seen, ad_in_frame,
     timestamped link, warning?) and the image. LOOK AT THE IMAGE: it must show the expected content, not
     an ad, sponsor segment, b-roll or transition. If wrong, try a few seconds later, or move on."""
-    return _with_image(youtube_tab.frame, target, at)
+    return _with_image(_frame_images, target, at, burst)
 
 
 @mcp.tool()
