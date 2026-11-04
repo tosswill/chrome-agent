@@ -2,7 +2,7 @@
 # requires-python = ">=3.11"
 # dependencies = ["mcp>=1.2,<2"]
 # ///
-"""MCP server exposing chrome-agent (and polite Reddit research) to Claude Desktop.
+"""MCP server exposing chrome-agent (and polite Reddit/YouTube research) to Claude Desktop.
 
 General tools wrap the chrome-agent CLI. The reddit_* tools call the same
 module the Claude Code reddit-research skill uses (skills/reddit-research/
@@ -23,7 +23,9 @@ from mcp.server.fastmcp import FastMCP, Image
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "skills" / "reddit-research" / "scripts"))
+sys.path.insert(0, str(HERE.parent / "skills" / "youtube-research" / "scripts"))
 import reddit_tab  # noqa: E402
+import youtube_tab  # noqa: E402
 
 BIN = shutil.which("chrome-agent") or str(Path.home() / ".local/bin/chrome-agent")
 EVENT_DIR = Path(tempfile.gettempdir()) / "chrome-agent-mcp"
@@ -40,7 +42,11 @@ mcp = FastMCP(
         "For Reddit research use ONLY the reddit_* tools (never run/screenshot on the Reddit "
         "instance without your own target): reddit_open -> reddit_search / reddit_thread -> "
         "reddit_close. They are read-only and paced. If a result contains `stop`, stop and "
-        f"tell the user why. Never stop the `{reddit_tab.INSTANCE}` browser; always reddit_close your window."
+        f"tell the user why. Never stop the `{reddit_tab.INSTANCE}` browser; always reddit_close your window.\n\n"
+        "For YouTube research use ONLY the youtube_* tools: youtube_open -> youtube_search / youtube_video "
+        "-> youtube_transcript / youtube_frame / youtube_comments / youtube_channel -> youtube_close. "
+        "Look at every image youtube_frame or youtube_shot returns before using it (it may show an ad). "
+        f"Never stop the `{youtube_tab.INSTANCE}` browser; always youtube_close your window."
     ),
 )
 
@@ -58,8 +64,17 @@ def _run(args: list[str], timeout: float) -> str:
 def _reddit(fn, *args, **kwargs) -> str:
     try:
         return json.dumps(fn(*args, **kwargs), ensure_ascii=False)
-    except reddit_tab.Fail as e:
+    except reddit_tab.Fail as e:  # the same Fail class backs both sites
         return json.dumps({"error": str(e)})
+
+
+def _with_image(fn, *args, **kwargs):
+    """Run a capture and return its JSON plus the image itself, so the model can check it."""
+    try:
+        res = fn(*args, **kwargs)
+    except youtube_tab.Fail as e:
+        return json.dumps({"error": str(e)})
+    return [json.dumps(res, ensure_ascii=False), Image(path=res["path"])]
 
 
 # -------------------------------------------------------------------------
@@ -177,6 +192,77 @@ def reddit_close(target: str) -> str:
 def reddit_list() -> str:
     """List active Reddit research windows (all agents): target, age, idle time, page loads."""
     return _reddit(reddit_tab.list_claims)
+
+
+# -------------------------------------------------------------------------
+# YouTube research tools (shared implementation with the Claude Code skill)
+# -------------------------------------------------------------------------
+
+@mcp.tool()
+def youtube_open(wait_seconds: float = 0) -> str:
+    """Claim your own window in the shared, signed-in YouTube browser. Returns {"target": ID};
+    pass it to every other youtube_* call. If all windows are busy, retry with wait_seconds (max ~50)."""
+    return _reddit(youtube_tab.open_window, min(wait_seconds, 50))
+
+
+@mcp.tool()
+def youtube_search(target: str, query: str, sort: str = "relevance", upload: str | None = None,
+                   shorts: bool = False) -> str:
+    """Search YouTube videos. sort: relevance|views (YouTube no longer honors date sorting; use upload).
+    upload: hour|today|week|month|year restricts to recent uploads. shorts: include Shorts (keep minor).
+    Returns {page: {loggedIn, blocked, loads, stop?}, results: [{type, title, url, channel, verified,
+    views, age, length}]}. If page.stop is present, stop and tell the user."""
+    return _reddit(youtube_tab.search, target, query, sort, upload, shorts)
+
+
+@mcp.tool()
+def youtube_video(target: str, url: str) -> str:
+    """Load a video (one page load) and return its metadata: channel, subscribers, views, likes,
+    published, length, chapters, captions, full description, description links, and disclosure signals
+    (paid-promotion label, sponsor phrases, affiliate links). Audio is muted with the player's own button.
+    transcript/frame/comments then work on this video without further page loads."""
+    return _reddit(youtube_tab.video, target, url)
+
+
+@mcp.tool()
+def youtube_transcript(target: str, grep: list[str] | None = None, context: int = 0) -> str:
+    """Transcript of the loaded video as [{at, sec, text}]. With grep, only segments matching any term
+    (case-insensitive), plus `context` neighboring segments each side. Use it to find moments to frame."""
+    return _reddit(youtube_tab.transcript, target, grep, context)
+
+
+@mcp.tool()
+def youtube_frame(target: str, at: str):
+    """Jump to timestamp `at` (e.g. "6:17") in the loaded video by clicking the progress bar, wait out or
+    skip any ad, and capture the player. Returns JSON (path, requested/actual time, ad_seen, ad_in_frame,
+    timestamped link, warning?) and the image. LOOK AT THE IMAGE: it must show the expected content, not
+    an ad, sponsor segment, b-roll or transition. If wrong, try a few seconds later, or move on."""
+    return _with_image(youtube_tab.frame, target, at)
+
+
+@mcp.tool()
+def youtube_shot(target: str):
+    """Screenshot of the visible page (e.g. search results, description). Returns JSON and the image."""
+    return _with_image(youtube_tab.shot, target)
+
+
+@mcp.tool()
+def youtube_comments(target: str, max_comments: int = 20) -> str:
+    """Top comments of the loaded video (one batch): author, likes, age, pinned, creator_heart, replies, text."""
+    return _reddit(youtube_tab.comments, target, max_comments)
+
+
+@mcp.tool()
+def youtube_channel(target: str, url: str) -> str:
+    """A channel's header (subscribers, video count) and recent uploads (one page load). url may be a
+    channel URL or @handle. Use it to judge how much of a channel covers one brand."""
+    return _reddit(youtube_tab.channel, target, url)
+
+
+@mcp.tool()
+def youtube_close(target: str) -> str:
+    """Close your YouTube research window and free the slot. Always call when done, even after errors."""
+    return _reddit(youtube_tab.close, target)
 
 
 if __name__ == "__main__":

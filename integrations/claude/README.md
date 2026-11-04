@@ -1,26 +1,31 @@
 # Claude integrations
 
-Tools for using chrome-agent from Claude Code and Claude Desktop, plus a polite, read-only Reddit research workflow that both can share.
+Tools for using chrome-agent from Claude Code and Claude Desktop, plus polite, read-only Reddit and YouTube research workflows that both can share.
 
 ```
 integrations/claude/
-├── mcp/server.py                         MCP server for Claude Desktop (chrome-agent + reddit_* tools)
-├── skills/reddit-research/               Claude Code skill
-│   ├── SKILL.md
-│   └── scripts/
-│       ├── reddit_tab.py                 shared implementation (CLI + imported by the MCP server)
-│       ├── page_state.js                 login / block detection
-│       ├── search_results.js             unique posts on a search or listing page
-│       └── thread.js                     post + top comments (+ OP replies)
-└── desktop-skills/reddit-research/       Claude Desktop skill (same workflow, MCP tool names)
-    └── SKILL.md
+├── lib/research_core.py                  shared core: window claims, pacing, page-load caps, organic input
+├── mcp/server.py                         MCP server for Claude Desktop (chrome-agent + reddit_* + youtube_* tools)
+├── skills/                               Claude Code skills (symlink each into ~/.claude/skills/)
+│   ├── reddit-research/
+│   │   ├── SKILL.md
+│   │   └── scripts/reddit_tab.py, page_state.js, search_results.js, thread.js
+│   └── youtube-research/
+│       ├── SKILL.md
+│       └── scripts/youtube_tab.py, page_state.js, search_results.js, video.js,
+│                   transcript.js, comments.js, channel.js
+└── desktop-skills/                       Claude Desktop skills (same workflows, MCP tool names)
+    ├── reddit-research/SKILL.md
+    └── youtube-research/SKILL.md
 ```
 
-## How the Reddit workflow works
+## How the research workflows work
 
-One long-lived, headed chrome-agent instance holds a signed-in Reddit session. Each agent (any mix of Claude Code sessions and Claude Desktop) claims **its own window** in that browser, so agents share the login but never each other's tabs. Every page load goes through a **cross-process pacing lock** (4 s between loads, across all agents). Each window has a hard page-load cap, and only normal `reddit.com` pages can be loaded; JSON/API endpoints are refused. Every load reports `loggedIn` and `blocked`, and the agent stops on either problem.
+Each site has its own long-lived, headed chrome-agent instance holding a signed-in session. Each agent (any mix of Claude Code sessions and Claude Desktop) claims **its own window** in that browser, so agents share the login but never each other's tabs. Every page load goes through a **cross-process pacing lock** per site (4 s between loads for Reddit, 6 s for YouTube, across all agents). Each window has a hard page-load cap, and only the site's normal pages can be loaded; JSON/API endpoints are refused. Every load reports `loggedIn` and `blocked`, and the agent stops on either problem.
 
-The CLI (`reddit_tab.py`) and the MCP `reddit_*` tools call the same functions, so they behave identically.
+**Actions are organic:** real mouse clicks and wheel scrolling, the YouTube player's own mute button and progress bar, and ads waited out or skipped with a click. Scripts only read the page. YouTube `frame` captures report whether an ad was seen or is still in frame, and the agent must check each image.
+
+The CLIs (`reddit_tab.py`, `youtube_tab.py`) and the MCP tools call the same functions, so they behave identically.
 
 ## Setup
 
@@ -37,12 +42,15 @@ Prerequisites: `uv tool install chrome-agent`, and Google Chrome.
 
    chrome-agent names an instance after the folder it was launched from and only avoids names that are *running*, not saved snapshots. A dedicated folder keeps the name distinctive, so an unrelated `chrome-agent launch` can't create an empty instance with the same name while the research browser is stopped (a later `save` would make that empty profile the newest snapshot).
 
+   Do the same for YouTube from `~/.local/share/chrome-agent-profiles/youtube-research` (`youtube-research-01`). Use a spare Google account and turn off its watch and search history.
+
 2. **Point the tools at it.** Set `REDDIT_TAB_INSTANCE` to the instance name (default `reddit-research-01`).
 
 3. **Claude Code:** link the skill and set the variable:
 
    ```bash
    ln -s "$PWD/integrations/claude/skills/reddit-research" ~/.claude/skills/reddit-research
+   ln -s "$PWD/integrations/claude/skills/youtube-research" ~/.claude/skills/youtube-research
    ```
 
    ```jsonc
@@ -68,7 +76,7 @@ Prerequisites: `uv tool install chrome-agent`, and Google Chrome.
 
    `CHROME_AGENT_CWD` is where the generic `run(["launch"])` tool launches from, so ad-hoc browsers are named `scratch-NN` and never shadow a research profile.
 
-   Then upload the skill: zip `desktop-skills/reddit-research/` (the zip must contain the `reddit-research/` folder) and add it under **Settings → Capabilities → Skills**.
+   Then upload the skills: zip each folder under `desktop-skills/` (each zip must contain its folder) and add them under **Settings → Capabilities → Skills**.
 
 ## Settings
 
@@ -81,8 +89,11 @@ Prerequisites: `uv tool install chrome-agent`, and Google Chrome.
 | `REDDIT_TAB_MAX_LOADS` | `40` | hard page-load cap per window |
 | `REDDIT_TAB_STATE` | `/tmp/chrome-agent-reddit` | lock and claim files |
 
+YouTube uses the same settings with the `YOUTUBE_TAB_` prefix. Its defaults are `youtube-research-01`, a 6 s gap, and 60 loads per window, with state in `/tmp/chrome-agent-youtube`, plus `YOUTUBE_TAB_SHOTS` (default `<state>/shots`) for captured frames.
+
 ## Notes
 
 - `save`/`restore` on macOS needs the `/proc` fix on the `macos-snapshot-proc` branch.
-- The two `SKILL.md` files share their workflow, weighing, and output sections. Change both together.
-- Read-only by design: the tools never post, vote, or type credentials, and they stop on any CAPTCHA, block page, or signed-out session.
+- Each site's two `SKILL.md` files (Code and Desktop) share their workflow, weighing, and output sections. Change both together.
+- Read-only by design: the tools never post, vote, like, subscribe, comment, download, or type credentials, and they stop on any CAPTCHA, block or bot-check page, consent or age gate, or signed-out session.
+- On macOS, closing a research browser's last window leaves Chrome running with no tabs; `open` recovers from that automatically.
