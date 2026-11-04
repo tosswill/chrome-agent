@@ -1,6 +1,6 @@
 ---
 name: youtube-research
-description: Research YouTube by reading real YouTube pages (search results, video metadata, transcripts, comments, channels) in the user's signed-in Chrome (a shared chrome-agent browser), capture frames that show features or data, and report findings with skepticism toward creator endorsements. Use whenever the user asks for YouTube research, asks what YouTubers/reviewers/videos say or show about something, or wants YouTube included among other sources (e.g. "check YouTube too", "include video reviews", "what are reviewers saying"). Also use for product feature, comparison, alternatives, interest-level or pre-release research that lists YouTube as a source. Read-only; never likes, subscribes, comments, or downloads.
+description: Research YouTube by reading real YouTube pages (search results, video metadata, transcripts, comments, channels) in the user's signed-in Chrome (a shared chrome-agent browser), capture frames that show features or data, and report findings with skepticism toward creator endorsements. Use whenever the user asks for YouTube research, asks what YouTubers/reviewers/videos say or show about something, or wants YouTube included among other sources (e.g. "check YouTube too", "include video reviews", "what are reviewers saying"). Also use for product feature, comparison, alternatives, landscape ("what are the best/top X"), interest-level or pre-release research that lists YouTube as a source. Read-only; never likes, subscribes, comments, or downloads.
 ---
 
 # YouTube Research
@@ -55,6 +55,21 @@ Quote URLs and queries. YouTube no longer honors sorting by date, so use `--uplo
   2. **Note it** for that video ("transcript: unavailable, youtube_error").
   3. **Carry on:** use chapters, the description, comments, and frames at chapter starts for that video. If its spoken content is essential, pick another video on the same angle.
   4. **Report** the count of unavailable transcripts in the sample size, and mention in caveats when that limits a finding (e.g. sponsor reads couldn't be checked).
+
+## Landscape: establish the field first (when warranted)
+
+Use a **full landscape pass** when the user names no products, asks what the options are, or the question is about a category. Use a **light pass** (2–3 page loads) when products are given, to check that no major alternative is missing; mention any you find under "Also consider".
+
+1. **Find roundups and comparisons:** `"best <category> <year>"`, `"<category> buyer's guide"`, `"<category> comparison"` or `"tier list"`, `"<product> vs"`, `"<product> alternatives"`. Use `--sort views` and `--upload year`, plus one `--upload month` search for newcomers.
+2. **Read 2–4 roundup or comparison videos.** Their chapters often list the products; `transcript --grep "best" "pick" "alternative" "instead" "vs"` shows the verdicts.
+3. **Tally candidates:** how many *independent* creators feature each product, how recently, and whether the product leads or is a footnote. Weigh sponsor bias: a product appearing only in its own sponsored videos isn't evidence of standing.
+4. **Pick the top handful** (usually 4–6) and say why. List notable products you left out, with the reason (niche, discontinued, unreleased, little coverage).
+5. **Find the dividing lines:** the 3–5 features or design choices where products genuinely split and buyers must give something up (e.g. tethered vs standalone, display vs camera-only, field of view vs weight, open SDK vs closed ecosystem, price tier).
+   - Find them in what comparison videos argue about, what owners complain about, and where reviewers say "if you need X, get Y".
+   - Separate these from **table stakes** (everyone has them) and from **marketing differences** that don't change real use. Say which is which.
+6. **Position each product** against the dividing lines, then continue with the normal workflow for the products that matter to the question.
+
+Budget: a full landscape pass usually takes 8–12 page loads, so plan the rest of the research around it.
 
 ## Workflow: a guide, not a quota
 
@@ -142,6 +157,13 @@ Always start with `video`: disclosure signals, chapters, description, metadata. 
 3. **Sources table:** video (linked), channel and subscribers, type (official, large, small, Short), published date, views, sponsor bias (final score and the main reasons), one-line takeaway.
 4. **Caveats:** sponsorship or affiliate dependence, embargo clustering, preliminary information, dates spanned.
 5. **Sample size:** videos read, transcripts used (and how many were unavailable), frames captured, page loads used.
+
+**When a landscape pass was done**, add before the key findings:
+
+- **Landscape table:** the top products against the dividing lines (one row per product, one column per dividing line, plus price and availability), with the source links behind each cell.
+- **Dividing lines:** each real trade-off in a sentence ("you gain X, you give up Y"), plus a note of the table stakes and the marketing-only differences.
+- **Segments and how to choose:** group products by the trade-offs they make, then a short "if you need A, look at B" guide.
+- **Considered and left out:** the products you excluded, and why.
 
 **YouTube among other sources:** fold the findings in, attributed as YouTube creator or commenter claims with their disclosure status. Use video evidence mainly for features, demos, and comparisons, and say where it agrees or conflicts with owner reports (e.g. Reddit) and vendor information.
 
