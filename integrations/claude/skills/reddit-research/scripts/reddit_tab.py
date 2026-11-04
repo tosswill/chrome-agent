@@ -22,7 +22,7 @@ The same functions back the Reddit tools of the chrome-agent MCP server, so the
 CLI and the MCP tools behave identically.
 
 Environment:
-    REDDIT_TAB_INSTANCE   chrome-agent instance holding the signed-in session (default: reddit-01)
+    REDDIT_TAB_INSTANCE   chrome-agent instance holding the signed-in session (default: reddit-research-01)
     REDDIT_TAB_MAX        concurrent windows (3)
     REDDIT_TAB_GAP        seconds between page loads, across all agents (4)
     REDDIT_TAB_IDLE       seconds before an idle claim is reclaimed (1800)
@@ -41,7 +41,7 @@ from pathlib import Path
 from urllib.parse import quote, urlencode, urlparse, urlunparse, parse_qsl
 
 HERE = Path(__file__).resolve().parent
-INSTANCE = os.environ.get("REDDIT_TAB_INSTANCE", "reddit-01")
+INSTANCE = os.environ.get("REDDIT_TAB_INSTANCE", "reddit-research-01")
 MAX_CLAIMS = int(os.environ.get("REDDIT_TAB_MAX", "3"))
 GAP = float(os.environ.get("REDDIT_TAB_GAP", "4"))
 IDLE = float(os.environ.get("REDDIT_TAB_IDLE", "1800"))

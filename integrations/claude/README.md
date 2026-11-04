@@ -26,15 +26,18 @@ The CLI (`reddit_tab.py`) and the MCP `reddit_*` tools call the same functions, 
 
 Prerequisites: `uv tool install chrome-agent`, and Google Chrome.
 
-1. **Create the Reddit browser** and sign in by hand:
+1. **Create the Reddit browser** from a dedicated folder and sign in by hand:
 
    ```bash
-   chrome-agent launch            # note the instance name, e.g. reddit-01 (from the current dir)
+   mkdir -p ~/.local/share/chrome-agent-profiles/reddit-research
+   cd ~/.local/share/chrome-agent-profiles/reddit-research && chrome-agent launch   # -> reddit-research-01
    # sign in to reddit.com in that window, then:
-   chrome-agent save <instance>   # snapshot so it can be restored after a reboot
+   chrome-agent save reddit-research-01   # snapshot so it can be restored after a reboot
    ```
 
-2. **Point the tools at it.** Set `REDDIT_TAB_INSTANCE` to the instance name (default `reddit-01`).
+   chrome-agent names an instance after the folder it was launched from and only avoids names that are *running*, not saved snapshots. A dedicated folder keeps the name distinctive, so an unrelated `chrome-agent launch` can't create an empty instance with the same name while the research browser is stopped (a later `save` would make that empty profile the newest snapshot).
+
+2. **Point the tools at it.** Set `REDDIT_TAB_INSTANCE` to the instance name (default `reddit-research-01`).
 
 3. **Claude Code:** link the skill and set the variable:
 
@@ -54,10 +57,16 @@ Prerequisites: `uv tool install chrome-agent`, and Google Chrome.
      "chrome-agent": {
        "command": "/path/to/uv",
        "args": ["run", "--script", "/path/to/chrome-agent/integrations/claude/mcp/server.py"],
-       "env": { "PATH": "<dir containing chrome-agent>:/usr/bin:/bin", "REDDIT_TAB_INSTANCE": "<instance>" }
+       "env": {
+         "PATH": "<dir containing chrome-agent>:/usr/bin:/bin",
+         "REDDIT_TAB_INSTANCE": "reddit-research-01",
+         "CHROME_AGENT_CWD": "<home>/.local/share/chrome-agent-profiles/scratch"
+       }
      }
    }
    ```
+
+   `CHROME_AGENT_CWD` is where the generic `run(["launch"])` tool launches from, so ad-hoc browsers are named `scratch-NN` and never shadow a research profile.
 
    Then upload the skill: zip `desktop-skills/reddit-research/` (the zip must contain the `reddit-research/` folder) and add it under **Settings → Capabilities → Skills**.
 
@@ -65,7 +74,7 @@ Prerequisites: `uv tool install chrome-agent`, and Google Chrome.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `REDDIT_TAB_INSTANCE` | `reddit-01` | chrome-agent instance holding the signed-in session |
+| `REDDIT_TAB_INSTANCE` | `reddit-research-01` | chrome-agent instance holding the signed-in session |
 | `REDDIT_TAB_MAX` | `3` | concurrent research windows |
 | `REDDIT_TAB_GAP` | `4` | seconds between page loads, across all agents |
 | `REDDIT_TAB_IDLE` | `1800` | seconds before an idle window is reclaimed |
