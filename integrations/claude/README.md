@@ -23,7 +23,7 @@ integrations/claude/
 
 Each site has its own long-lived, headed chrome-agent instance holding a signed-in session. Each agent (any mix of Claude Code sessions and Claude Desktop) claims **its own window** in that browser, so agents share the login but never each other's tabs. Every page load goes through a **cross-process pacing lock** per site (4 s between loads for Reddit, 6 s for YouTube, across all agents). Each window has a hard page-load cap, and only the site's normal pages can be loaded; JSON/API endpoints are refused. Every load reports `loggedIn` and `blocked`, and the agent stops on either problem.
 
-**Actions are organic:** real mouse clicks and wheel scrolling, the YouTube player's own mute button and progress bar, and ads waited out or skipped with a click. Scripts only read the page. YouTube `frame` captures report whether an ad was seen or is still in frame, and the agent must check each image.
+**Actions are organic:** real mouse clicks and wheel scrolling, the YouTube player's own mute, theater and play/pause buttons and progress bar, and ads waited out or skipped with a click. Scripts only read the page. YouTube `frame` captures report whether an ad was seen or is still in frame, and the agent must check each image.
 
 The CLIs (`reddit_tab.py`, `youtube_tab.py`) and the MCP tools call the same functions, so they behave identically.
 

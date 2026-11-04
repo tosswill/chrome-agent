@@ -15,7 +15,7 @@ Y=~/.claude/skills/youtube-research/scripts/youtube_tab.py
 
 1. **Use `$Y` only.** Not WebFetch, other browser tools, yt-dlp, or new or headless chrome-agent launches. Never touch another agent's window or send raw CDP commands to the shared browser.
 2. **Read-only.** Never like, dislike, subscribe, comment, save to playlists, report, or change settings.
-3. **Act naturally.** The helper does this for you: audio is muted with the player's mute button, playback is paused with its play/pause button before a jump so the frame lands on the requested time (within about a second), jumps are progress-bar clicks, ads are waited out or skipped with a click. Don't script the player or page yourself (`eval` is for reading).
+3. **Act naturally.** The helper does this for you: audio is muted with the player's mute button, theater mode is turned on with its button for larger frames, playback is paused with its play/pause button before a jump so the frame lands on the requested time (within about a second), jumps are progress-bar clicks, ads are waited out or skipped with a click. Don't script the player or page yourself (`eval` is for reading).
 4. **No downloading, no internal APIs** (the helper refuses `youtubei`, `timedtext` and similar).
 5. **If a result contains `stop`, stop and tell the user why.** This covers bot checks, CAPTCHAs, "unusual traffic", consent or age gates, and signed-out sessions. Never retry another way.
 6. **Budget:** 40 page loads for a YouTube-focused task, 15 when YouTube is one source among several. Each result reports `loads`. `transcript`, `frame`, `comments` and `shot` work on the loaded video and don't count, but keep them purposeful. Ask before exceeding the budget.
@@ -28,7 +28,7 @@ $Y open --wait                                   # -> {"target": "<ID>"}
 $Y search <ID> '"XREAL One Pro" review'          # --sort relevance|views  --upload hour|today|week|month|year  --shorts
 $Y video <ID> '<watch url>'                      # metadata, chapters, description, disclosure signals (1 page load)
 $Y transcript <ID> --context 1 --grep battery "sent me"   # matching segments with timestamps
-$Y frame <ID> 6:17                               # pause, jump, capture the player -> {path, actual, paused, ad_seen, ad_in_frame, link, warning?}
+$Y frame <ID> 6:17                               # theater mode, pause, jump, capture -> {path, actual, paused, theater, ad_seen, ad_in_frame, link, warning?}
 $Y comments <ID> --max 20                        # one batch of top comments
 $Y shot <ID>                                     # screenshot of the visible page
 $Y channel <ID> @handle                          # channel header + recent uploads (1 page load)
@@ -76,7 +76,7 @@ Cite claims with timestamped links (`frame` returns one; otherwise `…watch?v=<
 
 - **Capture** stat tables, benchmark charts, spec slides, side-by-side comparisons, a feature in use, visible defects, UI, and telling search pages.
 - **Look at every image with Read before using it.** It must show the expected content, not an ad, sponsor segment, b-roll, talking head, or transition. `frame` waits out or skips ads and reports `ad_seen` and `ad_in_frame`, but the image is the check. If it's wrong, try a few seconds later; if an ad keeps appearing, retry once, then move on.
-- **If `warning` says the player is small**, tell the user the research window is too small (a tiling window manager may have shrunk it).
+- **If `warning` says the player is small**, tell the user the research window is too small, even in theater mode (a tiling window manager may have shrunk it).
 - **Save** into the report's folder with `--out <dir>/YYYY-MM-DD_<topic>_<channel>_<mmss>.png`, and caption each image with video, channel, and timestamp. A handful of telling images beats dozens.
 
 ### 5. Close

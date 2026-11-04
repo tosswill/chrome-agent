@@ -4,7 +4,8 @@
 Each agent claims its own window in one long-lived browser, so agents share the
 login but never each other's tabs; all page loads share one pacing lock.
 Every action is one a person would take: real mouse clicks and wheel scrolling,
-the player's own mute button and progress bar. Scripts only read the page.
+the player's own mute, theater, play/pause buttons and progress bar.
+Scripts only read the page.
 
 CLI (each command prints JSON):
 
@@ -13,7 +14,7 @@ CLI (each command prints JSON):
     youtube_tab.py video ID URL                            metadata, disclosure signals, chapters, description
     youtube_tab.py transcript ID [--grep TERM ...] [--context N]   segments (all, or matching terms +/- N)
     youtube_tab.py comments ID [--max N]                   top comments of the loaded video (default 20)
-    youtube_tab.py frame ID AT [--out PATH]                pause, jump to AT (e.g. 6:17), capture the player as PNG
+    youtube_tab.py frame ID AT [--out PATH]                theater mode, pause, jump to AT (e.g. 6:17), capture the player
     youtube_tab.py shot ID [--out PATH]                    screenshot of the visible page
     youtube_tab.py channel ID URL|@handle                  channel header + recent uploads
     youtube_tab.py nav ID URL | eval ID JS|@file.js        escape hatches (paced load / run JS)
@@ -202,6 +203,21 @@ def _clear_ads(full_id: str, timeout: float = 30) -> dict:
     return {"ad_seen": seen, "ad_skipped": skipped, "ad_still_playing": still}
 
 
+def _ensure_theater(full_id: str) -> bool:
+    """Switch to theater mode with the player's own button (YouTube remembers it) for a larger frame."""
+    is_theater = "!!document.querySelector('ytd-watch-flexy[theater]')"
+    if SITE.evaluate(full_id, is_theater):
+        return True
+    st = _state(full_id)
+    _hover_player(full_id, st)
+    r = SITE.rect(full_id, ".ytp-size-button")
+    if not r:
+        return False
+    SITE.click(full_id, r["x"] + r["width"] / 2, r["y"] + r["height"] / 2)
+    SITE.wait_for(full_id, is_theater, timeout=5, settle=1.0)
+    return bool(SITE.evaluate(full_id, is_theater))
+
+
 def _ensure_paused(full_id: str) -> bool:
     """Pause with the player's play/pause button, as a person would before studying a frame."""
     st = _state(full_id)
@@ -325,6 +341,7 @@ def frame(target: str, at, out: str | None = None) -> dict:
     sec = _seconds(at)
     SITE.scroll_to_top(full_id)
     before = _clear_ads(full_id)
+    theater = _ensure_theater(full_id)
     _ensure_paused(full_id)
     _seek_by_click(full_id, sec)
     after = _clear_ads(full_id)  # a jump can trigger a mid-roll ad, which resumes playback
@@ -354,6 +371,7 @@ def frame(target: str, at, out: str | None = None) -> dict:
         "ad_skipped": before["ad_skipped"] or after["ad_skipped"],
         "ad_in_frame": bool(final.get("ad")),
         "paused": bool(final.get("paused")),
+        "theater": theater,
         "player_css_px": [round(rect["width"]), round(rect["height"])],
         "link": f"https://www.youtube.com/watch?v={vid}&t={int(sec)}s",
         "check": "Look at the image before using it: it must show the expected content, not an ad, "

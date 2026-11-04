@@ -233,7 +233,7 @@ def youtube_transcript(target: str, grep: list[str] | None = None, context: int 
 
 @mcp.tool()
 def youtube_frame(target: str, at: str):
-    """Pause (play/pause button), jump to timestamp `at` (e.g. "6:17") by clicking the progress bar, wait
+    """Switch to theater mode (larger frame), pause (play/pause button), jump to timestamp `at` (e.g. "6:17") by clicking the progress bar, wait
     out or skip any ad, and capture the player (lands within about a second of `at`). Returns JSON (path, requested/actual time, ad_seen, ad_in_frame,
     timestamped link, warning?) and the image. LOOK AT THE IMAGE: it must show the expected content, not
     an ad, sponsor segment, b-roll or transition. If wrong, try a few seconds later, or move on."""
