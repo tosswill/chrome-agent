@@ -15,7 +15,7 @@ Y=~/.claude/skills/youtube-research/scripts/youtube_tab.py
 
 1. **Use `$Y` only.** Not WebFetch, other browser tools, yt-dlp, or new or headless chrome-agent launches. Never touch another agent's window or send raw CDP commands to the shared browser.
 2. **Read-only.** Never like, dislike, subscribe, comment, save to playlists, report, or change settings.
-3. **Act naturally.** The helper does this for you: audio is muted with the player's mute button, jumps are progress-bar clicks, ads are waited out or skipped with a click. Don't script the player or page yourself (`eval` is for reading).
+3. **Act naturally.** The helper does this for you: audio is muted with the player's mute button, playback is paused with its play/pause button before a jump so the frame lands on the requested time (within about a second), jumps are progress-bar clicks, ads are waited out or skipped with a click. Don't script the player or page yourself (`eval` is for reading).
 4. **No downloading, no internal APIs** (the helper refuses `youtubei`, `timedtext` and similar).
 5. **If a result contains `stop`, stop and tell the user why.** This covers bot checks, CAPTCHAs, "unusual traffic", consent or age gates, and signed-out sessions. Never retry another way.
 6. **Budget:** 40 page loads for a YouTube-focused task, 15 when YouTube is one source among several. Each result reports `loads`. `transcript`, `frame`, `comments` and `shot` work on the loaded video and don't count, but keep them purposeful. Ask before exceeding the budget.
@@ -28,7 +28,7 @@ $Y open --wait                                   # -> {"target": "<ID>"}
 $Y search <ID> '"XREAL One Pro" review'          # --sort relevance|views  --upload hour|today|week|month|year  --shorts
 $Y video <ID> '<watch url>'                      # metadata, chapters, description, disclosure signals (1 page load)
 $Y transcript <ID> --context 1 --grep battery "sent me"   # matching segments with timestamps
-$Y frame <ID> 6:17                               # jump + capture the player -> {path, actual, ad_seen, ad_in_frame, link, warning?}
+$Y frame <ID> 6:17                               # pause, jump, capture the player -> {path, actual, paused, ad_seen, ad_in_frame, link, warning?}
 $Y comments <ID> --max 20                        # one batch of top comments
 $Y shot <ID>                                     # screenshot of the visible page
 $Y channel <ID> @handle                          # channel header + recent uploads (1 page load)

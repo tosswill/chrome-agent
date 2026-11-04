@@ -5,7 +5,7 @@ description: Research YouTube by reading real YouTube pages (search results, vid
 
 # YouTube Research
 
-Read normal YouTube pages in a real Chrome signed in to the user's (spare) YouTube account, through the **chrome-agent** connector's `youtube_*` tools. Contrast many videos to ground what you report, capture frames that show what matters, and treat creator opinions with skepticism. The tools give you your own window, pace page loads across all agents, and act like a person would (real clicks, the player's own mute button and progress bar).
+Read normal YouTube pages in a real Chrome signed in to the user's (spare) YouTube account, through the **chrome-agent** connector's `youtube_*` tools. Contrast many videos to ground what you report, capture frames that show what matters, and treat creator opinions with skepticism. The tools give you your own window, pace page loads across all agents, and act like a person would (real clicks, the player's own mute, play/pause and progress bar; frames are taken paused, within about a second of the requested time).
 
 If the `youtube_*` tools aren't available, say so and stop. Don't fall back to web search or fetching youtube.com.
 

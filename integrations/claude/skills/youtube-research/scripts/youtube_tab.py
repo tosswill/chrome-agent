@@ -13,7 +13,7 @@ CLI (each command prints JSON):
     youtube_tab.py video ID URL                            metadata, disclosure signals, chapters, description
     youtube_tab.py transcript ID [--grep TERM ...] [--context N]   segments (all, or matching terms +/- N)
     youtube_tab.py comments ID [--max N]                   top comments of the loaded video (default 20)
-    youtube_tab.py frame ID AT [--out PATH]                jump to AT (e.g. 6:17), capture the player as PNG
+    youtube_tab.py frame ID AT [--out PATH]                pause, jump to AT (e.g. 6:17), capture the player as PNG
     youtube_tab.py shot ID [--out PATH]                    screenshot of the visible page
     youtube_tab.py channel ID URL|@handle                  channel header + recent uploads
     youtube_tab.py nav ID URL | eval ID JS|@file.js        escape hatches (paced load / run JS)
@@ -150,7 +150,7 @@ _PLAYER_STATE_JS = """(() => { const p = document.querySelector('#movie_player')
   if (sk) { const s = getComputedStyle(sk), r = sk.getBoundingClientRect();
     if (s.display !== 'none' && s.visibility !== 'hidden' && r.width > 0) skip = [r.x + r.width / 2, r.y + r.height / 2]; }
   const pr = p ? p.getBoundingClientRect() : null;
-  return { ad, skip, t: v ? v.currentTime : null, duration: v ? v.duration : null, muted: v ? v.muted : null,
+  return { ad, skip, t: v ? v.currentTime : null, duration: v ? v.duration : null, muted: v ? v.muted : null, paused: v ? v.paused : null,
            player: pr ? {x: pr.x, y: pr.y, width: pr.width, height: pr.height} : null }; })()"""
 
 
@@ -200,6 +200,19 @@ def _clear_ads(full_id: str, timeout: float = 30) -> dict:
     if not still:
         _ensure_muted(full_id)
     return {"ad_seen": seen, "ad_skipped": skipped, "ad_still_playing": still}
+
+
+def _ensure_paused(full_id: str) -> bool:
+    """Pause with the player's play/pause button, as a person would before studying a frame."""
+    st = _state(full_id)
+    if st.get("ad") or st.get("paused") is None or st.get("paused"):
+        return bool(st.get("paused"))
+    _hover_player(full_id, st)
+    r = SITE.rect(full_id, ".ytp-play-button")
+    if r:
+        SITE.click(full_id, r["x"] + r["width"] / 2, r["y"] + r["height"] / 2)
+        time.sleep(0.5)
+    return bool(_state(full_id).get("paused"))
 
 
 def _seek_by_click(full_id: str, sec: float) -> float | None:
@@ -312,17 +325,24 @@ def frame(target: str, at, out: str | None = None) -> dict:
     sec = _seconds(at)
     SITE.scroll_to_top(full_id)
     before = _clear_ads(full_id)
+    _ensure_paused(full_id)
     _seek_by_click(full_id, sec)
-    after = _clear_ads(full_id)
-    t = _state(full_id).get("t") or 0
-    if abs(t - sec) > 4 and not after["ad_still_playing"]:
-        # An ad (or buffering) moved playback away from the target; click once more.
+    after = _clear_ads(full_id)  # a jump can trigger a mid-roll ad, which resumes playback
+    for _ in range(2):
+        if after["ad_still_playing"]:
+            break
+        _ensure_paused(full_id)
+        t = _state(full_id).get("t") or 0
+        if abs(t - sec) <= 2:
+            break
         _seek_by_click(full_id, sec)
         again = _clear_ads(full_id)
-        after = {"ad_seen": after["ad_seen"] or again["ad_seen"], "ad_skipped": after["ad_skipped"] or again["ad_skipped"], "ad_still_playing": again["ad_still_playing"]}
-    # Move the pointer off the player so its controls fade out.
+        after = {"ad_seen": after["ad_seen"] or again["ad_seen"],
+                 "ad_skipped": after["ad_skipped"] or again["ad_skipped"],
+                 "ad_still_playing": again["ad_still_playing"]}
+    # Move the pointer off the player so its controls fade out (the video stays paused).
     SITE.move(full_id, 5, 5)
-    time.sleep(1.8)
+    time.sleep(2.5)
     final = _state(full_id)
     rect = final.get("player") or SITE.rect(full_id, "#movie_player")
     path = Path(out) if out else SHOTS / f"{date.today().isoformat()}_{vid}_{_mmss(sec).replace(':', '')}.png"
@@ -333,6 +353,7 @@ def frame(target: str, at, out: str | None = None) -> dict:
         "ad_seen": before["ad_seen"] or after["ad_seen"],
         "ad_skipped": before["ad_skipped"] or after["ad_skipped"],
         "ad_in_frame": bool(final.get("ad")),
+        "paused": bool(final.get("paused")),
         "player_css_px": [round(rect["width"]), round(rect["height"])],
         "link": f"https://www.youtube.com/watch?v={vid}&t={int(sec)}s",
         "check": "Look at the image before using it: it must show the expected content, not an ad, "
