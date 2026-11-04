@@ -3,7 +3,8 @@
   const threads = [...document.querySelectorAll("ytd-comment-thread-renderer")].slice(0, opts.max);
   return {
     available: threads.length > 0,
-    total: document.querySelector("ytd-comments-header-renderer #count")?.textContent.trim() ?? null,
+    total: (() => { const t = document.querySelector("ytd-comments-header-renderer #count")?.textContent || "";
+      const m = t.replace(/,/g, "").match(/[\d.]+/); return m ? +m[0] : null; })(),
     comments: threads.map(t => ({
       author: t.querySelector("#author-text")?.textContent.trim() ?? null,
       likes: t.querySelector("#vote-count-middle")?.textContent.trim() || "0",

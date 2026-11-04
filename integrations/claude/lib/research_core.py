@@ -435,5 +435,5 @@ def run_cli(doc: str, dispatch: Callable[[str, list[str]], object], argv: list[s
         print(json.dumps(result, indent=2, ensure_ascii=False))
         return 0
     except Fail as e:
-        print(f"error: {e}", file=sys.stderr)
+        print(json.dumps({"error": str(e)}, ensure_ascii=False))
         return 1

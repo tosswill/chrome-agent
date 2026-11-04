@@ -1,6 +1,7 @@
 // Videos (and optionally Shorts) on a YouTube search results page. Ads are skipped.
+// `t=` is removed from links: on a signed-in account it is the watch-history resume point, not a citation.
 ((opts) => {
-  const clean = h => { try { const u = new URL(h, location.origin); u.searchParams.delete("pp"); return u.href; } catch { return h; } };
+  const clean = h => { try { const u = new URL(h, location.origin); u.searchParams.delete("pp"); u.searchParams.delete("t"); return u.href; } catch { return h; } };
   const out = [];
   for (const v of document.querySelectorAll("ytd-video-renderer")) {
     const a = v.querySelector("a#video-title");

@@ -15,7 +15,13 @@ Y=~/.claude/skills/youtube-research/scripts/youtube_tab.py
 
 1. **Use `$Y` only.** Not WebFetch, other browser tools, yt-dlp, or new or headless chrome-agent launches. Never touch another agent's window or send raw CDP commands to the shared browser.
 2. **Read-only.** Never like, dislike, subscribe, comment, save to playlists, report, or change settings.
-3. **Act naturally.** The helper does this for you: audio is muted with the player's mute button, theater mode is turned on with its button for larger frames, playback is paused with its play/pause button before a jump so the frame lands on the requested time (within about a second), jumps are progress-bar clicks, ads are waited out or skipped with a click. Don't script the player or page yourself (`eval` is for reading).
+3. **Act naturally.** The helper does this for you:
+   - Each video plays muted for a few seconds after loading.
+   - Audio is muted with the player's mute button, and theater mode is turned on with its button for larger frames.
+   - Before a jump, playback is paused with the play/pause button.
+   - Jumps are progress-bar clicks, finished with the arrow keys. This lands within about ±2 s even when YouTube snaps a click to a chapter start.
+   - Between frames, the video plays for a moment.
+   - Ads are waited out, or skipped after a human-like delay. Don't script the player or page yourself (`eval` is for reading).
 4. **No downloading, no internal APIs** (the helper refuses `youtubei`, `timedtext` and similar).
 5. **If a result contains `stop`, stop and tell the user why.** This covers bot checks, CAPTCHAs, "unusual traffic", consent or age gates, and signed-out sessions. Never retry another way.
 6. **Budget:** 40 page loads for a YouTube-focused task, 15 when YouTube is one source among several. Each result reports `loads`. `transcript`, `frame`, `comments` and `shot` work on the loaded video and don't count, but keep them purposeful. Ask before exceeding the budget.
@@ -30,15 +36,25 @@ $Y video <ID> '<watch url>'                      # metadata, chapters, descripti
 $Y transcript <ID> --context 1 --grep battery "sent me"   # matching segments, each with a timestamped `link`
 $Y frame <ID> 2:43 6:17 --out-dir <report dir>   # theater, pause, jump, capture each -> {path, actual, landing_error_s, link, ad_seen, ad_in_frame, buffering, warning?}
 $Y comments <ID> --max 20                        # one batch of top comments
-$Y shot <ID>                                     # screenshot of the visible page
+$Y shot <ID> --out-dir <report dir>              # screenshot of what's visible in the window (any page)
 $Y channel <ID> @handle                          # channel header + recent uploads (1 page load)
 $Y close <ID>
+$Y list                                          # active research windows across all agents
+$Y gc                                            # release windows left behind by crashed agents
+$Y nav <ID> '<youtube url>'                      # escape hatch: paced load of any youtube.com page
+$Y eval <ID> '<js>'                              # escape hatch: read something the commands don't return
 ```
+
+Errors are JSON (`{"error": "..."}`) with exit code 1. `video` accepts watch, `youtu.be` and Shorts links. Search results never carry `t=`; on a signed-in account that would be a watch-history resume point, not a citation.
 
 Quote URLs and queries. YouTube no longer honors sorting by date, so use `--upload` for recency.
 
 - **`--grep`** matches case-insensitive plain-text substrings (any term; not regex). Transcripts are speech-to-text, so write numbers both ways (`1000`, `thousand`) and prefer words to symbols (`dollars`, not `$`).
-- **Transcript unavailable:** `reason` says why. `youtube_error` means YouTube's own transcript service failed for that video (a person would see the same endless spinner), so don't retry. Fall back to chapters, the description, comments, and frames, and note it in the sample size.
+- **Transcript unavailable:** `reason` says why. `youtube_error` means YouTube's own transcript service failed for that video; a person would see the same endless spinner, and it often affects every video on a channel.
+  1. **Don't retry**, and don't try other ways to get captions.
+  2. **Note it** for that video ("transcript: unavailable, youtube_error").
+  3. **Carry on:** use chapters, the description, comments, and frames at chapter starts for that video. If its spoken content is essential, pick another video on the same angle.
+  4. **Report** the count of unavailable transcripts in the sample size, and mention in caveats when that limits a finding (e.g. sponsor reads couldn't be checked).
 
 ## Workflow: a guide, not a quota
 
@@ -91,9 +107,17 @@ Always start with `video`: disclosure signals, chapters, description, metadata. 
 
 **Creators are marketing-adjacent until shown otherwise.** Lean on videos for features, demos, interest level, comparisons, and alternatives, more than for verdicts.
 
-- **`sponsor_bias`** (0.0–1.0, from `video`) estimates how likely a video is sponsored or sponsor-influenced, with the evidence behind it: the paid-promotion label, sponsor or review-unit wording in the description, affiliate links, and "not sponsored / bought it myself" claims, which lower it.
-  - It only sees the page. **Adjust it:** raise it for review units, early access or embargo mentions in the transcript (`--grep "sent me" "sent us" "provided" "sponsor" "embargo" "early access"`), set it to 1.0 for brand-owned channels, and raise it for channels mostly covering one brand. Lower it for credible "bought it myself" evidence.
-  - **Report the final score and its reasons** in the sources table.
+- **`sponsor_bias`** (0.0–1.0) estimates how likely a video is sponsored or sponsor-influenced, and lists the evidence (each with its source and, for the transcript, a link).
+  - `video` scores the page: the paid-promotion label, campaign-tracking links, affiliate links and disclosures, and sponsor, review-unit or "use my code" wording in the title and description.
+  - `transcript` rescans the **whole** transcript (whatever you grep) and returns an updated `sponsor_bias` plus `disclosure_mentions`:
+    - sponsor reads ("thanks to X for sponsoring")
+    - review units, early access, embargoes ("they sent me")
+    - "use my link" or "use code X at checkout"
+    - "I bought it with my own money"
+    - "they didn't see the video before it went live"
+  - Raising signals: sponsor reads, campaign links, review units, affiliate links and disclosures, link or code pitches. Lowering signals: bought it myself, claims of not being sponsored, editorial-independence claims. Each counts once.
+  - **Adjust the result yourself:** 1.0 for brand-owned channels; higher for channels mostly covering one brand (`channel`); lower only for credible evidence of independent purchase.
+  - **Report the final score and its main reasons** in the sources table.
 - **Continued access depends on staying positive.** Many prior videos on one brand is a pattern. "Unsponsored" or "honest" in a title is a claim, not proof. Pinned and hearted comments are chosen by the creator. Claims every reviewer repeats may come from the brand's reviewer guide.
 
 | Source | Use it for | Watch out for |

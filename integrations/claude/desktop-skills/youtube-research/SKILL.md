@@ -22,7 +22,13 @@ If the `youtube_*` tools aren't available, say so and stop. Don't fall back to w
 - `youtube_open(wait_seconds?)` → `{"target": ID}`. Pass the ID to every call.
 - `youtube_search(target, query, sort?, upload?, shorts?)`. `sort`: relevance or views. `upload`: hour, today, week, month, or year (use this for recency; date sorting isn't honored). `shorts`: include Shorts (keep them minor).
 - `youtube_video(target, url)`: metadata, chapters, description, disclosure signals (1 page load).
-- `youtube_transcript(target, grep?, context?)`: segments, each with a timestamped `link`. `grep` matches case-insensitive plain-text substrings (any term; not regex). Transcripts are speech-to-text, so write numbers both ways and prefer words to symbols. If unavailable, `reason` says why: `youtube_error` means YouTube's own transcript service failed, so don't retry; use chapters, the description, comments, and frames.
+- `youtube_transcript(target, grep?, context?)`: segments, each with a timestamped `link`. `grep` matches case-insensitive plain-text substrings (any term; not regex). Transcripts are speech-to-text, so write numbers both ways and prefer words to symbols. If unavailable, `reason` says why. For `youtube_error` (YouTube's own transcript service failed, often for a whole channel):
+  - Don't retry.
+  - Note "transcript: unavailable" for that video, and carry on with chapters, the description, comments, and frames.
+  - Pick another video if its spoken content is essential.
+  - Report the count in the sample size and caveats.
+
+  `youtube_transcript` also scans the whole transcript for disclosure mentions (sponsor reads, "they sent me", "use my code", "bought it myself", "they didn't see the video first") and returns an updated `sponsor_bias`.
 - `youtube_frame(target, at)`: jump to e.g. `"6:17"` (or a list of timestamps) and capture the player. Returns JSON (actual time, `landing_error_s`, `link`, ad and buffering flags) plus the images.
 - `youtube_comments(target, max_comments?)`, `youtube_channel(target, url_or_@handle)` (1 page load), `youtube_shot(target)`.
 - `youtube_close(target)`.
@@ -59,7 +65,7 @@ Quantity, quality, and spread of videos vary a lot by subject. Cast a wide net w
 
 **Creators are marketing-adjacent until shown otherwise.** Lean on videos for features, demos, interest level, comparisons, and alternatives, more than for verdicts.
 
-- **`sponsor_bias`** (0.0–1.0, from `youtube_video`, with evidence) is a page-only estimate.
+- **`sponsor_bias`** (0.0–1.0, with evidence) starts from the page in `youtube_video` (paid label, campaign and affiliate links, disclosure wording) and is updated by `youtube_transcript`.
   - **Adjust it:** raise it for review units, early access or embargo mentions in the transcript (grep "sent me", "provided", "sponsor", "embargo", "early access"), set it to 1.0 for brand-owned channels, and raise it for channels mostly covering one brand. Lower it for credible "bought it myself" evidence.
   - **Report the final score and reasons.**
 - Continued access depends on staying positive. "Unsponsored" in a title is a claim, not proof. Pinned and hearted comments are curated. Claims every reviewer repeats may come from the brand's reviewer guide.
