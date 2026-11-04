@@ -184,9 +184,10 @@ def reddit_search(target: str, query: str, subreddit: str | None = None,
 
 @mcp.tool()
 def reddit_thread(target: str, url: str, max_comments: int = 15) -> str:
-    """Read a Reddit thread (sorted by top) in your window. Returns the post (title, author,
-    score, comments_total, created, url, body) and its top max_comments top-level comments,
-    plus the original poster's replies under them (AMA answers). If page.stop is present,
+    """Open a Reddit thread (clicking it in the current results when it's there) and read down it.
+    Returns the post (author and badges, score, upvote ratio, created, flair, body, moderators), its
+    top max_comments top-level comments plus the OP's replies (each with link, created, score,
+    badges, ai_declared), and promo_bias (0.0-1.0 with linked evidence). If page.stop is present,
     stop researching and tell the user."""
     return _reddit(reddit_tab.thread, target, url, max_comments)
 
@@ -195,6 +196,20 @@ def reddit_thread(target: str, url: str, max_comments: int = 15) -> str:
 def reddit_close(target: str) -> str:
     """Close your Reddit research window and free the slot. Always call when done, even after errors."""
     return _reddit(reddit_tab.close, target)
+
+
+@mcp.tool()
+def reddit_tally(target: str, names: list[str]) -> str:
+    """For each product name: threads, independent users (brand accounts excluded) and upvotes behind
+    the mentions, among everything this window has seen. No page load. Use it in a landscape pass."""
+    return _reddit(reddit_tab.tally, target, names)
+
+
+@mcp.tool()
+def reddit_shot(target: str):
+    """Image of the visible Reddit page content (top bar with the user's name, and the left
+    navigation, are excluded). Returns JSON and the image."""
+    return _with_image(reddit_tab.shot, target)
 
 
 @mcp.tool()
