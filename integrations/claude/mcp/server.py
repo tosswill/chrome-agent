@@ -40,7 +40,8 @@ mcp = FastMCP(
         "run([inst, 'Page.navigate', '{\"url\": \"...\"}']) -> screenshot(inst) -> run(['stop', inst]). "
         "Use attach_start/attach_read/attach_stop for event streams.\n\n"
         "For Reddit research use ONLY the reddit_* tools (never run/screenshot on the Reddit "
-        "instance without your own target): reddit_open -> reddit_search / reddit_thread -> "
+        "instance without your own target): reddit_open -> reddit_search -> reddit_thread (several "
+        "per search; it goes back to the results by itself) -> reddit_tally / reddit_shot -> "
         "reddit_close. They are read-only and paced. If a result contains `stop`, stop and "
         f"tell the user why. Never stop the `{reddit_tab.INSTANCE}` browser; always reddit_close your window.\n\n"
         "For YouTube research use ONLY the youtube_* tools: youtube_open -> youtube_search / youtube_video "
@@ -68,11 +69,16 @@ def _reddit(fn, *args, **kwargs) -> str:
         return json.dumps({"error": str(e)})
 
 
-def _frame_images(target, at, burst):
-    """frame() plus a flat list of every image it produced (landing frames and burst candidates)."""
-    res = youtube_tab.frame(target, at, burst=min(burst, 15))
+def _frame_images(target, at, burst, out_dir=None, scan=None, samples=4):
+    """frame() (or a scan) plus a flat list of every image it produced (landing frames and burst
+    candidates). Frames that hit ad_timeout have no image."""
+    if scan:
+        res = youtube_tab.scan(target, scan, samples=samples, out_dir=out_dir)
+        return {"result": res, "images": [f["path"] for f in res["frames"] if f.get("path")]}
+    res = youtube_tab.frame(target, at, out_dir=out_dir, burst=min(burst, 15))
     items = res if isinstance(res, list) else [res]
-    return {"result": res, "images": [p for r in items for p in [r["path"]] + [c["path"] for c in r.get("candidates", [])]]}
+    paths = [p for r in items for p in [r.get("path")] + [c["path"] for c in r.get("candidates", [])]]
+    return {"result": res, "images": [p for p in paths if p]}
 
 
 def _with_image(fn, *args, **kwargs):
@@ -173,23 +179,50 @@ def reddit_open(wait_seconds: float = 0) -> str:
 
 @mcp.tool()
 def reddit_search(target: str, query: str, subreddit: str | None = None,
-                  sort: str = "relevance", time: str = "year") -> str:
-    """Search Reddit posts in your window. query uses Reddit syntax (wrap exact phrases in
-    double quotes; OR works). subreddit restricts to one community (e.g. 'Xreal').
-    sort: relevance|new|top|comments. time: hour|day|week|month|year|all.
-    Returns {page: {loggedIn, blocked, loads, stop?}, posts: [{id, sub, url, title}]}.
+                  sort: str | None = None, time: str | None = None) -> str:
+    """Search Reddit posts in your window. query uses Reddit syntax: wrap exact phrases in double
+    quotes, and group OR terms in parentheses, since OR doesn't bind to a quoted term
+    ('"P2S" (problem OR issue OR return)', not '"P2S" problem OR issue'). subreddit restricts to one
+    community (e.g. 'Xreal'). sort: relevance|new|top|comments. time: hour|day|week|month|year|all.
+    With no sort/time (Reddit's defaults: relevance, all time) the query is typed into Reddit's search
+    box like a person when the window is already on a Reddit page; otherwise the search URL is loaded.
+    page.via says which ("typed", "url", "url (<why>)").
+    Returns {page: {loggedIn, blocked, loads, via, stop?}, posts: [{id, sub, url, title, author, score,
+    comments, created, match: "post"|"comment", snippet?, snippet_link?}]}. match "comment" means a
+    comment in that thread matched; title is still the real post title and snippet is the comment.
     If page.stop is present, stop researching and tell the user."""
     return _reddit(reddit_tab.search, target, query, subreddit=subreddit, sort=sort, time_filter=time)
 
 
 @mcp.tool()
-def reddit_thread(target: str, url: str, max_comments: int = 15) -> str:
-    """Open a Reddit thread (clicking it in the current results when it's there) and read down it.
-    Returns the post (author and badges, score, upvote ratio, created, flair, body, moderators), its
-    top max_comments top-level comments plus the OP's replies (each with link, created, score,
-    badges, ai_declared), and promo_bias (0.0-1.0 with linked evidence). If page.stop is present,
-    stop researching and tell the user."""
-    return _reddit(reddit_tab.thread, target, url, max_comments)
+def reddit_thread(target: str, url: str, max_comments: int = 15, replies: int = 0,
+                  expand: int | None = None, brands: list[str] | None = None) -> str:
+    """Open a Reddit thread and read down it like a person. It clicks the thread in the current
+    results, or goes back to this window's last results first (no page load) and clicks it there;
+    otherwise it loads the URL. page.opened says what happened ("clicked", "clicked (after back)",
+    "clicked (second try)", "url (click missed)", "url", "already open"). Pass a URL with ?sort=top to
+    force top order (URL load).
+    Returns the post (author, author_flair, author_badges, score, upvote ratio, created, flair, body,
+    links, moderators, moderators_truncated), up to max_comments top-level comments plus the OP's
+    replies under them (with replies=N, also up to N depth-1 replies from anyone per comment). Each
+    comment has link, created, score, is_op, flair (user flair, often owned gear), badges (Reddit
+    achievements such as "Top 1% Commenter"), ai_declared, text. Deleted and empty comments and empty
+    AutoModerator stickies don't use slots; counts {comments_total, comments_rendered,
+    comments_returned, skipped_deleted, skipped_automod, collapsed_chains, expanded_chains,
+    not_scrolled_into_view} explain a short list. Only comments scrolled into view are returned.
+    expand: collapsed comment chains to open with a click (default: sometimes one). brands: product
+    brands to check for brand accounts (the last query's brands are used anyway). promo_bias is
+    0.0-1.0 with linked evidence. If page.stop is present, stop researching and tell the user."""
+    return _reddit(reddit_tab.thread, target, url, max_comments, replies=replies, expand=expand, brands=brands)
+
+
+@mcp.tool()
+def reddit_back(target: str) -> str:
+    """Go back one page (the mouse's back button, like a person), e.g. from a thread to the search
+    results. Usually not a page load (Reddit restores the page in-app); page.restored says so, and
+    page.loads counts it if the page had to be fetched again. reddit_thread already does this by
+    itself when the thread you ask for was in the last results, so you rarely need it."""
+    return _reddit(reddit_tab.back, target)
 
 
 @mcp.tool()
@@ -199,17 +232,28 @@ def reddit_close(target: str) -> str:
 
 
 @mcp.tool()
-def reddit_tally(target: str, names: list[str]) -> str:
-    """For each product name: threads, independent users (brand accounts excluded) and upvotes behind
-    the mentions, among everything this window has seen. No page load. Use it in a landscape pass."""
-    return _reddit(reddit_tab.tally, target, names)
+def reddit_tally(target: str, names: list[str], alias: str | None = None, exclude_op: bool = False) -> str:
+    """For each product name, among everything this window has seen (no page load): items, threads,
+    users and independent_users (brand accounts excluded), polarity counts (recommend / complain /
+    question / mention / mixed), raw_upvotes, recommend_upvotes and complain_upvotes, and linked
+    example snippets. Names match whole names only, longest first ("Core One" doesn't count "Core
+    One+"; "MK4" doesn't count "MK4S"), with common brand misspellings built in. alias groups variants:
+    "Core One=C1,Core 1,Core1; MK4S=MK 4S". Search titles and snippets are kept apart
+    (search_only_threads), the OP counts once across cross-posts, an OP's question isn't an
+    endorsement, and exclude_op drops the OP's own mentions entirely. Use it in a landscape pass."""
+    return _reddit(reddit_tab.tally, target, names, aliases=alias, exclude_op=exclude_op)
 
 
 @mcp.tool()
-def reddit_shot(target: str):
-    """Image of the visible Reddit page content (top bar with the user's name, and the left
-    navigation, are excluded). Returns JSON and the image."""
-    return _with_image(reddit_tab.shot, target)
+def reddit_shot(target: str, at: str | None = None, comment: str | None = None, selector: str | None = None,
+                full: bool = False):
+    """Image of the Reddit page content (top bar and left navigation excluded). Pass a target to
+    scroll it into view with the wheel first and capture just it: at="post", comment=<comment id or
+    permalink> (that comment without its replies), or a CSS selector (e.g. a table in the post).
+    Without a target it captures the current view and warns if no post or comment is in it.
+    ads_in_view lists promoted posts or ad slots in the image: caption them as ads, or retake.
+    Returns JSON and the image; look at it before using it."""
+    return _with_image(reddit_tab.shot, target, full=full, at=at, comment=comment, selector=selector)
 
 
 @mcp.tool()
@@ -232,68 +276,97 @@ def youtube_open(wait_seconds: float = 0) -> str:
 @mcp.tool()
 def youtube_search(target: str, query: str, sort: str = "relevance", upload: str | None = None,
                    shorts: bool = False) -> str:
-    """Search YouTube videos. sort: relevance|views (YouTube no longer honors date sorting; use upload).
+    """Search YouTube videos (one page load). Without sort/upload the query is typed into the search box
+    when a YouTube page is open (page.via "typed"); otherwise it loads the results URL ("url",
+    "url (filters)"). sort: relevance|views (YouTube no longer honors date sorting; use upload).
     upload: hour|today|week|month|year restricts to recent uploads. shorts: include Shorts (keep minor).
-    Returns {page: {loggedIn, blocked, loads, stop?}, results: [{type, title, url, channel, verified,
-    views, age, length}]}. If page.stop is present, stop and tell the user."""
+    Phrase use-case queries as "best <product> for <task>" or "which <product> for <task>".
+    Returns {page: {loggedIn, blocked, loads, via, stop?}, results: [{type, title, url, channel, verified,
+    views, age, length, likely_ai_listicle?, amazon_influencer?}]}. Skip flagged results (AI listicles,
+    Amazon-influencer clips). If page.stop is present, stop and tell the user."""
     return _reddit(youtube_tab.search, target, query, sort, upload, shorts)
 
 
 @mcp.tool()
 def youtube_video(target: str, url: str) -> str:
-    """Load a video (one page load) and return its metadata: channel, subscribers, views, likes,
-    published, length, chapters, captions, full description, description links, and disclosure signals
-    (paid-promotion label, sponsor phrases, affiliate links). Audio is muted with the player's own button.
-    transcript/frame/comments then work on this video without further page loads."""
+    """Open a video (one page load) and return its metadata: channel, subscribers (and collaborators),
+    views, likes, published, length, chapters, captions, full description, description links, and
+    sponsor_bias (paid-promotion label, sponsor phrases, affiliate links; `by_brand` and `roundup` for
+    multi-brand videos: read the brand's own score there). The video is clicked in the current search
+    results when listed there (page.opened "clicked" / "clicked (after back)"), else loaded by URL.
+    ad_state says whether an ad was showing when it returned. Audio is muted with the player's own
+    button. transcript/frame/comments then work on this video without further page loads."""
     return _reddit(youtube_tab.video, target, url)
 
 
 @mcp.tool()
 def youtube_transcript(target: str, grep: list[str] | None = None, context: int = 0,
-                       start: str | None = None, end: str | None = None) -> str:
-    """Transcript of the loaded video as [{at, sec, text}]. With grep, only segments matching any term
-    (case-insensitive), plus `context` neighboring segments each side. start/end (e.g. "4:00", "6:30")
-    limit it to a time window. Also returns disclosure_mentions and an updated sponsor_bias."""
-    return _reddit(youtube_tab.transcript, target, grep, context, start, end)
+                       start: str | None = None, end: str | None = None, out_dir: str | None = None) -> str:
+    """Transcript of the loaded video as [{at, sec, text, link}] (`sec` = start in seconds), deduplicated,
+    with total_segments. With grep, only segments matching any term (case-insensitive), plus `context`
+    neighboring segments each side. start/end (e.g. "4:00", "6:30") limit it to a time window.
+    The FULL transcript is always saved as YYYY-MM-DD_<id>_transcript.json and .md in out_dir (the
+    report folder), else ~/.local/share/chrome-agent-research/youtube-transcripts/; `saved` gives the
+    paths (an existing file is reused). List saved transcripts in the report's sources.
+    Also returns disclosure_mentions and an updated sponsor_bias."""
+    return _reddit(youtube_tab.transcript, target, grep, context, start, end, out_dir)
 
 
 @mcp.tool()
-def youtube_frame(target: str, at: str | list[str], burst: float = 0):
-    """Switch to theater mode (larger frame), pause (play/pause button), jump to timestamp `at` (e.g. "6:17") by clicking the progress bar, wait
-    out or skip any ad and buffering, and capture the player (lands within about a second of `at`).
-    `at` may be a list of timestamps (one image each). burst=N (max 15) then lets it play N s and
-    captures a candidate about every second; pick the best. Files are named, and `link` points, at the time
-    actually landed on; include `link` in the report so the user can open that moment. Returns JSON (path, requested/actual time, ad_seen, ad_in_frame,
-    timestamped link, warning?) and the image. LOOK AT THE IMAGE: it must show the expected content, not
-    an ad, sponsor segment, b-roll or transition. If wrong, try a few seconds later, or move on."""
-    return _with_image(_frame_images, target, at, burst)
+def youtube_frame(target: str, at: str | list[str] | None = None, burst: float = 0, out_dir: str | None = None,
+                  scan: str | None = None, samples: int = 4):
+    """Switch to theater mode, pause (play/pause button), jump to timestamp `at` (e.g. "6:17") by clicking
+    the progress bar, and capture the player (within about +/-2.5 s). `at` may be a list (one image each).
+    burst=N (max 15) then lets it play N s and captures a candidate every second with the controls
+    hidden; pick the best. scan="12:00-19:00" instead samples `samples` points in that range with short
+    bursts and returns the frames most likely to show a chart, table, slide or UI (ranked by
+    graphic.score; the rest are deleted). Ads: the player is never paused or seeked during an ad; it is
+    waited out (Skip clicked when offered). If it doesn't end in time the frame reports ad_timeout and has
+    no image: skip it and note it; don't reload and retry more than once. Images go to out_dir (use the
+    report folder); names and `link` use the time actually landed on. Returns JSON (path, requested/actual,
+    sec, ad_seen, ad_timeout, ad_log, link, warning?) and the images. LOOK AT EACH IMAGE: it must show the
+    expected content, not an ad, sponsor segment, b-roll or transition. A `warning` about a small player
+    means the research window is small: tell the user."""
+    return _with_image(_frame_images, target, at, burst, out_dir, scan, samples)
 
 
 @mcp.tool()
-def youtube_shot(target: str):
-    """Screenshot of the visible page (e.g. search results, description). Returns JSON and the image."""
-    return _with_image(youtube_tab.shot, target)
+def youtube_shot(target: str, selector: str | None = None, out_dir: str | None = None):
+    """Screenshot of the visible page content (e.g. search results, description), or of one element
+    (`selector`, scrolled into view first). The top bar and left guide are left out. `ads_in_view` lists
+    ads in the image (Sponsored units, masthead, a video ad): caption them as ads, or scroll and retake.
+    Returns JSON and the image."""
+    return _with_image(youtube_tab.shot, target, None, out_dir, False, selector)
 
 
 @mcp.tool()
 def youtube_comments(target: str, max_comments: int = 20) -> str:
-    """Top comments of the loaded video (one batch): author, likes, age, pinned, creator_heart, replies, text."""
+    """Top comments of the loaded video (one batch): author, likes, age, pinned, creator_heart, replies, text.
+    comment_promo_hint (low confidence) flags short, generic, slangy pro-brand praise that may be seeded;
+    don't count those comments as owner experience."""
     return _reddit(youtube_tab.comments, target, max_comments)
 
 
 @mcp.tool()
 def youtube_channel(target: str, url: str) -> str:
     """A channel's header (subscribers, video count) and recent uploads (one page load). url may be a
-    channel URL or @handle. Use it to judge how much of a channel covers one brand."""
+    channel URL or @handle. Use it to judge how much of a channel covers one brand. Flags
+    likely_ai_listicle channels, which tally then excludes from independent counts."""
     return _reddit(youtube_tab.channel, target, url)
 
 
 @mcp.tool()
-def youtube_tally(target: str, names: list[str]) -> str:
-    """For each candidate product name, how many channels (and independent channels, sponsor score
-    below 0.6) feature it among everything this window has seen: search results and loaded videos'
-    titles, descriptions and links. No page load. Use it to pick the top products in a landscape pass."""
-    return _reddit(youtube_tab.tally, target, names)
+def youtube_tally(target: str, names: list[str], aliases: str | None = None,
+                  include_transcripts: bool = True) -> str:
+    """For each candidate product name: channels and independent channels mentioning it among everything
+    this window has seen. Search results are merged with loaded videos (title, description, links) and,
+    when read, their transcripts. Whole names only (the longest name wins: "Core One" doesn't count
+    "Core One+"); aliases like "Core One=C1,Core 1; Lark M2=M2S" plus built-in caption garbles
+    ("Bamboo" = Bambu). A channel isn't independent for a name if a video of it mentioning the name scores
+    >= 0.6 sponsor bias (in a roundup, that brand's by_brand score), it is strongly brand-owned, or it is
+    an AI-listicle / Amazon-influencer channel. Each row has examples with snippets and links.
+    No page load. Use it to pick the top products in a landscape pass."""
+    return _reddit(youtube_tab.tally, target, names, aliases, include_transcripts)
 
 
 @mcp.tool()

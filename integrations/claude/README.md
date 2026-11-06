@@ -12,7 +12,7 @@ integrations/claude/
 │   │   └── scripts/reddit_tab.py, page_state.js, search_results.js, thread.js
 │   └── youtube-research/
 │       ├── SKILL.md
-│       └── scripts/youtube_tab.py, page_state.js, search_results.js, video.js,
+│       └── scripts/youtube_tab.py, youtube_signals.py (pure heuristics), page_state.js, search_results.js, video.js,
 │                   transcript.js, comments.js, channel.js
 └── desktop-skills/                       Claude Desktop skills (same workflows, MCP tool names)
     ├── reddit-research/SKILL.md
@@ -23,7 +23,9 @@ integrations/claude/
 
 Each site has its own long-lived, headed chrome-agent instance holding a signed-in session. Each agent (any mix of Claude Code sessions and Claude Desktop) claims **its own window** in that browser, so agents share the login but never each other's tabs. Every page load goes through a **cross-process pacing lock** per site (4 s between loads for Reddit, 6 s for YouTube, across all agents). Each window has a hard page-load cap, and only the site's normal pages can be loaded; JSON/API endpoints are refused. Every load reports `loggedIn` and `blocked`, and the agent stops on either problem.
 
-**Actions are organic:** real mouse clicks and wheel scrolling, the YouTube player's own mute, theater and play/pause buttons and progress bar, and ads waited out or skipped with a click. Scripts only read the page. YouTube `frame` captures report whether an ad was seen or is still in frame, and the agent must check each image.
+**Actions are organic:** real mouse clicks and wheel scrolling, the YouTube player's own mute, theater and play/pause buttons and progress bar, and ads waited out or skipped with a click. Scripts only read the page. YouTube `frame` captures report whether an ad was seen or is still in frame, and the agent must check each image. On YouTube, searches are typed into the search box and videos are clicked in the results when possible (with a documented URL fallback, reported as `page.via`/`page.opened`), and the player is never paused, seeked or keyed during an ad (a frame that can't wait out an ad reports `ad_timeout`). Every YouTube transcript read is saved in full as JSON and Markdown (`--out-dir`, else `~/.local/share/chrome-agent-research/youtube-transcripts/`).
+
+On Reddit that means: searches are typed into Reddit's search box with human key timing once the window is on Reddit (a search URL is loaded for the first search, for sort/time filters, or when typing isn't possible, and `page.via` says so); threads are opened by clicking the result, retrying a missed click once before loading the URL (`page.opened`); the next thread from the same results is reached with the mouse's back button, which Reddit restores in-app without a page load; and threads are read with wheel scrolls whose dwell time scales with the text that comes into view, with occasional longer pauses, scroll-backs and pointer drift. Only comments scrolled into view are returned.
 
 The CLIs (`reddit_tab.py`, `youtube_tab.py`) and the MCP tools call the same functions, so they behave identically.
 
@@ -35,7 +37,7 @@ Prerequisites: `uv tool install chrome-agent`, and Google Chrome.
 
    ```bash
    mkdir -p ~/.local/share/chrome-agent-profiles/reddit-research
-   cd ~/.local/share/chrome-agent-profiles/reddit-research && chrome-agent launch   # -> reddit-research-01
+   cd ~/.local/share/chrome-agent-profiles/reddit-research && chrome-agent launch --no-window-border   # -> reddit-research-01
    # sign in to reddit.com in that window, then:
    chrome-agent save reddit-research-01   # snapshot so it can be restored after a reboot
    ```
@@ -88,8 +90,11 @@ Prerequisites: `uv tool install chrome-agent`, and Google Chrome.
 | `REDDIT_TAB_IDLE` | `1800` | seconds before an idle window is reclaimed |
 | `REDDIT_TAB_MAX_LOADS` | `40` | hard page-load cap per window |
 | `REDDIT_TAB_STATE` | `/tmp/chrome-agent-reddit` | lock and claim files |
+| `REDDIT_TAB_TYPE` | `1` | type searches into Reddit's search box when possible; `0` always loads search URLs |
+| `REDDIT_TAB_READ_CAP` | `45` | longest reading dwell per thread, in seconds |
+| `REDDIT_TAB_TEST_MISS` | `0` | testing only: make the first N result clicks miss, to exercise the URL fallback |
 
-YouTube uses the same settings with the `YOUTUBE_TAB_` prefix. Its defaults are `youtube-research-01`, a 6 s gap, and 60 loads per window, with state in `/tmp/chrome-agent-youtube`, plus `YOUTUBE_TAB_SHOTS` (default `<state>/shots`) for captured frames.
+YouTube uses the same settings with the `YOUTUBE_TAB_` prefix. Its defaults are `youtube-research-01`, a 6 s gap, and 45 loads per window, with state in `/tmp/chrome-agent-youtube`, plus `YOUTUBE_TAB_SHOTS` (default `<state>/shots`) for captured frames, `YOUTUBE_TAB_TRANSCRIPTS` (default `~/.local/share/chrome-agent-research/youtube-transcripts`) for saved transcripts when no `--out-dir` is given, and `YOUTUBE_TAB_AD_TIMEOUT` (default 60 s) for how long `frame` waits for an ad to end.
 
 ## Notes
 
@@ -97,3 +102,4 @@ YouTube uses the same settings with the `YOUTUBE_TAB_` prefix. Its defaults are 
 - Each site's two `SKILL.md` files (Code and Desktop) share their workflow, weighing, and output sections. Change both together.
 - Read-only by design: the tools never post, vote, like, subscribe, comment, download, or type credentials, and they stop on any CAPTCHA, block or bot-check page, consent or age gate, or signed-out session.
 - On macOS, closing a research browser's last window leaves Chrome running with no tabs; `open` recovers from that automatically.
+- Reddit hides the community sidebar (and with it the moderator list) in narrow windows, which a tiling window manager can produce. `promo_bias` then reports `confidence: "low"` and says brand moderation couldn't be checked.

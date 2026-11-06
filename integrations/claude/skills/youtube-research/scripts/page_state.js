@@ -8,7 +8,8 @@
   return {
     url: location.href,
     title: document.title.replace(/^\u{1F916} \S+ — /u, ""),
-    loggedIn: !!document.querySelector("#avatar-btn, button#avatar-btn"),
+    // The avatar isn't rendered in a hidden (background or occluded) window; ytcfg still knows.
+    loggedIn: !!document.querySelector("#avatar-btn, button#avatar-btn") || window.ytcfg?.get?.("LOGGED_IN") === true,
     blocked: challenge || /not a bot|unusual traffic|our systems have detected|automated queries/.test(text),
     gate: /consent\.youtube\.com|consent\.google/.test(location.href)
       || /sign in to confirm your age|this video may be inappropriate for some users/.test(text),

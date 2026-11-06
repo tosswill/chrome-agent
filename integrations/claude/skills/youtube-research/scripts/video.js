@@ -1,6 +1,12 @@
 // Metadata, description, disclosure signals, chapters and captions of the loaded watch page.
 (() => {
-  const pr = window.ytInitialPlayerResponse || {};
+  // The player response of the video in the address bar. After an in-page navigation (a clicked result)
+  // window.ytInitialPlayerResponse still describes the first video, so the player's own copy is preferred.
+  const want = new URLSearchParams(location.search).get("v") || (location.pathname.match(/\/shorts\/([\w-]{11})/) || [])[1];
+  const mp = document.querySelector("#movie_player");
+  let live = null; try { live = mp?.getPlayerResponse?.() || null; } catch (e) { live = null; }
+  const pr = [live, window.ytInitialPlayerResponse].find(p => p?.videoDetails?.videoId && (!want || p.videoDetails.videoId === want));
+  if (!pr) return { stale: true, want };
   const vd = pr.videoDetails || {};
   const mf = pr.microformat?.playerMicroformatRenderer || {};
   const desc = vd.shortDescription || "";
@@ -29,13 +35,28 @@
     if (Number.isInteger(half - 0.5) && title.slice(0, half - 0.5) === title.slice(half + 0.5)) title = title.slice(0, half - 0.5);
     return { title, at: m[2] };
   });
+  // Collaboration videos ("A and B") show no subscriber count; the owner data lists each channel's.
+  const id0 = window.ytInitialData?.currentVideoEndpoint?.watchEndpoint?.videoId;
+  const subsList = [];
+  if (id0 === vd.videoId) {
+    const walk = (o, depth) => { if (!o || typeof o !== "object" || depth > 40 || subsList.length > 8) return;
+      if (o.listItemViewModel) { const t = o.listItemViewModel.title?.content, st = o.listItemViewModel.subtitle?.content || "";
+        const m = st.match(/([\d.,]+\s*[KMB]?)\s+subscribers?/i); if (t && m) subsList.push({ channel: t, subscribers: num(m[1]), text: m[0] }); }
+      for (const k in o) walk(o[k], depth + 1); };
+    try { const c = window.ytInitialData.contents?.twoColumnWatchNextResults?.results?.results?.contents || [];
+      for (const x of c) if (x.videoSecondaryInfoRenderer) walk(x.videoSecondaryInfoRenderer.owner, 0); } catch (e) {}
+  }
+  const subText = document.querySelector("#owner-sub-count")?.textContent.trim() || null;
+  const ownerUrl = (mf.ownerProfileUrl || (vd.channelId ? `https://www.youtube.com/channel/${vd.channelId}` : "")).replace(/^http:/, "https:") || null;
   const seenCh = new Set();
   return {
     video_id: vd.videoId, title: vd.title, url: vd.videoId ? `https://www.youtube.com/watch?v=${vd.videoId}` : location.href,
     channel: vd.author,
-    channel_url: (mf.ownerProfileUrl || (vd.channelId ? `https://www.youtube.com/channel/${vd.channelId}` : "")).replace(/^http:/, "https:") || null,
-    subscribers: num(document.querySelector("#owner-sub-count")?.textContent),
-    subscribers_text: document.querySelector("#owner-sub-count")?.textContent.trim() || null,
+    channel_url: ownerUrl,
+    handle: (ownerUrl || "").match(/\/(@[\w.-]+)/)?.[1] || null,
+    subscribers: num(subText) ?? (subsList[0]?.subscribers ?? null),
+    subscribers_text: subText || subsList[0]?.text || null,
+    ...(subsList.length > 1 ? { collaborators: subsList } : {}),
     views: vd.viewCount ? +vd.viewCount : null,
     likes: num(document.querySelector("like-button-view-model button, #segmented-like-button button")?.getAttribute("aria-label")?.match(/[\d,.]+\s*[KMB]?/i)?.[0]),
     published: mf.publishDate || null, length_s: vd.lengthSeconds ? +vd.lengthSeconds : null,
