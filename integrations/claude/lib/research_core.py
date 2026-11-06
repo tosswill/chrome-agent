@@ -15,6 +15,7 @@ from __future__ import annotations
 import base64
 import fcntl
 import json
+import math
 import os
 import random
 import shutil
@@ -32,6 +33,84 @@ def pause(seconds: float, fuzz: float = 0.1) -> None:
     """Sleep for about `seconds`, varied by +/- `fuzz` (10%) so timing isn't mechanical."""
     if seconds > 0:
         time.sleep(seconds * random.uniform(1 - fuzz, 1 + fuzz))
+
+
+def pace_delay(gap: float, long_p: float = 0.125, long_range: tuple[float, float] = (20.0, 60.0),
+               rng: random.Random | None = None) -> float:
+    """Seconds to leave between page loads (B5): skewed, not uniform.
+
+    Mostly short: the base `gap` (+/-10%) plus a log-normal extra whose median is about 0.35 x gap and
+    which is rarely more than 2 x gap. With probability `long_p` (default 1 in 8 loads) the gap is
+    instead a long idle drawn uniformly from `long_range` (20-60 s), like a person stopping to read
+    or think. Expected cost for a 10-load run at gap 4-6 s: about 1-2 minutes of extra waiting, most
+    of which overlaps the agent's own think time (the wait counts from the previous load).
+    """
+    rng = rng or random
+    if long_p > 0 and rng.random() < long_p:
+        lo, hi = long_range
+        return rng.uniform(lo, hi)
+    extra = min(rng.lognormvariate(-1.05, 0.6), 3.0)
+    return gap * rng.uniform(0.9, 1.1) + gap * extra
+
+
+def _parse_range(raw: str, default: tuple[float, float]) -> tuple[float, float]:
+    try:
+        lo, hi = (float(x) for x in raw.replace(" ", "").split("-", 1))
+        return (min(lo, hi), max(lo, hi))
+    except (ValueError, AttributeError):
+        return default
+
+
+def intersect(a: dict, b: dict) -> dict | None:
+    """Intersection of two {x, y, width, height} rects, or None when they don't overlap."""
+    x0, y0 = max(a["x"], b["x"]), max(a["y"], b["y"])
+    x1 = min(a["x"] + a["width"], b["x"] + b["width"])
+    y1 = min(a["y"] + a["height"], b["y"] + b["height"])
+    if x1 - x0 < 1 or y1 - y0 < 1:
+        return None
+    return {"x": x0, "y": y0, "width": x1 - x0, "height": y1 - y0}
+
+
+def page_clip(rect: dict, scroll_x: float, scroll_y: float, viewport: dict | None = None,
+              area: dict | None = None, pad: float = 0) -> dict | None:
+    """Turn a viewport-coordinate rect (getBoundingClientRect) into a Page.captureScreenshot clip, which
+    is in page coordinates: clamp it to what is visible (the viewport, and `area` if given, e.g. the
+    content column without the top bar), pad it a little, then add the scroll offset. Clips are never
+    taken beyond the viewport (that would make Chrome resize the page, which a page can observe)."""
+    r = {"x": rect["x"] - pad, "y": rect["y"] - pad, "width": rect["width"] + 2 * pad,
+         "height": rect["height"] + 2 * pad}
+    for bound in (viewport, area):
+        if bound is not None:
+            r = intersect(r, bound)
+            if r is None:
+                return None
+    return {"x": r["x"] + scroll_x, "y": r["y"] + scroll_y, "width": r["width"], "height": r["height"]}
+
+
+def _view_js(selector: str | None, area_js: str | None, ad_selectors: tuple[str, ...] | list[str]) -> str:
+    """JS returning the element rect, content area, viewport, scroll offset and visible ads (read-only)."""
+    sel = json.dumps(selector) if selector else "null"
+    area = f"({area_js.strip()})" if area_js else "null"
+    return f"""(() => {{
+  const vis = e => {{ const r = e.getBoundingClientRect(), s = getComputedStyle(e);
+    return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none' ? r : null; }};
+  const box = r => r && {{x: r.x, y: r.y, width: r.width, height: r.height}};
+  const sel = {sel};
+  const el = sel ? [...document.querySelectorAll(sel)].find(vis) : null;
+  const vp = {{x: 0, y: 0, width: innerWidth, height: innerHeight}};
+  const ads = [];
+  for (const s of {json.dumps(list(ad_selectors))}) {{
+    for (const e of document.querySelectorAll(s)) {{
+      const r = vis(e);
+      if (!r || r.bottom <= 0 || r.top >= innerHeight || r.right <= 0 || r.left >= innerWidth) continue;
+      ads.push({{selector: s, label: (e.innerText || e.getAttribute('aria-label') || '').trim().replace(/\\s+/g, ' ').slice(0, 80),
+                rect: box(r)}});
+    }}
+  }}
+  const area = {area};
+  return {{rect: el ? box(el.getBoundingClientRect()) : null, found: !!el, area: area || null, viewport: vp,
+          scrollX, scrollY, dpr: devicePixelRatio, ads}};
+}})()"""
 
 
 class Fail(Exception):
@@ -58,12 +137,16 @@ class Site:
     default_max_loads: int = 40
     settle: float = 2.5              # extra wait after ready, for late-rendering components
     on_open: Callable[["Site", str], None] | None = None
+    content_js: str | None = None    # returns the reading column's viewport rect {x, y, width, height}
+    ad_selectors: tuple[str, ...] = ()  # CSS selectors of ad units, for ads_in_view in captures
     instance: str = field(init=False)
     max_claims: int = field(init=False)
     gap: float = field(init=False)
     idle: float = field(init=False)
     max_loads: int = field(init=False)
     state: Path = field(init=False)
+    long_idle_p: float = field(init=False)
+    long_idle: tuple[float, float] = field(init=False)
 
     def __post_init__(self):
         p = self.prefix
@@ -72,6 +155,9 @@ class Site:
         self.gap = _env(p, "GAP", self.default_gap)
         self.idle = _env(p, "IDLE", 1800.0)
         self.max_loads = _env(p, "MAX_LOADS", self.default_max_loads)
+        # Pacing (B5): chance of a long idle before a load, and its range in seconds.
+        self.long_idle_p = _env(p, "LONG_IDLE_P", 0.125)
+        self.long_idle = _parse_range(os.environ.get(f"{p}_LONG_IDLE", ""), (20.0, 60.0))
         name = p.split("_")[0].lower()
         self.state = _env(p, "STATE", Path(f"/tmp/chrome-agent-{name}"))
 
@@ -80,8 +166,11 @@ class Site:
     # ---------------------------------------------------------------------
 
     def ca(self, *args: str, timeout: float = 60) -> str:
-        p = subprocess.run([BIN, *args], capture_output=True, text=True,
-                           timeout=timeout, stdin=subprocess.DEVNULL)
+        try:
+            p = subprocess.run([BIN, *args], capture_output=True, text=True,
+                               timeout=timeout, stdin=subprocess.DEVNULL)
+        except subprocess.TimeoutExpired:
+            raise Fail(f"chrome-agent {' '.join(args[:4])[:120]} timed out after {timeout:.0f} s")
         if p.returncode != 0:
             raise Fail((p.stderr or p.stdout).strip())
         return p.stdout
@@ -163,10 +252,92 @@ class Site:
         time.sleep(random.uniform(0.06, 0.14))
         self.cdp(target, "Input.dispatchMouseEvent", {"type": "mouseReleased", "x": x, "y": y, "button": "left", "clickCount": 1})
 
-    def wheel(self, target: str, dy: float, x: float = 400, y: float = 400) -> None:
-        """Scroll with the mouse wheel, as a person would."""
-        self.cdp(target, "Input.dispatchMouseEvent",
-                 {"type": "mouseWheel", "x": x, "y": y, "deltaX": 0, "deltaY": dy})
+    def content_area(self, target: str) -> dict | None:
+        """The site's reading column (viewport rect), or None when the site doesn't define one."""
+        if not self.content_js:
+            return None
+        try:
+            return self.evaluate(target, self.content_js)
+        except Fail:
+            return None
+
+    def pointer_into(self, target: str, area: dict | None = None) -> tuple[float, float]:
+        """Make sure the pointer rests inside `area` (default: the middle of the viewport), moving it
+        there along a human path if it isn't (or if no position is known yet). Returns the position."""
+        c = self.claims().get(target) or {}
+        pos = tuple(c["mouse"]) if "mouse" in c else None
+        if area is None:
+            if pos and pos[0] >= 40 and pos[1] >= 80:
+                return pos  # already somewhere in the page body, not parked in a corner or on the top bar
+            vp = self.evaluate(target, "[innerWidth, innerHeight]") or [1200, 800]
+            area = {"x": vp[0] * 0.3, "y": vp[1] * 0.3, "width": vp[0] * 0.4, "height": vp[1] * 0.4}
+        elif pos and area["x"] + 8 <= pos[0] <= area["x"] + area["width"] - 8 \
+                and area["y"] + 8 <= pos[1] <= area["y"] + area["height"] - 8:
+            return pos
+        x = area["x"] + area["width"] * random.uniform(0.3, 0.7)
+        y = area["y"] + area["height"] * random.uniform(0.35, 0.65)
+        self.move(target, x, y)
+        pause(random.uniform(0.15, 0.4), fuzz=0)
+        return (x, y)
+
+    def wheel(self, target: str, dy: float, x: float | None = None, y: float | None = None,
+              area: dict | None = None) -> None:
+        """Scroll with the mouse wheel at the pointer's current (persisted) position, as a person would.
+        With `area`, the pointer is first moved into it if it is outside. With an explicit x/y the
+        pointer travels there first, so a wheel event never arrives where the mouse isn't."""
+        if x is not None and y is not None:
+            px, py = self._mouse_pos(target)
+            if abs(px - x) > 3 or abs(py - y) > 3 or "mouse" not in (self.claims().get(target) or {}):
+                self.move(target, x, y)
+        else:
+            x, y = self.pointer_into(target, area)
+        try:
+            self.cdp(target, "Input.dispatchMouseEvent",
+                     {"type": "mouseWheel", "x": x, "y": y, "deltaX": 0, "deltaY": dy}, timeout=12)
+        except Fail as e:
+            if "timed out" not in str(e):
+                raise
+            # Chrome only acknowledges wheel events in a window it is drawing.
+            vis = None
+            try:
+                vis = self.evaluate(target, "document.visibilityState", timeout=10)
+            except Fail:
+                pass
+            raise Fail("mouse-wheel input timed out" + (" because the research window is hidden" if vis == "hidden"
+                       else "") + " (minimized, on another desktop/workspace, or fully covered). Chrome only "
+                       "delivers wheel scrolls to a visible window. Ask the user to bring the research browser "
+                       "window into view, then retry.")
+
+    def drift(self, target: str, max_px: float = 40, area: dict | None = None) -> None:
+        """A small, slow idle movement of the pointer (B6), the way a hand rests on a mouse while reading.
+        Stays inside `area` (or the viewport) when given."""
+        x0, y0 = self._mouse_pos(target)
+        dist = random.uniform(max_px * 0.2, max_px)
+        ang = random.uniform(0, 6.2832)
+        x, y = x0 + dist * math.cos(ang), y0 + dist * math.sin(ang) * 0.6
+        if area is not None:
+            x = min(max(x, area["x"] + 5), area["x"] + area["width"] - 5)
+            y = min(max(y, area["y"] + 5), area["y"] + area["height"] - 5)
+        x, y = max(2.0, x), max(2.0, y)
+        for px, py in self._path(x0, y0, x, y)[:8] + [(x, y)]:
+            self.cdp(target, "Input.dispatchMouseEvent", {"type": "mouseMoved", "x": px, "y": py})
+            time.sleep(random.uniform(0.03, 0.12))
+        self._save_mouse(target, x, y)
+
+    def read_pause(self, target: str, seconds: float, drift_p: float = 0.35, area: dict | None = None) -> None:
+        """Pause about `seconds` (+/-10%) as if reading; sometimes drift the pointer a little midway."""
+        total = seconds * random.uniform(0.9, 1.1)
+        if total > 1.2 and random.random() < drift_p:
+            first = total * random.uniform(0.3, 0.7)
+            time.sleep(first)
+            t0 = time.time()
+            try:
+                self.drift(target, area=area)
+            except Fail:
+                pass
+            time.sleep(max(0.0, total - first - (time.time() - t0)))
+        else:
+            time.sleep(total)
 
     def rect(self, target: str, selector: str) -> dict | None:
         """Viewport rect of the first visible element matching selector (read-only)."""
@@ -177,8 +348,10 @@ class Site:
               f" return {{x: r.x, y: r.y, width: r.width, height: r.height, vh: innerHeight, vw: innerWidth}}; }})()")
         return self.evaluate(target, js)
 
-    def scroll_into_view(self, target: str, selector: str, max_steps: int = 25) -> dict | None:
-        """Wheel-scroll until the element is comfortably inside the viewport."""
+    def scroll_into_view(self, target: str, selector: str, max_steps: int = 25,
+                         area: dict | None = None) -> dict | None:
+        """Wheel-scroll (at the pointer, inside `area` if given) until the element is comfortably inside
+        the viewport."""
         for _ in range(max_steps):
             r = self.rect(target, selector)
             if r is None:
@@ -187,15 +360,15 @@ class Site:
             if top >= 60 and bottom <= r["vh"] - 20:
                 return r
             step = max(-700, min(700, top - r["vh"] * 0.3))
-            self.wheel(target, step, x=r["vw"] / 2, y=r["vh"] / 2)
+            self.wheel(target, step, area=area)
             pause(0.35)
         return self.rect(target, selector)
 
-    def scroll_to_top(self, target: str, max_steps: int = 40) -> None:
+    def scroll_to_top(self, target: str, max_steps: int = 40, area: dict | None = None) -> None:
         for _ in range(max_steps):
             if (self.evaluate(target, "window.scrollY") or 0) <= 0:
                 return
-            self.wheel(target, -800)
+            self.wheel(target, -800, area=area)
             pause(0.25)
 
     def click_on(self, target: str, selector: str, look: float = 0) -> bool:
@@ -219,8 +392,8 @@ class Site:
         jpeg = out.suffix.lower() in (".jpg", ".jpeg")
         params: dict = {"format": "jpeg", "quality": quality} if jpeg else {"format": "png"}
         if clip is None and max_width:
-            vp = self.evaluate(target, "({x: 0, y: 0, width: innerWidth, height: innerHeight})")
-            clip = vp
+            # Clips are in page coordinates: the visible viewport starts at the scroll offset.
+            clip = self.evaluate(target, "({x: scrollX, y: scrollY, width: innerWidth, height: innerHeight})")
         if clip:
             scale = clip.get("scale", 1)
             if max_width:
@@ -232,6 +405,44 @@ class Site:
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_bytes(base64.b64decode(data))
         return out
+
+    def capture(self, target: str, out: Path, selector: str | None = None, area_js: str | None = None,
+                ad_selectors: tuple[str, ...] | list[str] | None = None, max_width: int | None = None,
+                pad: float = 8, scroll: bool = True) -> dict:
+        """Screenshot of the visible content (S3), shared by the sites.
+
+        - `area_js`: JS returning the content area's viewport rect (top bar and nav excluded);
+          default: the site's `content_js`, else the whole viewport.
+        - `selector`: capture just that element, after wheel-scrolling it into view the way a person
+          would (`scroll=False` captures it where it is). Elements taller than the view are cut to the
+          visible part (`truncated: true`); clips never extend beyond the viewport.
+        - `ad_selectors`: the site's ad units (default: `Site.ad_selectors`); the ones overlapping the
+          image are returned as `ads_in_view` so the agent can caption them, or scroll and retake.
+        Clips are computed in viewport coordinates and converted to page coordinates (scrollX/scrollY).
+        Returns {path, clip, ads_in_view, [target_found, truncated]}."""
+        ads = tuple(self.ad_selectors if ad_selectors is None else ad_selectors)
+        area_js = area_js or self.content_js
+        if selector and scroll:
+            area = self.evaluate(target, area_js) if area_js else None
+            self.scroll_into_view(target, selector, area=area)
+            pause(0.4)
+        v = self.evaluate(target, _view_js(selector, area_js, ads)) or {}
+        vp = v.get("viewport") or {"x": 0, "y": 0, "width": 1200, "height": 800}
+        res: dict = {}
+        if selector:
+            res["target_found"] = bool(v.get("found"))
+            if not v.get("found"):
+                raise Fail(f"nothing visible matches {selector!r} on this page")
+            clip = page_clip(v["rect"], v["scrollX"], v["scrollY"], vp, v.get("area"), pad=pad)
+            if clip is None:
+                raise Fail(f"{selector!r} is not inside the visible content area")
+            res["truncated"] = clip["height"] + 1 < v["rect"]["height"] or clip["width"] + 1 < v["rect"]["width"]
+        else:
+            clip = page_clip(v.get("area") or vp, v.get("scrollX", 0), v.get("scrollY", 0), vp)
+        view_clip = {**clip, "x": clip["x"] - v.get("scrollX", 0), "y": clip["y"] - v.get("scrollY", 0)}
+        res["ads_in_view"] = [a for a in v.get("ads", []) if intersect(a["rect"], view_clip)]
+        path = self.screenshot(target, out, clip=clip, max_width=max_width)
+        return {"path": str(path), "clip": {k: round(val, 1) for k, val in clip.items()}, **res}
 
     def _status(self) -> dict | None:
         try:
@@ -332,14 +543,15 @@ class Site:
         return c["loads"]
 
     def _pace(self) -> None:
-        """Block until `gap` seconds have passed since the last load by any agent."""
+        """Block until a skewed gap (see pace_delay) has passed since the last load by any agent.
+        Tune with {PREFIX}_GAP, {PREFIX}_LONG_IDLE_P (0 disables long idles) and {PREFIX}_LONG_IDLE ("20-60")."""
         with self._locked("pace.lock") as f:
             f.seek(0)
             try:
                 last = float(f.read().strip() or 0)
             except ValueError:
                 last = 0.0
-            wait = last + self.gap * random.uniform(0.9, 1.1) - time.time()
+            wait = last + pace_delay(self.gap, self.long_idle_p, self.long_idle) - time.time()
             if wait > 0:
                 time.sleep(wait)
             f.seek(0)
