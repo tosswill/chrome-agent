@@ -1494,6 +1494,9 @@ def channels(target: str, topic: str, cited=None, save: bool = False) -> dict:
             rating["notes"].append("flagged as a likely AI listicle channel")
         prev = CM.registry_lookup(reg, ch, topic)
         if prev:
+            known = set(prev.pop("reviewed_ids", []))
+            for v in rating["videos"]:
+                v["reviewed_before"] = v.get("video_id") in known
             rating["registry"] = prev
         rows.append(rating)
     rows.sort(key=lambda r: (-(r["authority"] or 0), -(r["axes"]["independence"] or 0)))
@@ -1504,6 +1507,7 @@ def channels(target: str, topic: str, cited=None, save: bool = False) -> dict:
         row = {"channel": c, "search_results": n}
         prev = CM.registry_lookup(reg, c, topic)
         if prev:
+            prev.pop("reviewed_ids", None)
             row["registry"] = prev
         if (seen["channels"].get(c) or {}).get("listicle"):
             row["listicle"] = True
@@ -1536,6 +1540,7 @@ def registry(action: str, channel: str | None = None, verdict: str | None = None
                     continue
             out.append({"channel": row.get("name"), "handle": row.get("handle"), "pin": row.get("pin"),
                         "covers": row.get("covers"), "observations": len(row.get("observations") or []),
+                        "familiarity": CM.familiarity(row),
                         "topics": {t: {"date": v.get("date"), "axes": v.get("axes"), "authority": v.get("authority"),
                                        "stale": CM.stale(v.get("date"))} for t, v in topics.items()}})
         return {"registry": str(CHANNELS), "channels": out}
@@ -1545,7 +1550,8 @@ def registry(action: str, channel: str | None = None, verdict: str | None = None
         _, row = CM.registry_find(reg, channel)
         if not row:
             return {"channel": channel, "found": False}
-        return {"channel": channel, "found": True, **row}
+        return {"channel": channel, "found": True, "familiarity": CM.familiarity(row),
+                "cumulative": CM.cumulative_axes(row), **row}
     if action == "observe":
         if not note:
             raise Fail('observe needs --note "what was seen" (and --topic T, optionally --source URL)')

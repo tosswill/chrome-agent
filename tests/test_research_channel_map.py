@@ -153,3 +153,39 @@ def test_mixed_pin_and_observations(monkeypatch, tmp_path):
 def test_brand_supplied_light_testing_quadrant():
     r = CM.rate_channel("Mid", [rec("v", ["review_unit", "brand_giveaway"], "We tested it. " * 30)], {}, "x")
     assert 2.5 <= r["axes"]["independence"] < 3.5 and CM.quadrant(r) == "brand-supplied, light testing"
+
+
+def test_reviewed_list_familiarity_and_cumulative(monkeypatch, tmp_path):
+    reg = CM.registry_load(tmp_path / "r.json")
+    r1 = CM.rate_channel("Tester", [rec("https://www.youtube.com/watch?v=AAAAAAAAAAA", [], TESTER, channel="Tester")],
+                         {}, "carpet cleaners")
+    CM.registry_put(reg, r1)
+    r2 = CM.rate_channel("Tester", [rec("https://www.youtube.com/watch?v=AAAAAAAAAAA", [], TESTER, channel="Tester"),
+                                    rec("https://youtu.be/BBBBBBBBBBB", ["sponsor_read"], None, channel="Tester")],
+                         {}, "carpet cleaners")
+    CM.registry_put(reg, r2)
+    CM.registry_add_video(reg, "Tester", "https://www.youtube.com/watch?v=CCCCCCCCCCC", "drills", "Drill test")
+    row = CM.registry_find(reg, "Tester")[1]
+    fam = CM.familiarity(row)
+    assert fam["videos"] == 3 and fam["with_transcript"] == 1 and fam["level"] == "moderate"
+    assert fam["by_topic"] == {"carpet cleaners": 2, "drills": 1}
+    cum = row["topics"]["carpet cleaners"]["cumulative"]
+    assert cum["videos"] == 2 and cum["rigor"] is not None and cum["independence"] < 5
+    hit = CM.registry_lookup(reg, "Tester", "carpet cleaners")
+    assert set(hit["reviewed_ids"]) == {"AAAAAAAAAAA", "BBBBBBBBBBB", "CCCCCCCCCCC"}
+
+
+def test_channels_marks_videos_reviewed_before(monkeypatch, tmp_path):
+    seen = {"items": [rec("https://youtu.be/AAAAAAAAAAA", [], TESTER, channel="Tester", id="AAAAAAAAAAA"),
+                      rec("https://youtu.be/DDDDDDDDDDD", [], TESTER, channel="Tester", id="DDDDDDDDDDD")],
+            "channels": {}}
+    monkeypatch.setattr(Y.SITE, "resolve", lambda t: t)
+    monkeypatch.setattr(Y, "_seen_load", lambda fid: seen)
+    monkeypatch.setattr(Y, "CHANNELS", tmp_path / "reg.json")
+    reg = CM.registry_load(tmp_path / "reg.json")
+    CM.registry_add_video(reg, "Tester", "https://www.youtube.com/watch?v=AAAAAAAAAAA", "carpet cleaners")
+    CM.registry_save(tmp_path / "reg.json", reg)
+    row = Y.channels("T", "carpet cleaners")["channels"][0]
+    assert {v["video_id"]: v["reviewed_before"] for v in row["videos"]} == {"AAAAAAAAAAA": True, "DDDDDDDDDDD": False}
+    assert row["registry"]["familiarity"]["videos"] == 1
+    assert Y.registry("show", "Tester")["familiarity"]["videos"] == 1
