@@ -308,6 +308,23 @@ class Site:
                        "delivers wheel scrolls to a visible window. Ask the user to bring the research browser "
                        "window into view, then retry.")
 
+    HIDDEN_MSG = ("the research window is hidden (minimized, on another desktop/workspace, or fully covered). "
+                  "Chrome barely draws hidden windows, so scrolling stalls and pages load very slowly. Ask the "
+                  "user to bring the research browser window into view, then retry.")
+
+    def ensure_visible(self, target: str, grace: float = 3.0) -> None:
+        """Fail fast when the window is hidden, instead of stalling later on wheel input (read-only
+        check of document.visibilityState; re-checked once after a short grace period)."""
+        def vis():
+            try:
+                return self.evaluate(target, "document.visibilityState", timeout=10)
+            except Fail:
+                return None
+        if vis() == "hidden":
+            pause(grace)
+            if vis() == "hidden":
+                raise Fail(self.HIDDEN_MSG)
+
     def drift(self, target: str, max_px: float = 40, area: dict | None = None) -> None:
         """A small, slow idle movement of the pointer (B6), the way a hand rests on a mouse while reading.
         Stays inside `area` (or the viewport) when given."""
@@ -600,6 +617,11 @@ class Site:
             pause(min(15, max(1, deadline - time.time())))
         if self.on_open:
             self.on_open(self, full_id)
+        try:
+            self.ensure_visible(full_id)
+        except Fail:
+            self.close(full_id)  # release the claim; nothing useful can run in a hidden window
+            raise
         return {"target": full_id, "slots_in_use": busy + 1, "max_slots": self.max_claims}
 
     def check_url(self, url: str) -> None:
@@ -613,12 +635,19 @@ class Site:
         """Paced, counted page load. Returns {url, title, loggedIn, blocked, loads, stop?}."""
         full_id = self.resolve(target)
         self.check_url(url)
+        self.ensure_visible(full_id)  # before counting a load: a hidden window would only stall
         loads = self._count_load(full_id)
         self._pace()
         self.cdp(full_id, "Page.navigate", {"url": url})
-        self.wait_for(full_id, ready_js or self.ready_js, settle=self.settle)
+        try:
+            self.wait_for(full_id, ready_js or self.ready_js, settle=self.settle)
+        except Fail:
+            self.ensure_visible(full_id, grace=0)  # a hidden window explains a stalled load: say so
+            raise
         state = self.evaluate(full_id, self.page_state_js) or {}
         state["loads"] = loads
+        if state.get("visibility") == "hidden" or self.evaluate(full_id, "document.visibilityState") == "hidden":
+            state["warning"] = self.HIDDEN_MSG
         reason = self.stop_reason(state, self)
         if reason:
             state["stop"] = reason
