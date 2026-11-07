@@ -15,7 +15,7 @@ R=~/.claude/skills/reddit-research/scripts/reddit_tab.py
 
 1. **Use `$R` only.** Not WebFetch, the built-in browser, Claude in Chrome, or a new or headless chrome-agent launch. Never touch another agent's window or send raw CDP commands to the shared browser.
 2. **Read-only.** Never post, comment, vote, join, message, or change settings.
-3. **Never solve CAPTCHAs or type credentials.**
+3. **Never solve CAPTCHAs or type credentials.** Never run `chrome-agent save`, restart or stop the browser yourself, even when a `stop` message mentions it: that is for the user. A sign-in `stop` only fires when the page shows a log-in button and no session cookie is present.
 4. **If a result contains `stop`, stop and tell the user why.** This covers block pages, CAPTCHAs, and signed-out sessions. Never retry another way, and never use Reddit's JSON/API endpoints (the helper refuses them).
 5. **Budget:** 25 page loads for a Reddit-focused task, 10 when Reddit is one source among several, **12–15 for the middle case** (a light pass plus complaints, or named products plus a landscape check), and about 20 for a category or landscape question. A user-given cap wins. Each result reports `loads`. Ask before exceeding the budget.
 6. **Always `$R close` your window** when done, even after errors. Never stop the browser itself.

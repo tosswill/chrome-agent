@@ -245,3 +245,27 @@ def test_search_url_defaults():
     assert "t=year" in R.search_url("x", "BambuLab", "new", "year") and "/r/BambuLab/search/" in R.search_url("x", "BambuLab")
     with pytest.raises(R.Fail):
         R.search_url("x", time_filter="decade")
+
+
+# --- sign-in check: an unrendered header is not "signed out" -----------------------------------
+
+@pytest.mark.parametrize("logged_in,cookie,stops", [
+    (True, None, False),    # account menu found
+    (None, True, False),    # header not rendered yet, valid session cookie
+    (False, True, False),   # log-in button shown, but the session cookie is valid
+    (None, None, False),    # can't tell either way: don't stop, flag it
+    (False, False, True),   # log-in button and no session cookie: really signed out
+    (None, False, True),    # no header and no session cookie
+])
+def test_stop_reason_sign_in(monkeypatch, logged_in, cookie, stops):
+    monkeypatch.setattr(R, "_session_cookie_valid", lambda site: cookie)
+    state = {"loggedIn": logged_in, "blocked": False}
+    reason = R._stop_reason(state, R.SITE)
+    assert bool(reason) is stops
+    if not stops and logged_in is not True:
+        assert "login_check" in state
+
+
+def test_stop_reason_block_wins(monkeypatch):
+    monkeypatch.setattr(R, "_session_cookie_valid", lambda site: True)
+    assert "block" in R._stop_reason({"loggedIn": True, "blocked": True}, R.SITE)
