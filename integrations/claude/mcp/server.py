@@ -390,6 +390,29 @@ def youtube_tally(target: str, names: list[str], aliases: str | None = None,
 
 
 @mcp.tool()
+def youtube_channels(target: str, topic: str, cited: str | None = None, save: bool = False) -> str:
+    """Channel map for a topic, from the videos this window has read (no page load). Per channel:
+    independence (little brand money behind the coverage), transparency (money disclosed clearly and
+    early; null = nothing to disclose) and rigor (measured, controlled testing in the transcript; null =
+    no transcript read), each 0-5; a derived authority (rigor + trust + focus, never subscribers alone);
+    context (subscribers, focus = share of recent uploads on the topic, trust_citations from `cited`,
+    e.g. "Project Farm=4; Vacuum Wars=2" counted from Reddit or other creators); a quadrant; confidence;
+    per-video evidence; and any saved registry rating or user pin. `candidates` lists channels seen only
+    in search results, to sample next. save=true stores the ratings in the registry. Call before
+    youtube_close (closing clears what the window has seen)."""
+    return _reddit(youtube_tab.channels, target, topic, cited, save)
+
+
+@mcp.tool()
+def youtube_registry(action: str, channel: str | None = None, verdict: str | None = None,
+                     note: str = "", topic: str | None = None) -> str:
+    """Saved channel ratings (dated, per topic; older than 180 days = stale) and the user's pins.
+    action: "list" (optionally by topic), "show" (one channel), or "pin" with verdict "trusted",
+    "distrusted" or "clear" and a note. Only pin when the user says so. No page load."""
+    return _reddit(youtube_tab.registry, action, channel, verdict, note, topic)
+
+
+@mcp.tool()
 def youtube_close(target: str) -> str:
     """Close your YouTube research window and free the slot. Always call when done, even after errors."""
     return _reddit(youtube_tab.close, target)
