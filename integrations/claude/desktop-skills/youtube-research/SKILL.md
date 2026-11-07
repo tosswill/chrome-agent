@@ -1,6 +1,6 @@
 ---
 name: youtube-research
-description: Research YouTube by reading real YouTube pages (search results, video metadata, transcripts, comments, channels) in the user's signed-in Chrome through the chrome-agent connector's youtube_* tools, capture frames that show features or data, and report findings with skepticism toward creator endorsements. Use whenever the user asks for YouTube research, asks what YouTubers/reviewers/videos say or show about something, or wants YouTube included among other sources (e.g. "check YouTube too", "include video reviews", "what are reviewers saying"). Also use for product feature, comparison, alternatives, landscape ("what are the best/top X"), interest-level or pre-release research that lists YouTube as a source. Read-only; never likes, subscribes, comments, or downloads.
+description: Research YouTube by reading real YouTube pages (search results, video metadata, transcripts, comments, channels) in the user's signed-in Chrome through the chrome-agent connector's youtube_* tools, capture frames that show features or data, and report findings with skepticism toward creator endorsements. Use whenever the user asks for YouTube research, asks what YouTubers/reviewers/videos say or show about something, or wants YouTube included among other sources (e.g. "check YouTube too", "include video reviews", "what are reviewers saying"). Also use for product feature, comparison, alternatives, landscape ("what are the best/top X"), interest-level or pre-release research that lists YouTube as a source. Also use to map which YouTube channels or reviewers cover a topic and how far to trust them (independence, disclosure, testing rigor). Read-only; never likes, subscribes, comments, or downloads.
 ---
 
 # YouTube Research
@@ -32,6 +32,8 @@ If the `youtube_*` tools aren't available, say so and stop. Don't fall back to w
 - `youtube_frame(target, at, burst?, out_dir?, scan?, samples?)`: jump to e.g. `"6:17"` (or a list of timestamps) and capture the player, within about ±2.5 s. Returns JSON (actual time, `sec`, `landing_error_s`, `link`, `ad_seen`, `ad_timeout`, `ad_log`, buffering) plus the images. With `burst: 5`, the video then plays on muted and a candidate is captured every second with the controls hidden; use it for demos, animated charts and changing slides, and keep the best candidate. With `scan: "12:00-19:00"` it samples the range and keeps the 3 frames most likely to show a chart, table, slide or UI (`graphic.score`, a hint). Pass `out_dir` (the report folder); names never overwrite each other.
 - `youtube_comments(target, max_comments?)`, `youtube_channel(target, url_or_@handle)` (1 page load), `youtube_shot(target, selector?, out_dir?)`. `youtube_shot` returns `ads_in_view` (Sponsored units, masthead, a video ad): caption them as ads, or scroll and retake. The account's name or avatar in a shot is fine.
 - `youtube_tally(target, names, aliases?, include_transcripts?)`: for each product name, channels and independent channels mentioning it among everything this window has seen, with snippets and links. Loaded videos (description, links, read transcripts) are merged with their search results. Whole names only ("Core One" doesn't count "Core One+"); add spellings as `aliases` ("Core One=C1,Core 1; Lark M2=M2 kit"); caption garbles like "Bamboo" = Bambu are built in. A channel isn't independent for a name when a video of it mentioning the name scores 0.6+ sponsor bias (in a roundup, that brand's `by_brand` score, so include the brand in the name), it's strongly brand-owned, or it's an AI-listicle / Amazon-influencer channel. No page load. Use it in the landscape pass.
+- `youtube_channels(target, topic, cited?, save?)`: channel map for the topic from the videos this window read. Gives independence, transparency and rigor (0–5), derived authority, context, quadrant and evidence, plus `candidates` seen only in search. No page load; see *Channel map*.
+- `youtube_registry(action, channel?, verdict?, note?, topic?)`: saved channel ratings (`list`, `show`) and the user's pins (`pin` with `trusted`, `distrusted` or `clear`; only when the user says so).
 - `youtube_close(target)`.
 
 ## Landscape: establish the field first (when warranted)
@@ -49,6 +51,23 @@ Use a **full landscape pass** when no products are named, the user asks what the
 6. **Position each product** against them, then continue with the workflow. If the field is really two categories, say so, make that the primary dividing line, and pick top products within each.
 
 A full pass usually takes 8–12 page loads (about 4–6 searches and 4–6 videos).
+
+## Channel map: who covers the topic, and how far to trust them
+
+Run it **after a landscape pass** (reusing the videos already read) or **on its own** when the user asks which channels to trust on a topic. Ratings are **scoped to the topic** (a channel strong on GPUs isn't automatically strong on vacuums).
+
+1. **Pick 6–8 channels** from the landscape searches: the ones that recur, plus the largest. ``youtube_channels(target, topic)`` lists the channels you've only seen in search results under `candidates`.
+2. **Check the registry first** (``youtube_registry("list", topic=...)``). A fresh rating for the same topic (`stale: false`, `same_topic: true`) can stand in for sampling that channel. A rating that is stale or for a neighboring topic is a starting point, not the answer. **A user pin (`trusted`/`distrusted`) overrides the heuristics:** report it as the user's verdict.
+3. **Sample each channel:** ``youtube_channel(target, @handle)`` (1 load: reach and recent uploads, for `focus`), then 2–3 videos on the topic **with transcripts** (rigor needs them). Prefer their own tests and comparisons over Shorts. Videos read in the landscape pass count. That's about 15–25 loads for 6–8 channels; trim to 4–5 channels when the budget is tight, and say so.
+4. **Count trust:** how often Reddit owners or other creators cite each channel, unprompted (for example from a Reddit tally of the channel names, or creators referencing "Project Farm's test"). Pass the counts as `cited` (`"Project Farm=4; Vacuum Wars=2"`).
+5. **Map** with ``youtube_channels(target, topic)`` (no page load). **Run it before ``youtube_close``**, which clears what the window has seen. Each channel gets:
+   - **independence** (0–5): little brand money behind the coverage. Sponsor reads for the reviewed brand, review units, brand codes or links and brand ownership cost the most; generic store affiliate links and third-party sponsors (a VPN read) cost little.
+   - **transparency** (0–5, `null` = nothing to disclose): whether money is disclosed clearly and early (the paid-promotion label, a spoken sponsor read, an affiliate disclosure). Brand links or codes with no disclosure, or a disclosure only late in the video, cost the most.
+   - **rigor** (0–5, `null` = no transcript read): measured results with units, controlled side-by-side tests, named tests, instruments, a stated method, long-term follow-ups. Spec-sheet reading lowers it.
+   - **authority** (derived): rigor 60%, trust 25%, focus 15%. It's never based on subscribers alone. `context` gives subscribers, focus and trust citations, plus a `quadrant` (trusted tester; rigorous but brand-tied; independent, light testing; affiliate roundup (light testing, most videos earn from affiliate links); promotional/shallow), `confidence` (by sample size and transcripts) and per-video evidence.
+6. **Read the evidence before quoting a rating,** and correct it in the report when the heuristic is plainly wrong (e.g. a measured lab test the patterns missed). Then **save** with `save` so later research can reuse it. Never pin a channel yourself; pins are the user's call. Offer to pin when the user states a verdict ("Project Farm is the gold standard").
+
+**Output:** a channel table (channel linked, subscribers, focus, independence, transparency, rigor, authority, quadrant, confidence, the main reasons with video links), plus 2–4 sentences on who to trust for what (e.g. "trust X's measurements; read Y for features, but its reviews are brand-supplied and disclosed"). Weight landscape findings by it: claims from high-rigor, high-independence channels count more. If a chart helps, plot rigor against independence, with transparency as the marker.
 
 ## Workflow: a guide, not a quota
 
@@ -120,6 +139,8 @@ Quantity, quality, and spread of videos vary a lot by subject. Cast a wide net w
 4. **Caveats.**
 5. **Sample size:** videos, transcripts (and unavailable ones), frames (and any `ad_timeout`), page loads (searches vs videos).
 6. **Saved transcripts:** the `saved` paths, listed with the sources.
+
+**When a channel map was made**, add the channel table and the who-to-trust sentences (see *Channel map*) before the sources table.
 
 **When a landscape pass was done**, add before the key findings:
 

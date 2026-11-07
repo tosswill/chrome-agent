@@ -1,6 +1,6 @@
 ---
 name: youtube-research
-description: Research YouTube by reading real YouTube pages (search results, video metadata, transcripts, comments, channels) in the user's signed-in Chrome (a shared chrome-agent browser), capture frames that show features or data, and report findings with skepticism toward creator endorsements. Use whenever the user asks for YouTube research, asks what YouTubers/reviewers/videos say or show about something, or wants YouTube included among other sources (e.g. "check YouTube too", "include video reviews", "what are reviewers saying"). Also use for product feature, comparison, alternatives, landscape ("what are the best/top X"), interest-level or pre-release research that lists YouTube as a source. Read-only; never likes, subscribes, comments, or downloads.
+description: Research YouTube by reading real YouTube pages (search results, video metadata, transcripts, comments, channels) in the user's signed-in Chrome (a shared chrome-agent browser), capture frames that show features or data, and report findings with skepticism toward creator endorsements. Use whenever the user asks for YouTube research, asks what YouTubers/reviewers/videos say or show about something, or wants YouTube included among other sources (e.g. "check YouTube too", "include video reviews", "what are reviewers saying"). Also use for product feature, comparison, alternatives, landscape ("what are the best/top X"), interest-level or pre-release research that lists YouTube as a source. Also use to map which YouTube channels or reviewers cover a topic and how far to trust them (independence, disclosure, testing rigor). Read-only; never likes, subscribes, comments, or downloads.
 ---
 
 # YouTube Research
@@ -45,6 +45,8 @@ $Y shot <ID> --out-dir <report dir>              # visible page content (top bar
 $Y shot <ID> --selector '#description' --out-dir <dir>   # one element, scrolled into view first
 $Y channel <ID> @handle                          # channel header + recent uploads (1 page load)
 $Y tally <ID> "Bambu P2S" "Qidi Q2" --alias "Bambu P2S=P2S; Qidi Q2=Q2,Cheety Q2"   # channels / independent channels per name (no load)
+$Y channels <ID> --topic "carpet cleaners" --cited "Project Farm=4" [--save]   # channel map: independence/transparency/rigor (no load)
+$Y registry list [--topic T] | show <channel> | pin <channel> trusted|distrusted|clear --note "..."  # saved ratings and user pins
 $Y transcript <ID> --from 4:00 --to 6:30         # only a time window (e.g. one chapter)
 $Y close <ID>
 $Y list                                          # active research windows across all agents
@@ -94,6 +96,23 @@ Use a **full landscape pass** when the user names no products, asks what the opt
 **When the field is really two or more categories** (e.g. virtual-monitor glasses vs heads-up display glasses), say so first. Treat the top split as the primary dividing line, and choose the top products within each category rather than ranking across them.
 
 Budget: a full landscape pass usually takes 8–12 page loads on its own (about 4–6 searches and 4–6 videos), so allow about 20 for a landscape question, or tell the user the landscape will be thinner.
+
+## Channel map: who covers the topic, and how far to trust them
+
+Run it **after a landscape pass** (reusing the videos already read) or **on its own** when the user asks which channels to trust on a topic. Ratings are **scoped to the topic** (a channel strong on GPUs isn't automatically strong on vacuums).
+
+1. **Pick 6–8 channels** from the landscape searches: the ones that recur, plus the largest. ``$Y channels <ID> --topic "<topic>"`` lists the channels you've only seen in search results under `candidates`.
+2. **Check the registry first** (``$Y registry list --topic "<topic>"``). A fresh rating for the same topic (`stale: false`, `same_topic: true`) can stand in for sampling that channel. A rating that is stale or for a neighboring topic is a starting point, not the answer. **A user pin (`trusted`/`distrusted`) overrides the heuristics:** report it as the user's verdict.
+3. **Sample each channel:** ``$Y channel <ID> @handle`` (1 load: reach and recent uploads, for `focus`), then 2–3 videos on the topic **with transcripts** (rigor needs them). Prefer their own tests and comparisons over Shorts. Videos read in the landscape pass count. That's about 15–25 loads for 6–8 channels; trim to 4–5 channels when the budget is tight, and say so.
+4. **Count trust:** how often Reddit owners or other creators cite each channel, unprompted (for example from a Reddit tally of the channel names, or creators referencing "Project Farm's test"). Pass the counts as `cited` (`"Project Farm=4; Vacuum Wars=2"`).
+5. **Map** with ``$Y channels <ID> --topic "<topic>"`` (no page load). **Run it before ``$Y close``**, which clears what the window has seen. Each channel gets:
+   - **independence** (0–5): little brand money behind the coverage. Sponsor reads for the reviewed brand, review units, brand codes or links and brand ownership cost the most; generic store affiliate links and third-party sponsors (a VPN read) cost little.
+   - **transparency** (0–5, `null` = nothing to disclose): whether money is disclosed clearly and early (the paid-promotion label, a spoken sponsor read, an affiliate disclosure). Brand links or codes with no disclosure, or a disclosure only late in the video, cost the most.
+   - **rigor** (0–5, `null` = no transcript read): measured results with units, controlled side-by-side tests, named tests, instruments, a stated method, long-term follow-ups. Spec-sheet reading lowers it.
+   - **authority** (derived): rigor 60%, trust 25%, focus 15%. It's never based on subscribers alone. `context` gives subscribers, focus and trust citations, plus a `quadrant` (trusted tester; rigorous but brand-tied; independent, light testing; affiliate roundup (light testing, most videos earn from affiliate links); promotional/shallow), `confidence` (by sample size and transcripts) and per-video evidence.
+6. **Read the evidence before quoting a rating,** and correct it in the report when the heuristic is plainly wrong (e.g. a measured lab test the patterns missed). Then **save** with `save` so later research can reuse it. Never pin a channel yourself; pins are the user's call. Offer to pin when the user states a verdict ("Project Farm is the gold standard").
+
+**Output:** a channel table (channel linked, subscribers, focus, independence, transparency, rigor, authority, quadrant, confidence, the main reasons with video links), plus 2–4 sentences on who to trust for what (e.g. "trust X's measurements; read Y for features, but its reviews are brand-supplied and disclosed"). Weight landscape findings by it: claims from high-rigor, high-independence channels count more. If a chart helps, plot rigor against independence, with transparency as the marker.
 
 ## Workflow: a guide, not a quota
 
@@ -192,6 +211,8 @@ Always start with `video`: disclosure signals, chapters, description, metadata. 
 4. **Caveats:** sponsorship or affiliate dependence, embargo clustering, preliminary information, dates spanned.
 5. **Sample size:** videos read, transcripts used (and how many were unavailable), frames captured (and any `ad_timeout`), page loads used (searches vs videos).
 6. **Saved transcripts:** the `saved` JSON/`.md` paths, listed with the sources.
+
+**When a channel map was made**, add the channel table and the who-to-trust sentences (see *Channel map*) before the sources table.
 
 **When a landscape pass was done**, add before the key findings:
 

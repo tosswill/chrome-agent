@@ -41,6 +41,13 @@ CLI (each command prints JSON):
                        channels and independent channels mentioning each name among everything this
                        window has seen (search results merged with loaded videos, their descriptions,
                        links and read transcripts), with snippets and links. No page load.
+    youtube_tab.py channels ID --topic "TOPIC" [--cited "Name=N; Other=N"] [--save]
+                       channel map: independence / transparency / rigor (0-5), derived authority,
+                       reach, focus and trust per channel from the videos this window read, plus
+                       search-only candidates and any saved registry rating or pin. No page load.
+    youtube_tab.py registry list [--topic T] | show CHANNEL | pin CHANNEL trusted|distrusted|clear [--note TEXT]
+                       saved channel ratings (YOUTUBE_TAB_CHANNELS, default
+                       ~/.local/share/chrome-agent-research/youtube-channels.json) and the user's pins
     youtube_tab.py nav ID URL | eval ID JS|@file.js        escape hatches (paced load / run JS)
     youtube_tab.py close ID | list | gc                    release window / show / clean up claims
 
@@ -71,12 +78,14 @@ from research_core import Fail, Site, common_cli, intersect, opt, pause, run_cli
 import disclosure as D  # noqa: E402
 import tally as T  # noqa: E402
 import youtube_signals as S  # noqa: E402
+import channel_map as CM  # noqa: E402
 
 SORTS = {"relevance": None, "views": 3}
 UPLOADS = {"hour": 1, "today": 2, "week": 3, "month": 4, "year": 5}
 MIN_PLAYER_WIDTH = S.MIN_PLAYER_WIDTH  # CSS px; smaller frames are hard to read
 AD_TIMEOUT = float(os.environ.get("YOUTUBE_TAB_AD_TIMEOUT", "60"))
 TRANSCRIPTS = Path(os.environ.get("YOUTUBE_TAB_TRANSCRIPTS", str(S.DEFAULT_TRANSCRIPTS))).expanduser()
+CHANNELS = Path(os.environ.get("YOUTUBE_TAB_CHANNELS", str(S.DEFAULT_TRANSCRIPTS.parent / "youtube-channels.json"))).expanduser()
 
 
 def _js(name: str) -> str:
@@ -255,7 +264,11 @@ def _video_record(data: dict, sb: dict, segments: list[dict] | None = None) -> d
            "channel": data.get("channel"), "text": data.get("description") or "",
            "links": list(data.get("description_links") or []), "age": data.get("published"),
            "views": data.get("views"), "sponsor_score": sb.get("score"),
-           "transcript_scanned": bool(sb.get("transcript_scanned"))}
+           "transcript_scanned": bool(sb.get("transcript_scanned")),
+           # for the channel map: compact evidence, length and channel identity
+           "signals": [{k: e.get(k) for k in ("signal", "source", "sec", "sponsor") if e.get(k) is not None}
+                       for e in sb.get("evidence") or []],
+           "length_s": data.get("length_s"), "handle": data.get("handle"), "subscribers": data.get("subscribers")}
     if sb.get("brand_owned"):
         rec["brand_owned"] = sb["brand_owned"]
     if sb.get("by_brand"):
@@ -1384,6 +1397,9 @@ def channel(target: str, url: str) -> dict:
     SITE.ensure_visible(full_id)  # fail fast in a hidden window
     ch = SITE.evaluate(full_id, _js("channel.js"))
     if ch:
+        _seen_add(full_id, [], {ch.get("name"): {
+            "handle": ch.get("handle"), "subscribers": ch.get("subscribers"), "channel_url": ch.get("url"),
+            "recent_titles": [v.get("title") for v in ch.get("recent_uploads") or [] if v.get("title")][:30]}})
         lst, why = S.likely_ai_listicle("", ch.get("name"), ch.get("handle"), ch.get("videos"))
         if lst:
             ch["likely_ai_listicle"], ch["listicle_reasons"] = True, why
@@ -1422,6 +1438,110 @@ def tally(target: str, terms: list[str], aliases: str | dict | None = None, incl
             "note": ("Counts come only from what this window has seen (search results, loaded videos and read "
                      "transcripts); search more to widen the base. In multi-brand videos, put the brand in the name "
                      "(\"Bambu P2S\") or add an alias so the right brand's sponsor score applies.")}
+
+
+def _parse_cited(cited) -> dict[str, int]:
+    """'Project Farm=4; Vacuum Wars=2' (or a dict) -> {name: count}."""
+    if isinstance(cited, dict):
+        return {str(k): int(v) for k, v in cited.items()}
+    out = {}
+    for part in re.split(r"[;\n]", cited or ""):
+        if "=" in part:
+            k, v = part.rsplit("=", 1)
+            try:
+                out[k.strip()] = int(v.strip())
+            except ValueError:
+                raise Fail(f"--cited expects Name=COUNT pairs, got {part.strip()!r}")
+    return out
+
+
+def channels(target: str, topic: str, cited=None, save: bool = False) -> dict:
+    """Channel map for a topic from everything this window has read (no page load): per channel,
+    independence / transparency / rigor (0-5), derived authority, reach, focus and trust, with the
+    per-video evidence. Channels seen only in search results are listed as candidates to sample.
+    The saved registry adds earlier ratings and the user's pins; --save stores these ratings."""
+    full_id = SITE.resolve(target)
+    seen = _seen_load(full_id)
+    merged = T.merge_records(seen["items"])
+    cited_map = _parse_cited(cited)
+    loaded: dict[str, list[dict]] = {}
+    search_only: dict[str, int] = {}
+    for r in merged:
+        ch = r.get("channel")
+        if not ch:
+            continue
+        if r.get("via") == "video":
+            loaded.setdefault(ch, []).append(r)
+        else:
+            search_only[ch] = search_only.get(ch, 0) + 1
+    reg = CM.registry_load(CHANNELS)
+    rows = []
+    for ch, recs in loaded.items():
+        info = dict(seen["channels"].get(ch) or {})
+        info["handle"] = info.get("handle") or next((x.get("handle") for x in recs if x.get("handle")), None)
+        info["subscribers"] = info.get("subscribers") or next(
+            (x.get("subscribers") for x in recs if x.get("subscribers")), None)
+        rating = CM.rate_channel(ch, recs, info, topic, cited_map)
+        rating["quadrant"] = CM.quadrant(rating)
+        if (seen["channels"].get(ch) or {}).get("listicle"):
+            rating["notes"].append("flagged as a likely AI listicle channel")
+        prev = CM.registry_lookup(reg, ch, topic)
+        if prev:
+            rating["registry"] = prev
+        rows.append(rating)
+    rows.sort(key=lambda r: (-(r["authority"] or 0), -(r["axes"]["independence"] or 0)))
+    rated = {r["channel"] for r in rows}
+    candidates = sorted(((c, n) for c, n in search_only.items() if c not in rated), key=lambda x: -x[1])[:12]
+    cand_rows = []
+    for c, n in candidates:
+        row = {"channel": c, "search_results": n}
+        prev = CM.registry_lookup(reg, c, topic)
+        if prev:
+            row["registry"] = prev
+        if (seen["channels"].get(c) or {}).get("listicle"):
+            row["listicle"] = True
+        cand_rows.append(row)
+    if save and rows:
+        for r in rows:
+            CM.registry_put(reg, r)
+        CM.registry_save(CHANNELS, reg)
+    return {"topic": topic, "channels": rows, "candidates": cand_rows, "saved": bool(save and rows),
+            "registry": str(CHANNELS),
+            "note": ("Axes are 0-5 heuristics from the videos this window read: independence (little brand money "
+                     "behind the coverage), transparency (money disclosed clearly and early; null = nothing to "
+                     "disclose), rigor (measured, controlled testing in the transcript; null = no transcript read). "
+                     "authority is derived from rigor, trust (--cited) and focus, not subscribers. Read the per-video "
+                     "evidence before quoting a rating; a user pin in `registry` overrides the heuristics.")}
+
+
+def registry(action: str, channel: str | None = None, verdict: str | None = None, note: str = "",
+             topic: str | None = None) -> dict:
+    """Saved channel ratings and pins. list [--topic T] | show CHANNEL | pin CHANNEL trusted|distrusted|clear."""
+    reg = CM.registry_load(CHANNELS)
+    if action == "list":
+        out = []
+        for row in reg["channels"].values():
+            topics = row.get("topics") or {}
+            if topic and not CM.registry_lookup(reg, row.get("name") or "", topic):
+                continue
+            out.append({"channel": row.get("name"), "handle": row.get("handle"), "pin": row.get("pin"),
+                        "topics": {t: {"date": v.get("date"), "axes": v.get("axes"), "authority": v.get("authority"),
+                                       "stale": CM.stale(v.get("date"))} for t, v in topics.items()}})
+        return {"registry": str(CHANNELS), "channels": out}
+    if not channel:
+        raise Fail("usage: registry list [--topic T] | registry show CHANNEL | registry pin CHANNEL trusted|distrusted|clear [--note TEXT]")
+    if action == "show":
+        _, row = CM.registry_find(reg, channel)
+        if not row:
+            return {"channel": channel, "found": False}
+        return {"channel": channel, "found": True, **row}
+    if action == "pin":
+        if verdict not in ("trusted", "distrusted", "clear"):
+            raise Fail("pin needs a verdict: trusted, distrusted or clear")
+        row = CM.registry_pin(reg, channel, verdict, note)
+        CM.registry_save(CHANNELS, reg)
+        return {"channel": row.get("name"), "pin": row.get("pin")}
+    raise Fail(f"unknown registry action {action!r}")
 
 
 def close(target: str) -> dict:
@@ -1491,6 +1611,20 @@ def _dispatch(cmd: str, args: list[str]):
         return shot(args[0], out, out_dir, full, selector)
     if cmd == "channel" and len(args) == 2:
         return channel(*args)
+    if cmd == "channels":
+        cited, save = opt(args, "--cited"), bool(opt(args, "--save", False))
+        topic = opt(args, "--topic")
+        if len(args) != 1 or not topic or topic is True:
+            raise Fail('usage: channels ID --topic "TOPIC" [--cited "Name=N; Other=N"] [--save]')
+        return channels(args[0], str(topic), cited if isinstance(cited, str) else None, save)
+    if cmd == "registry":
+        note, topic = opt(args, "--note", ""), opt(args, "--topic")
+        if not args:
+            raise Fail("usage: registry list [--topic T] | show CHANNEL | pin CHANNEL trusted|distrusted|clear [--note TEXT]")
+        action, rest = args[0], args[1:]
+        if action == "pin" and len(rest) >= 2:
+            return registry("pin", " ".join(rest[:-1]), rest[-1], str(note or ""))
+        return registry(action, " ".join(rest) or None, None, str(note or ""), topic if isinstance(topic, str) else None)
     if cmd == "close" and len(args) == 1:
         return close(args[0])
     return common_cli(SITE, cmd, args)
