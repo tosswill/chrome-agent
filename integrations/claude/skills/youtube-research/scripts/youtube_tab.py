@@ -46,6 +46,8 @@ CLI (each command prints JSON):
                        reach, focus and trust per channel from the videos this window read, plus
                        search-only candidates and any saved registry rating or pin. No page load.
     youtube_tab.py registry list [--topic T] | show CHANNEL | pin CHANNEL trusted|distrusted|clear [--note TEXT]
+                       | describe CHANNEL --covers "one plain sentence" [--tags "a, b, c"]
+                       (list --topic also matches channels whose covers tags fit the topic)
                        saved channel ratings (YOUTUBE_TAB_CHANNELS, default
                        ~/.local/share/chrome-agent-research/youtube-channels.json) and the user's pins
     youtube_tab.py nav ID URL | eval ID JS|@file.js        escape hatches (paced load / run JS)
@@ -1399,7 +1401,10 @@ def channel(target: str, url: str) -> dict:
     if ch:
         _seen_add(full_id, [], {ch.get("name"): {
             "handle": ch.get("handle"), "subscribers": ch.get("subscribers"), "channel_url": ch.get("url"),
-            "recent_titles": [v.get("title") for v in ch.get("recent_uploads") or [] if v.get("title")][:30]}})
+            "recent_titles": [v.get("title") for v in ch.get("recent_uploads") or [] if v.get("title")][:30],
+            "description": ch.get("description")}})
+        ch["covers_draft"] = CM.draft_covers({"description": ch.get("description"), "recent_titles": [
+            v.get("title") for v in ch.get("recent_uploads") or [] if v.get("title")][:30]})
         lst, why = S.likely_ai_listicle("", ch.get("name"), ch.get("handle"), ch.get("videos"))
         if lst:
             ch["likely_ai_listicle"], ch["listicle_reasons"] = True, why
@@ -1516,15 +1521,19 @@ def channels(target: str, topic: str, cited=None, save: bool = False) -> dict:
 
 def registry(action: str, channel: str | None = None, verdict: str | None = None, note: str = "",
              topic: str | None = None) -> dict:
-    """Saved channel ratings and pins. list [--topic T] | show CHANNEL | pin CHANNEL trusted|distrusted|clear."""
+    """Saved channel ratings, what each channel covers, and pins. list [--topic T] | show CHANNEL |
+    describe CHANNEL (note = the one-line summary, topic = comma-separated tags) | pin CHANNEL trusted|distrusted|clear."""
     reg = CM.registry_load(CHANNELS)
     if action == "list":
         out = []
         for row in reg["channels"].values():
             topics = row.get("topics") or {}
-            if topic and not CM.registry_lookup(reg, row.get("name") or "", topic):
-                continue
+            if topic:
+                hit = CM.registry_lookup(reg, row.get("name") or "", topic) or {}
+                if not hit.get("rating") and not CM.covers_topic(row, topic):
+                    continue
             out.append({"channel": row.get("name"), "handle": row.get("handle"), "pin": row.get("pin"),
+                        "covers": row.get("covers"),
                         "topics": {t: {"date": v.get("date"), "axes": v.get("axes"), "authority": v.get("authority"),
                                        "stale": CM.stale(v.get("date"))} for t, v in topics.items()}})
         return {"registry": str(CHANNELS), "channels": out}
@@ -1535,6 +1544,12 @@ def registry(action: str, channel: str | None = None, verdict: str | None = None
         if not row:
             return {"channel": channel, "found": False}
         return {"channel": channel, "found": True, **row}
+    if action == "describe":
+        if not note:
+            raise Fail('describe needs --covers "one plain sentence" (and optionally --tags "a, b, c")')
+        row = CM.registry_describe(reg, channel, note, [t for t in re.split(r"[,;]", topic or "") if t.strip()])
+        CM.registry_save(CHANNELS, reg)
+        return {"channel": row.get("name"), "covers": row.get("covers")}
     if action == "pin":
         if verdict not in ("trusted", "distrusted", "clear"):
             raise Fail("pin needs a verdict: trusted, distrusted or clear")
@@ -1624,6 +1639,11 @@ def _dispatch(cmd: str, args: list[str]):
         action, rest = args[0], args[1:]
         if action == "pin" and len(rest) >= 2:
             return registry("pin", " ".join(rest[:-1]), rest[-1], str(note or ""))
+        if action == "describe":
+            covers, tags = opt(args, "--covers"), opt(args, "--tags")
+            rest = args[1:]
+            return registry("describe", " ".join(rest) or None, None, str(covers or ""),
+                            tags if isinstance(tags, str) else None)
         return registry(action, " ".join(rest) or None, None, str(note or ""), topic if isinstance(topic, str) else None)
     if cmd == "close" and len(args) == 1:
         return close(args[0])

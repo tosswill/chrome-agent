@@ -405,10 +405,15 @@ def youtube_channels(target: str, topic: str, cited: str | None = None, save: bo
 
 @mcp.tool()
 def youtube_registry(action: str, channel: str | None = None, verdict: str | None = None,
-                     note: str = "", topic: str | None = None) -> str:
-    """Saved channel ratings (dated, per topic; older than 180 days = stale) and the user's pins.
-    action: "list" (optionally by topic), "show" (one channel), or "pin" with verdict "trusted",
-    "distrusted" or "clear" and a note. Only pin when the user says so. No page load."""
+                     note: str = "", topic: str | None = None, covers: str | None = None,
+                     tags: list[str] | None = None) -> str:
+    """Saved channel ratings (dated, per topic; older than 180 days = stale), what each channel covers,
+    and the user's pins. action: "list" (with topic: channels rated for it or whose covers tags fit it),
+    "show" (one channel), "describe" (store `covers`, one plain sentence on what the channel generally
+    reviews, plus category `tags`), or "pin" with verdict "trusted", "distrusted" or "clear" and a note.
+    Only pin when the user says so. No page load."""
+    if action == "describe":
+        return _reddit(youtube_tab.registry, "describe", channel, None, covers or "", ", ".join(tags or []))
     return _reddit(youtube_tab.registry, action, channel, verdict, note, topic)
 
 
