@@ -229,20 +229,31 @@ def browser_placements(ports: list[int]) -> dict[int, dict]:
     {port: {"kind": "headless"}}, {"kind": "virtual", "display": ":95",
     "server": "Xvfb"} for a virtual X display kept off the user's screen, or
     {"kind": "desktop", "display": ":1"}. Ports whose browser process cannot be
-    found (another user, non-Linux) are absent. One pass over /proc serves every
-    port, since this runs on each Tab of the shell completion.
+    found (another user) are absent. Without /proc (macOS) only headless
+    browsers are classified, since there is no X display to report. One pass
+    over the process list serves every port, since this runs on each Tab of
+    the shell completion.
     """
     wanted = {f"--remote-debugging-port={port}": port for port in ports}
     mains: dict[int, tuple[int, list[str]]] = {}
     servers: dict[str, list[str]] = {}
+    read_argv = _read_argv
     try:
         entries = os.listdir("/proc")
     except OSError:
-        return {}
+        # No /proc (macOS): list PIDs with ps and read argv via sysctl, using
+        # the same helpers snapshots use. Imported lazily: snapshot imports
+        # this module.
+        from .snapshot import _list_pids, _read_argv_bytes
+
+        entries = _list_pids()
+
+        def read_argv(pid: str) -> list[str]:
+            return [a.decode(errors="replace") for a in _read_argv_bytes(pid) if a]
     for entry in entries:
         if not entry.isdigit():
             continue
-        argv = _read_argv(entry)
+        argv = read_argv(entry)
         if not argv:
             continue
         if os.path.basename(argv[0]) in _VIRTUAL_SERVERS:

@@ -565,7 +565,8 @@ def test_attach_exits_when_instance_retired(tmp_path):
 
         # Confirm the browser is genuinely still up: the websocket has NOT
         # dropped, so only the liveness path can end this session.
-        assert result.pid and os.path.exists(f"/proc/{result.pid}")
+        assert result.pid
+        os.kill(result.pid, 0)  # raises if the browser process is gone (portable; no /proc on macOS)
 
         # Retire the target instance while its browser keeps running.
         assert deregister(instance_name=result.name, registry_path=reg_path) is True
