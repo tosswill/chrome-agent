@@ -36,6 +36,7 @@ $R list | gc                                         # active windows across age
 $R nav <ID> '<reddit url>' | eval <ID> '<js>'        # escape hatches: paced load / read something the commands don't return
 ```
 
+- **Long threads:** `thread` on a thread with hundreds of comments reads for up to about 150 s, so run it with a Bash timeout of 300000 ms (or in the background) rather than the 120 s default.
 - **Costs:** `search`, `thread` and `nav` are one page load each. `open`, `back` (in-app restore), `list`, `tally` and `shot` cost nothing. If `back` ever has to fetch the page again it says so (`restored`) and counts it.
 - **Errors** are JSON (`{"error": "..."}`) with exit code 1. Quote URLs and queries, and wrap product names in double quotes for an exact match.
   - **Need the user (stop and tell them, don't retry):** the screen is locked or asleep, the research window is hidden, a `stop` (sign-in, CAPTCHA, block or bot check), or `open` failing to restore the browser.

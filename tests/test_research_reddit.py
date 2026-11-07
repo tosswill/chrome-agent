@@ -454,3 +454,17 @@ def test_affiliate_community_sidebar():
 def test_chip_js_ignores_hidden_chips():
     # The chip check only reports a chip with a visible box (a removed chip can linger in the DOM).
     assert "b.width > 0 && b.height > 0" in R.CHIP_JS and "/r\\//" not in R.CHIP_JS
+
+
+def test_review_unit_ignores_warranty_replacements_and_family_gifts():
+    import disclosure as D
+    sig = lambda t: [h["signal"] for h in D.scan_text(t, "comment")]  # noqa: E731
+    assert "review_unit" not in sig("Our Hatch died after 8 months under warranty. They sent me a new one right away.")
+    assert "review_unit" not in sig("My sister gifted us a Hatch for the baby shower.")
+    assert "review_unit" in sig("Hatch sent me this to review.")
+
+
+def test_affiliate_community_ignores_rules_banning_affiliate_links():
+    assert R.affiliate_community("Rule 4: No affiliate links or referral codes.") is None
+    assert R.affiliate_community("Affiliate links will be removed and repeat offenders banned.") is None
+    assert R.affiliate_community("As an Amazon Associate, we earn from qualifying purchases.")

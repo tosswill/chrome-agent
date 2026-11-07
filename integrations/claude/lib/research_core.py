@@ -691,6 +691,13 @@ class Site:
         self._write_claim(full_id, c)
         return c["loads"]
 
+    def uncount_load(self, full_id: str) -> None:
+        """Undo a load counted for a click that didn't navigate (the fallback load counts instead)."""
+        c = self.claims().get(full_id)
+        if c is not None and c.get("loads", 0) > 0:
+            c["loads"] -= 1
+            self._write_claim(full_id, c)
+
     def _pace(self) -> None:
         """Block until a skewed gap (see pace_delay) has passed since the last load by any agent.
         Tune with {PREFIX}_GAP, {PREFIX}_LONG_IDLE_P (0 disables long idles) and {PREFIX}_LONG_IDLE ("20-60")."""

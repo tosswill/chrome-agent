@@ -844,13 +844,23 @@ def _open_by_click(full_id: str, vid: str) -> tuple[dict | None, str]:
         how = "clicked (after back)"
     loads = SITE._count_load(full_id)
     SITE._pace()
+    before = SITE.evaluate(full_id, "location.href")
+
+    def missed(why: str) -> tuple[None, str]:
+        # A click that never left the page loaded nothing: give the count back, the URL load counts instead.
+        try:
+            if SITE.evaluate(full_id, "location.href") == before:
+                SITE.uncount_load(full_id)
+        except Fail:
+            pass
+        return None, why
     try:
         if not SITE.click_on(full_id, sel, look=random.uniform(0.6, 1.8)):
-            return None, "url (click missed)"
+            return missed("url (click missed)")
     except Fail as e:
-        return None, f"url (click failed: {str(e)[:80]})"
+        return missed(f"url (click failed: {str(e)[:80]})")
     if not SITE.wait_for(full_id, _watch_ready_js(vid), timeout=15, settle=SITE.settle):
-        return None, "url (click missed)"
+        return missed("url (click missed)")
     state = SITE.evaluate(full_id, SITE.page_state_js) or {}
     state["loads"] = loads
     reason = _stop_reason(state, SITE)
@@ -1493,11 +1503,13 @@ def channels(target: str, topic: str, cited=None, save: bool = False) -> dict:
         if (seen["channels"].get(ch) or {}).get("listicle"):
             rating["notes"].append("flagged as a likely AI listicle channel")
         prev = CM.registry_lookup(reg, ch, topic)
+        known = set(prev.pop("reviewed_ids", [])) if prev else set()
+        for v in rating["videos"]:
+            v["reviewed_before"] = v.get("video_id") in known
         if prev:
-            known = set(prev.pop("reviewed_ids", []))
-            for v in rating["videos"]:
-                v["reviewed_before"] = v.get("video_id") in known
             rating["registry"] = prev
+        _, row = CM.registry_find(reg, ch, info.get("handle"))
+        rating["familiarity"] = CM.familiarity(row or {})  # before this session's videos are saved
         rows.append(rating)
     rows.sort(key=lambda r: (-(r["authority"] or 0), -(r["axes"]["independence"] or 0)))
     rated = {r["channel"] for r in rows}
@@ -1515,6 +1527,8 @@ def channels(target: str, topic: str, cited=None, save: bool = False) -> dict:
     if save and rows:
         for r in rows:
             CM.registry_put(reg, r)
+            _, row = CM.registry_find(reg, r["channel"], r.get("handle"))
+            r["familiarity_after_save"] = CM.familiarity(row or {})
         CM.registry_save(CHANNELS, reg)
     return {"topic": topic, "channels": rows, "candidates": cand_rows, "saved": bool(save and rows),
             "registry": str(CHANNELS),

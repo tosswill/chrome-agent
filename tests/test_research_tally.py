@@ -228,3 +228,11 @@ def test_implied_title_only_endorsements():
     assert row["recommend_upvotes"] == 2700 and row["users"] == 2  # the two OPs
     yt = T.tally(recs, ["Big Green"], group="channel", group_label="channels", separate_search=False)["tally"][0]
     assert "implied" not in yt
+
+
+def test_polarity_reads_common_endorsements():
+    import tally as T
+    for t in ["Hatch is the answer.", "The Dohm is the gold standard.", "Get the LectroFan, you won't regret it.",
+              "Our Hatch has been going strong for 3 years.", "We swear by our Dohm."]:
+        assert T.polarity(t) == "recommend", t
+    assert T.polarity("The Hatch app is garbage.") == "complain"

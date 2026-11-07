@@ -680,10 +680,20 @@ def affiliate_community(sidebar_text: str) -> str | None:
     self-promotion (e.g. "As an Amazon Associate, we earn from qualifying purchases"), or None."""
     t = sidebar_text or ""
     for rx in _SIDEBAR_AFFILIATE:
-        m = rx.search(t)
-        if m:
+        for m in rx.finditer(t):
+            # A rule against affiliate links ("No affiliate links", "affiliate links will be removed") is the
+            # opposite signal.
+            before, after = t[max(0, m.start() - 45):m.start()], t[m.end():m.end() + 45]
+            if _SIDEBAR_BAN_BEFORE.search(before) or _SIDEBAR_BAN_AFTER.search(after):
+                continue
             return TL.snippet(t, m.start(), m.end(), 70)
     return None
+
+
+_SIDEBAR_BAN_BEFORE = re.compile(r"\b(?:no|not|don'?t|do not|never|without|ban(?:ned|s)?|prohibit(?:ed|s)?|"
+                                 r"forbid(?:den|s)?|remove(?:d)?|disallow(?:ed)?|zero)\b[^.\n]{0,25}$", re.I)
+_SIDEBAR_BAN_AFTER = re.compile(r"^[^.\n]{0,15}\b(?:are|is|will be|get)?\s*(?:not (?:allowed|permitted)|"
+                                r"prohibited|banned|forbidden|removed|disallowed)\b", re.I)
 
 
 def promo_bias(data: dict, query: str = "", brands=()) -> dict:
@@ -839,10 +849,7 @@ def _update_claim(full_id: str, **kv) -> None:
 
 def _uncount_load(full_id: str) -> None:
     """Undo a load counted for a click that didn't navigate (the fallback load counts instead)."""
-    c = SITE.claims().get(full_id)
-    if c is not None and c.get("loads", 0) > 0:
-        c["loads"] -= 1
-        SITE._write_claim(full_id, c)
+    SITE.uncount_load(full_id)
 
 
 def _seen_add(full_id: str, items: list[dict]) -> None:

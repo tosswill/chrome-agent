@@ -40,7 +40,7 @@ Public API (signatures kept compatible with the original module):
     negated(text, start, end, window=6) -> bool
 
 A hit is {signal, weight, source, text[, link][, sponsor][, via]}. Signals:
-sponsor_read (0.5), third_party_sponsor (0.15), review_unit (0.25),
+sponsor_read (0.5), ad_tag (#ad / #sponsored / paid partnership, 0.4), third_party_sponsor (0.15), review_unit (0.25),
 use_my_link_or_code (0.15), affiliate_disclosure (0.1), giveaway (0.05;
 brand_giveaway 0.2 when it gives away the reviewed brand), self_promotion
 (0.05), rented_or_borrowed (-0.05), bought_it_myself (-0.15),
@@ -164,12 +164,18 @@ _REVIEW_UNIT = [
     r"\b(?:was|were|been|got)\s+gifted\b", r"\bgifted\s+(?:to\s+)?(?:me|us)\b",
     r"\bearly access\b", r"\bunder embargo\b", r"\bembargo\s+(?:lifts?|ends?)\b",
     r"\b(?:sent|send)\s+(?:me|us)\s+(?:this|these|the|a|an|their|its|one)\b",
+    r"\b(?:i|we)\s+(?:was|were|got|have been|'ve been|had been)\s+sent\s+(?:this|these|the|it|them|a|an|one|some)\b",
+    r"\b(?:was|were)\s+sent\s+to\s+(?:me|us)\b", r"\bsent\s+(?:to\s+)?(?:me|us)\s+for\s+review\b",
 ]
 _REVIEW_UNIT_RE = [re.compile(p, re.I) for p in _REVIEW_UNIT]
 # A free replacement, a file, or a rental is not a review unit.
 _REVIEW_EXCLUDE = re.compile(r"\b(support|warranty|replacement|replaced|rma|refund|customer service|defective|doa|"
                              r"rental|rented|renting|rent|files?|stls?|3mfs?|g-?code|tips?|tip jar|donations?|"
-                             r"donate|venmo|paypal|cash ?app|zelle|ko-?fi|buy me a coffee|super ?thanks)\b", re.I)
+                             r"donate|venmo|paypal|cash ?app|zelle|ko-?fi|buy me a coffee|super ?thanks|"
+                             # personal gifts: a baby shower, a registry, family or friends
+                             r"(?:baby )?shower|registry|birthday|christmas|grand(?:ma|pa|mother|father|parents?)|"
+                             r"in-?laws?|(?:my|our) (?:mom|dad|mum|mother|father|parents|sister|brother|aunt|uncle|"
+                             r"friends?|cousin|neighbou?r)s?)\b", re.I)
 _SENT_ME_OBJECT_EXCLUDE = re.compile(
     r"\b(?:sent|send)\s+(?:me|us)\s+(?:this|these|the|a|an|their|its|one)\s+(?:\w+\s+)?(e-?mails?|messages?|links?|dms?|"
     r"texts?|notes?|invoices?|quotes?|photos?|pictures?|pics?|videos?|codes?|repl(?:y|ies)|updates?|new one|spares?|"
@@ -180,8 +186,11 @@ _CODE_RE = re.compile(
     r"discount code|promo code|coupon code|\d+ ?% off (?:with|using)|(?:buy|get|order|grab|pick up) (?:one|yours|it|them|"
     r"a pair)? ?(?:through|using|with|from|via) (?:my|the) (?:link|affiliate))", re.I)
 _AFFILIATE_DISCLOSURE = re.compile(
-    r"(\baffiliate links?\b|\(affiliate\)|\bi (?:may )?earn (?:a )?(?:small )?commission|commission (?:from|on) "
-    r"(?:any|qualifying) purchases|as an amazon associate)", re.I)
+    r"(\baffiliate links?\b|\(affiliate\)|\b(?:i|we) (?:may |might |do |will )?(?:earn|receive|get|make) (?:a )?"
+    r"(?:small )?(?:commission|cut)|commission (?:from|on|if|when) |as an amazon associate|"
+    r"\b(?:at|for) no (?:extra|additional) cost to you)", re.I)
+# "#ad" / "#sponsored" / "paid partnership": a written sponsorship tag (disclosed brand money).
+_AD_TAG = re.compile(r"(?<![\w#])#(?:ad|ads|sponsored|paidpartnership|partner)\b|\bpaid partnership with\b", re.I)
 _GIVEAWAY = re.compile(r"\b(giveaway|give-?away|giving\s+(?:\w+\s+){0,4}?away|chance to win|enter to win|"
                        r"win (?:one|this|these|a|an|your own|it)\b|raffle|sweepstakes?)", re.I)
 # "the biggest giveaway", "a dead giveaway that ...": a telltale sign, not a prize.
@@ -214,7 +223,7 @@ _EDITORIAL = re.compile(
     r"(?:input|review|approval))", re.I)
 
 WEIGHTS = {
-    "sponsor_read": 0.5, "third_party_sponsor": 0.15, "review_unit": 0.25, "use_my_link_or_code": 0.15,
+    "sponsor_read": 0.5, "third_party_sponsor": 0.15, "review_unit": 0.25, "use_my_link_or_code": 0.15, "ad_tag": 0.4,
     "affiliate_disclosure": 0.1, "giveaway": 0.05, "brand_giveaway": 0.2, "self_promotion": 0.05,
     "rented_or_borrowed": -0.05, "bought_it_myself": -0.15, "claims_not_sponsored": -0.1,
     "editorial_independence": -0.05, "affiliate_links": 0.15, "campaign_tracking": 0.2,
@@ -351,7 +360,8 @@ def scan_text(text: str, source: str, link: str | None = None, subject: str = ""
             break
 
         # Review units, with context: replacements, files and rentals don't count.
-        if not _REVIEW_EXCLUDE.search(sent) and not _SENT_ME_OBJECT_EXCLUDE.search(sent):
+        # The exclusion checks the neighboring sentences too: "it died under warranty. They sent me a new one."
+        if not _REVIEW_EXCLUDE.search(near) and not _SENT_ME_OBJECT_EXCLUDE.search(sent):
             for rx in _REVIEW_UNIT_RE:
                 m = rx.search(sent)
                 if m and not negated(sent, m.start(), m.end()):
@@ -362,7 +372,11 @@ def scan_text(text: str, source: str, link: str | None = None, subject: str = ""
 
         # Discount codes and links: a code for an unrelated service (music library, VPN, software)
         # is a third-party sponsorship, not the reviewed brand's code.
+        if _AD_TAG.search(sent):
+            add("ad_tag", sent)
         m = _CODE_RE.search(sent)
+        if m and _AFFILIATE_DISCLOSURE.search(sent) and not re.search(r"\bcode\b", sent, re.I):
+            m = None  # "I earn a commission if you buy through my links" is the disclosure, not a pitch
         if m:
             service = _service_in(sent) or (None if _about(sent, toks) else _service_in(near))
             if service and not _about(service, toks):
