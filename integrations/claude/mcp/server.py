@@ -180,9 +180,10 @@ def reddit_open(wait_seconds: float = 0) -> str:
 @mcp.tool()
 def reddit_search(target: str, query: str, subreddit: str | None = None,
                   sort: str | None = None, time: str | None = None) -> str:
-    """Search Reddit posts in your window. query uses Reddit syntax: wrap exact phrases in double
-    quotes, and group OR terms in parentheses, since OR doesn't bind to a quoted term
-    ('"P2S" (problem OR issue OR return)', not '"P2S" problem OR issue'). subreddit restricts to one
+    """Search Reddit posts in your window. Write queries like a person would: brand plus model,
+    quoted when the model name is a common word ('"EcoFlow Delta 3"', not '"Delta 3"'), plus one or
+    two plain words ('"EcoFlow Delta 3" problems'). No boolean OR strings; if nothing comes back,
+    simplify the query rather than adding terms. subreddit restricts to one
     community (e.g. 'Xreal'). sort: relevance|new|top|comments. time: hour|day|week|month|year|all.
     With no sort/time (Reddit's defaults: relevance, all time) the query is typed into Reddit's search
     box like a person when the window is already on a Reddit page; otherwise the search URL is loaded.

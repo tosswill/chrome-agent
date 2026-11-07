@@ -26,7 +26,7 @@ R=~/.claude/skills/reddit-research/scripts/reddit_tab.py
 $R open --wait                                       # -> {"target": "<ID>"}
 $R search <ID> '"Even G2"'                           # typed into the search box when the window is on Reddit (Reddit's defaults: relevance, all time)
 $R search <ID> '"Even G2"' --sort new --time month   # filters (or --time year) -> loads the search URL
-$R search <ID> '"P2S" (problem OR issue OR return)' --sub BambuLab
+$R search <ID> '"Bambu P2S" problems' --sub BambuLab
 $R thread <ID> '<post url>' [--max 15] [--replies [N]] [--expand N] [--brand NAME ...]
 $R back <ID>                                         # browser back (rarely needed: thread does it for you)
 $R tally <ID> "Core One" MK4S "A1 mini" [--alias "Core One=C1,Core 1; MK4S=MK 4S"] [--exclude-op]
@@ -38,7 +38,7 @@ $R nav <ID> '<reddit url>' | eval <ID> '<js>'        # escape hatches: paced loa
 
 - **Costs:** `search`, `thread` and `nav` are one page load each. `open`, `back` (in-app restore), `list`, `tally` and `shot` cost nothing. If `back` ever has to fetch the page again it says so (`restored`) and counts it.
 - **Errors** are JSON (`{"error": "..."}`) with exit code 1. Quote URLs and queries, and wrap product names in double quotes for an exact match.
-- **Query syntax:** Reddit's `OR` doesn't bind to a quoted term. Group it: `"P2S" (problem OR issue OR return)`, not `"P2S" problem OR issue OR return` (that matched Pokemon pins and a racing game). Keep issues searches to the product's subreddit plus the category subs.
+- **Queries:** **Write queries the way a person would type them:** brand plus model, quoted when the model name is a common word (`"EcoFlow Delta 3"`, not `"Delta 3"`; `"Bambu P2S"`), plus one or two plain words (`"EcoFlow Delta 3" problems`, `"EcoFlow Delta 3" died`). No boolean `OR` strings. If a search returns nothing, simplify it (fewer words, drop the quotes) rather than adding terms. Keep issues searches to the product's subreddit plus the category subs.
 - **How `search` runs:** the first search in a window loads the search URL (the window starts blank). Later searches with no `--sort`/`--time` are typed into Reddit's search box with human key timing; `--sort`, `--time` or a `--sub` other than the one you're in load the URL. `page.via` says which (`typed`, `url`, or `url (<why>)`). Use `--time year` for recent-only results.
 - **Search results** (`posts`): `id`, `url`, `title`, `sub`, `author`, `score`, `comments`, `created`, and `match`. `match: "comment"` means a comment in that thread matched: `title` is still the real post title, and the matching comment is in `snippet` (`snippet_link`). Use `comments`, `score` and `created` to pick threads before spending a load; skip 1–2 comment posts unless they're the only source.
 - **Opening several threads from one search:** call `thread` for each pick. It clicks the result when it's on screen; when you're on a thread opened from the last search and the next pick was in those results, it goes back first (mouse back button, no page load) and clicks it. `page.opened` says what happened: `clicked`, `clicked (after back)`, `clicked (second try)`, `url (click missed)`, `url` or `already open`. A thread URL with `?sort=top` forces top order and loads by URL.
@@ -70,7 +70,7 @@ Use a **full landscape pass** when the user names no products, asks what the opt
 
 Write a short plan and count page loads against the budget:
 
-- Per product or topic: **one site-wide search**, **one recency search** (`--sort new --time month`), and, if it has its own subreddit, **one in-subreddit issues search** (`"<product>" (problem OR issue OR return OR bug)` with `--sub`).
+- Per product or topic: **one site-wide search**, **one recency search** (`--sort new --time month`), and, if it has its own subreddit, **one in-subreddit issues search** (`"<brand> <model>" problems`, or `died`/`returned`, with `--sub`).
 - Then **2–3 threads per product**, favoring high engagement and a spread of dates and communities.
 - When Reddit is one source among several, trim this to what matters most.
 - **Splitting a budget:** about a third searches, the rest threads, 2–3 threads per search (going back to the results is free). For 12–15 loads: about 4 searches (decision threads, a second angle or subreddit, a recency search, a complaints search) and 8–10 threads. For 10: 3 searches and 7 threads.
