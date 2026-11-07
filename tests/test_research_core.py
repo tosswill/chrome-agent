@@ -62,6 +62,7 @@ def test_ensure_visible_fails_fast_when_hidden(monkeypatch):
     monkeypatch.setattr(C.Site, "evaluate", lambda self, t, e, timeout=30: next(states))
     monkeypatch.setattr(C, "pause", lambda *a, **k: None)
     monkeypatch.setattr(C.Site, "place_windows", lambda self: None)
+    monkeypatch.setattr(C.Site, "screen_state", staticmethod(lambda: None))
     with pytest.raises(C.Fail, match="hidden"):
         site.ensure_visible("T")
 
@@ -74,6 +75,7 @@ def test_ensure_visible_tolerates_brief_hidden(monkeypatch):
     monkeypatch.setattr(C.Site, "evaluate", lambda self, t, e, timeout=30: next(states))
     monkeypatch.setattr(C, "pause", lambda *a, **k: None)
     monkeypatch.setattr(C.Site, "place_windows", lambda self: None)
+    monkeypatch.setattr(C.Site, "screen_state", staticmethod(lambda: None))
     site.ensure_visible("T")  # no raise
 
 
@@ -114,3 +116,39 @@ def test_lone_tab_reuses_only_a_blank_tab_alone_in_its_window(monkeypatch):
     tabs = [{"full_id": k} for k in windows]
     assert site._lone_tab([{"full_id": "C"}], tabs) is None   # shares window 2 with B
     assert site._lone_tab([{"full_id": "C"}, {"full_id": "A"}], tabs) == "A"
+
+
+def _fake_ioreg(monkeypatch, users):
+    import plistlib
+    import subprocess
+    import research_core as C
+    out = plistlib.dumps({"IOConsoleUsers": users})
+    monkeypatch.setattr(C.shutil, "which", lambda name: "/usr/sbin/ioreg")
+    monkeypatch.setattr(C.subprocess, "run",
+                        lambda *a, **k: subprocess.CompletedProcess(a, 0, stdout=out, stderr=b""))
+    return C
+
+
+def test_screen_state_locked(monkeypatch):
+    C = _fake_ioreg(monkeypatch, [{"kCGSSessionOnConsoleKey": True, "CGSSessionScreenIsLocked": True}])
+    assert C.Site.screen_state() == "locked"
+
+
+def test_screen_state_unlocked_ignores_other_sessions(monkeypatch):
+    import ctypes
+    C = _fake_ioreg(monkeypatch, [{"kCGSSessionOnConsoleKey": True},
+                                  {"kCGSSessionOnConsoleKey": False, "CGSSessionScreenIsLocked": True}])
+    monkeypatch.setattr(ctypes, "CDLL", lambda *a, **k: (_ for _ in ()).throw(OSError("no CG")))
+    assert C.Site.screen_state() is None
+
+
+def test_preflight_screen_blocks_open_and_hidden_message(monkeypatch):
+    import pytest
+    import research_core as C
+    site = C.Site.__new__(C.Site)
+    monkeypatch.setattr(C.Site, "screen_state", staticmethod(lambda: "locked"))
+    with pytest.raises(C.Fail, match="screen is locked"):
+        site.open_window()
+    monkeypatch.setattr(C.Site, "evaluate", lambda self, t, e, timeout=30: "hidden")
+    with pytest.raises(C.Fail, match="unlock"):
+        site.ensure_visible("T")

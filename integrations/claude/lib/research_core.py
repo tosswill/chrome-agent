@@ -364,6 +364,43 @@ class Site:
             pause(0.8)  # let Chrome notice it is visible again
         return {"workspace": ws, "moved": moved, "shown": shown}
 
+    SCREEN_MSG = ("the screen is {why}, so Chrome treats every research window as hidden. Ask the user to "
+                  "wake and unlock the computer (with the research monitor on), then retry.")
+
+    @staticmethod
+    def screen_state() -> str | None:
+        """macOS preflight: 'locked' when the login session's screen is locked, 'asleep' when every
+        display is asleep, else None (also None off macOS or when the check itself fails)."""
+        if not shutil.which("ioreg"):
+            return None
+        try:
+            import plistlib
+            out = subprocess.run(["ioreg", "-n", "Root", "-d1", "-a"], capture_output=True,
+                                 timeout=5).stdout
+            root = plistlib.loads(out)
+            root = root[0] if isinstance(root, list) else root
+            for user in root.get("IOConsoleUsers") or []:
+                if user.get("kCGSSessionOnConsoleKey") and user.get("CGSSessionScreenIsLocked"):
+                    return "locked"
+        except (OSError, subprocess.SubprocessError, ValueError, AttributeError, IndexError):
+            pass
+        try:
+            import ctypes
+            import ctypes.util
+            cg = ctypes.CDLL(ctypes.util.find_library("CoreGraphics") or "")
+            ids, n = (ctypes.c_uint32 * 16)(), ctypes.c_uint32()
+            if cg.CGGetOnlineDisplayList(16, ids, ctypes.byref(n)) == 0 and n.value:
+                if all(cg.CGDisplayIsAsleep(ids[i]) for i in range(n.value)):
+                    return "asleep"
+        except (OSError, AttributeError):
+            pass
+        return None
+
+    def preflight_screen(self) -> None:
+        why = self.screen_state()
+        if why:
+            raise Fail(self.SCREEN_MSG.format(why=why))
+
     HIDDEN_MSG = ("the research window is hidden (minimized, on another desktop/workspace, or fully covered). "
                   "Chrome barely draws hidden windows, so scrolling stalls and pages load very slowly. Ask the "
                   "user to bring the research browser window into view, then retry.")
@@ -377,9 +414,11 @@ class Site:
             except Fail:
                 return None
         if vis() == "hidden":
+            self.preflight_screen()
             self.place_windows()
             pause(grace)
             if vis() == "hidden":
+                self.preflight_screen()
                 raise Fail(self.HIDDEN_MSG)
 
     def drift(self, target: str, max_px: float = 40, area: dict | None = None) -> None:
@@ -669,6 +708,7 @@ class Site:
     def open_window(self, wait_seconds: float = 0) -> dict:
         """Claim a new window. Restores the instance if it is not running.
         With wait_seconds, waits for a free slot."""
+        self.preflight_screen()
         deadline = time.time() + wait_seconds
         while True:
             with self._locked("claims.lock"):
