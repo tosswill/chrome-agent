@@ -39,6 +39,7 @@ If the `youtube_*` tools aren't available, say so and stop. Don't fall back to w
 Use a **full landscape pass** when no products are named, the user asks what the options are, or the question is about a category. Use a **light pass** (2–3 page loads) when products are given, to check for a missing major alternative, and report it under "Also consider".
 
 1. **Search for roundups and comparisons.** **Start with the use case**, phrased as a buying question: "best <product> for <task>" or "which <product> for <task>" (a bare "<product> for <task>" returns how-to videos). Then "best <category> <year>", "buyer's guide", "comparison", "tier list", "<product> vs", "<product> alternatives".
+   - **Name products by brand plus model** (`"EcoFlow Delta 3"`, not `"Delta 3"`): bare model names are often common words. Keep queries short and natural, the way a person types them, with no boolean `OR` strings.
    - Use `upload: year`, and `sort: views` once at most, since it can pull in off-topic viral videos.
    - Skip AI listicle channels (`likely_ai_listicle`: future-dated names or titles, generic "Picks/Reviews Club/Top5Lab" names, "Top 10" titles, slideshow thumbnails) and Amazon-influencer clips (`amazon_influencer`: storefront links, "#amazonfinds", very short reviews of unbranded kits). Don't count their mentions.
 2. **Read 2–4 roundup or comparison videos:** chapters often list the products, and transcript grep for "best", "pick", "alternative", "instead", "vs" shows the verdicts.

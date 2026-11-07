@@ -21,7 +21,7 @@ If the `reddit_*` tools aren't available, say so and stop. Don't fall back to we
 ## Tools
 
 - `reddit_open(wait_seconds?)` → `{"target": ID}`. Pass the ID to every call. If all windows are busy, retry with `wait_seconds: 45` a few times, then tell the user.
-- `reddit_search(target, query, subreddit?, sort?, time?)` → `{page, posts}`. Wrap product names in double quotes for an exact match. Reddit's `OR` doesn't bind to a quoted term: write `"P2S" (problem OR issue OR return)`, not `"P2S" problem OR issue`.
+- `reddit_search(target, query, subreddit?, sort?, time?)` → `{page, posts}`. **Write queries the way a person would type them:** brand plus model, quoted when the model name is a common word (`"EcoFlow Delta 3"`, not `"Delta 3"`; `"Bambu P2S"`), plus one or two plain words (`"EcoFlow Delta 3" problems`, `"EcoFlow Delta 3" died`). No boolean `OR` strings. If a search returns nothing, simplify it (fewer words, drop the quotes) rather than adding terms. Keep issues searches to the product's subreddit plus the category subs.
   - With no `sort`/`time` (Reddit's defaults: relevance, all time) the query is typed into Reddit's search box like a person once the window is on Reddit; filters (e.g. `time: "year"` for recent-only) or a different subreddit load the search URL. `page.via` says which.
   - Each post has `id`, `url`, `title`, `sub`, `author`, `score`, `comments`, `created` and `match`. `match: "comment"` means a comment matched: `title` is the real post title and the comment is in `snippet`. Use `comments`, `score` and `created` to pick threads before spending a load.
 - `reddit_thread(target, url, max_comments?, replies?, expand?, brands?)`: opens the thread by clicking it in the results (going back to this window's last results first when needed, which is free), then reads down it like a person. `page.opened` says how (`clicked`, `clicked (after back)`, `url (click missed)`, `url`, ...). Call it for several threads from the same search.
@@ -51,7 +51,7 @@ Use a **full pass** when no products are named or the question is about a catego
 
 1. **Claim a window** (`reddit_open`).
 2. **Plan** and count page loads:
-   - Per product: a site-wide search, a recency search (`sort: "new"`, `time: "month"`), and an in-subreddit issues search (`"<product>" (problem OR issue OR return OR bug)`).
+   - Per product: a site-wide search, a recency search (`sort: "new"`, `time: "month"`), and an in-subreddit issues search (`"<brand> <model>" problems`, or `died`/`returned`).
    - Then 2–3 threads per product, with a spread of dates and communities.
    - Splitting a budget: about a third searches, the rest threads. For 12–15 loads: about 4 searches and 8–10 threads; for 10: 3 searches and 7 threads.
 3. **Search, then open several threads from the results** with `reddit_thread`; it goes back to the results by itself.
