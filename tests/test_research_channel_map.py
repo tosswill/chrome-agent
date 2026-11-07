@@ -136,3 +136,20 @@ def test_registry_describe_cli_and_topic_list(monkeypatch, tmp_path):
     listed = Y._dispatch("registry", ["list", "--topic", "carpet cleaner machines"])
     assert [c["channel"] for c in listed["channels"]] == ["Project Farm"]
     assert Y._dispatch("registry", ["list", "--topic", "espresso"])["channels"] == []
+
+
+def test_mixed_pin_and_observations(monkeypatch, tmp_path):
+    monkeypatch.setattr(Y, "CHANNELS", tmp_path / "reg.json")
+    assert Y._dispatch("registry", ["pin", "Linus", "Tech", "Tips", "mixed", "--note", "discloses"])["pin"]["verdict"] == "mixed"
+    out = Y._dispatch("registry", ["observe", "Tyler", "Stalman", "--topic", "wireless mics",
+                                   "--note", "DJI-sponsored, label shown", "--source", "https://youtu.be/x"])
+    assert out["observations"][0]["source"] == "https://youtu.be/x"
+    Y._dispatch("registry", ["observe", "Tyler", "Stalman", "--topic", "wireless mics", "--note", "DJI-sponsored, label shown"])
+    reg = CM.registry_load(tmp_path / "reg.json")
+    assert len(CM.registry_find(reg, "Tyler Stalman")[1]["observations"]) == 1  # deduplicated
+    assert CM.registry_lookup(reg, "Tyler Stalman", "x")["observations"]
+
+
+def test_brand_supplied_light_testing_quadrant():
+    r = CM.rate_channel("Mid", [rec("v", ["review_unit", "brand_giveaway"], "We tested it. " * 30)], {}, "x")
+    assert 2.5 <= r["axes"]["independence"] < 3.5 and CM.quadrant(r) == "brand-supplied, light testing"

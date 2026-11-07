@@ -410,10 +410,14 @@ def youtube_registry(action: str, channel: str | None = None, verdict: str | Non
     """Saved channel ratings (dated, per topic; older than 180 days = stale), what each channel covers,
     and the user's pins. action: "list" (with topic: channels rated for it or whose covers tags fit it),
     "show" (one channel), "describe" (store `covers`, one plain sentence on what the channel generally
-    reviews, plus category `tags`), or "pin" with verdict "trusted", "distrusted" or "clear" and a note.
+    reviews, plus category `tags`), "observe" (a dated `note` on what a video showed, for `topic`), or "pin"
+    with verdict "trusted", "mixed" (sponsored and independent work, clearly disclosed), "distrusted" or
+    "clear" and a note.
     Only pin when the user says so. No page load."""
     if action == "describe":
         return _reddit(youtube_tab.registry, "describe", channel, None, covers or "", ", ".join(tags or []))
+    if action == "observe":
+        return _reddit(youtube_tab.registry, "observe", channel, None, note, topic)
     return _reddit(youtube_tab.registry, action, channel, verdict, note, topic)
 
 
