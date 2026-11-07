@@ -397,6 +397,26 @@ def _ensure_quiet(full_id: str) -> dict:
     return fixed
 
 
+def _quiet_after(fn):
+    """After a command that works on a video page, leave fullscreen and re-mute if needed (checked
+    once at the end, not before every command)."""
+    import functools
+
+    @functools.wraps(fn)
+    def wrapper(target, *args, **kwargs):
+        try:
+            return fn(target, *args, **kwargs)
+        finally:
+            try:
+                fid = SITE.resolve(target)
+                if "/watch" in (SITE.evaluate(fid, "location.pathname") or "") or \
+                        SITE.evaluate(fid, "!!document.fullscreenElement"):
+                    _ensure_quiet(fid)
+            except Fail:
+                pass
+    return wrapper
+
+
 def _clear_ads(full_id: str, timeout: float | None = None, log: _AdLog | None = None) -> dict:
     """Wait out any ad without touching the player (no pause, no seek, no k). Skip is clicked after a
     human-like delay when offered; a paused ad is resumed with one click on the play button. Then make
@@ -589,14 +609,11 @@ _PUNCT = {" ": ("Space", 32, False), "-": ("Minus", 189, False), "_": ("Minus", 
           ")": ("Digit0", 48, True)}
 
 
-def _type_text(full_id: str, text: str, focus_js: str | None = None) -> bool:
+def _type_text(full_id: str, text: str) -> None:
     """Type `text` key by key with uneven, human timing (short gaps, longer after spaces, rare pauses).
-    With `focus_js`, check before every key that the intended field still has focus, and stop at
-    once if not: a stray key on a watch page is a player shortcut (f = fullscreen, m = mute, k = play,
-    c = captions, t = theater, i = miniplayer, digits = seek). Returns False if it stopped early."""
+    Callers check focus before typing and the field's value afterwards: a stray key on a watch page
+    is a player shortcut (f = fullscreen, m = mute, k = play, c = captions, t = theater)."""
     for ch in text:
-        if focus_js and not SITE.evaluate(full_id, focus_js):
-            return False
         if ch.isascii() and ch.isalpha():
             code, vk, shift = f"Key{ch.upper()}", ord(ch.upper()), ch.isupper()
         elif ch.isascii() and ch.isdigit():
@@ -613,7 +630,6 @@ def _type_text(full_id: str, text: str, focus_js: str | None = None) -> bool:
         if random.random() < 0.04:
             gap += random.uniform(0.4, 1.2)  # a moment's hesitation
         time.sleep(gap)
-    return True
 
 
 _SEARCH_BOX = "input[name='search_query'], textarea[name='search_query']"
@@ -639,11 +655,10 @@ def _typed_search(full_id: str, query: str) -> tuple[dict | None, str]:
         mac = sys.platform == "darwin"
         _key(full_id, "a", "KeyA", 65, modifiers=4 if mac else 2, commands=["selectAll"])
         pause(random.uniform(0.15, 0.4), fuzz=0)
-    if not _type_text(full_id, query, focus_js=focus_js):
-        _ensure_quiet(full_id)
-        return None, "url (search box lost focus while typing)"
+    _type_text(full_id, query)
     pause(random.uniform(0.3, 0.9), fuzz=0)
-    if (SITE.evaluate(full_id, box_value) or "").strip() != query.strip():
+    if not SITE.evaluate(full_id, focus_js) or (SITE.evaluate(full_id, box_value) or "").strip() != query.strip():
+        _ensure_quiet(full_id)  # some keys may have reached the player
         return None, "url (typing failed)"
     loads = SITE._count_load(full_id)
     SITE._pace()
@@ -753,7 +768,6 @@ def search(target: str, query: str, sort: str = "relevance", upload: str | None 
     url = search_url(query, sort, upload)  # validates sort/upload
     full_id = SITE.resolve(target)
     SITE.ensure_visible(full_id)  # fail fast in a hidden window
-    _ensure_quiet(full_id)
     page, via = None, "url"
     if SORTS[sort] or upload:
         via = "url (filters)"  # filters are set through the URL, not the filter menu
@@ -835,6 +849,7 @@ _VIDEO_READY_JS = ("document.readyState === 'complete' && !!window.ytInitialPlay
                    "!!document.querySelector('#movie_player') && !!document.querySelector('ytd-watch-metadata #title h1')")
 
 
+@_quiet_after
 def video(target: str, url: str) -> dict:
     vid = video_id_of(url)
     if vid and not re.search(r"/shorts/", url):
@@ -843,7 +858,6 @@ def video(target: str, url: str) -> dict:
         url = f"https://www.youtube.com/watch?v={url}"
     full_id = SITE.resolve(target)
     SITE.ensure_visible(full_id)  # fail fast in a hidden window
-    _ensure_quiet(full_id)
     page, opened = (None, "url")
     if vid and "/shorts/" not in url:
         page, opened = _open_by_click(full_id, vid)
@@ -886,11 +900,11 @@ def video(target: str, url: str) -> dict:
             "muted": muted}
 
 
+@_quiet_after
 def transcript(target: str, grep: list[str] | None = None, context: int = 0,
                start: str | None = None, end: str | None = None, out_dir: str | None = None) -> dict:
     full_id = SITE.resolve(target)
     SITE.ensure_visible(full_id)  # fail fast in a hidden window
-    _ensure_quiet(full_id)
     SITE.touch(full_id)
     vid = _require_watch(full_id)
     ok, reason = _open_transcript(full_id)
@@ -956,10 +970,10 @@ def transcript(target: str, grep: list[str] | None = None, context: int = 0,
     return res
 
 
+@_quiet_after
 def comments(target: str, max_comments: int = 20) -> dict:
     full_id = SITE.resolve(target)
     SITE.ensure_visible(full_id)  # fail fast in a hidden window
-    _ensure_quiet(full_id)
     vid = _require_watch(full_id)
     SITE.touch(full_id)
     if SITE.scroll_into_view(full_id, "ytd-comments#comments") is None:
@@ -1149,6 +1163,7 @@ def _scan_points(lo: float, hi: float, samples: int) -> list[float]:
     return [lo + span * (i + 0.5) / n for i in range(n)]
 
 
+@_quiet_after
 def scan(target: str, rng: str, samples: int = 4, keep: int = 3, out_dir: str | None = None,
          full: bool = False) -> dict:
     """Y16: sample a time range with a few short bursts and rank the frames by graphic-ness (charts,
@@ -1161,7 +1176,6 @@ def scan(target: str, rng: str, samples: int = 4, keep: int = 3, out_dir: str | 
         raise Fail("--scan range must end after it starts")
     full_id = SITE.resolve(target)
     SITE.ensure_visible(full_id)  # fail fast in a hidden window
-    _ensure_quiet(full_id)
     vid = _require_watch(full_id)
     SITE.touch(full_id)
     SITE.scroll_to_top(full_id)
@@ -1191,13 +1205,13 @@ def scan(target: str, rng: str, samples: int = 4, keep: int = 3, out_dir: str | 
                       "not a judgment. Look at each kept image before using it.")}
 
 
+@_quiet_after
 def frame(target: str, at, out: str | None = None, out_dir: str | None = None,
           burst: float = 0, full: bool = False):
     """Jump to `at` (one timestamp, or a list), wait out ads and buffering, capture the player.
     Returns one result, or a list for several timestamps."""
     full_id = SITE.resolve(target)
     SITE.ensure_visible(full_id)  # fail fast in a hidden window
-    _ensure_quiet(full_id)
     vid = _require_watch(full_id)
     SITE.touch(full_id)
     times = at if isinstance(at, (list, tuple)) else [at]
@@ -1251,7 +1265,6 @@ def channel(target: str, url: str) -> dict:
         return {"page": page, "channel": None}
     full_id = SITE.resolve(target)
     SITE.ensure_visible(full_id)  # fail fast in a hidden window
-    _ensure_quiet(full_id)
     ch = SITE.evaluate(full_id, _js("channel.js"))
     if ch:
         lst, why = S.likely_ai_listicle("", ch.get("name"), ch.get("handle"), ch.get("videos"))
