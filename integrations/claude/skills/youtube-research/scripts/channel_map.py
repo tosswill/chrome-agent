@@ -31,7 +31,7 @@ STALE_DAYS = 180
 # Penalty per signal category (each counts once per video). Third-party sponsors (a VPN read) and
 # generic store affiliate links barely affect whether the review itself is independent.
 _INDEP_PENALTY = {
-    "brand_owned_channel": 4.0, "sponsor_read": 2.5, "paid_promotion_label": 2.0, "review_unit": 1.5,
+    "brand_owned_channel": 4.0, "sponsor_read": 2.5, "paid_promotion_label": 2.0, "ad_tag": 2.0, "review_unit": 1.5,
     "brand_code_or_link": 1.0, "brand_affiliate_links": 1.0, "brand_giveaway": 1.0, "campaign_tracking": 0.5,
     "use_my_link_or_code": 0.5, "affiliate_links": 0.3, "shopping_commission": 0.3, "third_party_sponsor": 0.3,
     "giveaway": 0.3, "rented_or_borrowed": 0.0, "self_promotion": 0.1,
@@ -40,16 +40,16 @@ _INDEP_BONUS = {"bought_it_myself": 0.5, "bought_something_myself": 0.3, "claims
                 "editorial_independence": 0.6}
 
 # --- transparency -------------------------------------------------------------------------------
-_MONEY = {"sponsor_read", "review_unit", "paid_promotion_label", "brand_code_or_link", "brand_affiliate_links",
+_MONEY = {"sponsor_read", "review_unit", "paid_promotion_label", "ad_tag", "brand_code_or_link", "brand_affiliate_links",
           "affiliate_links", "use_my_link_or_code", "shopping_commission", "brand_giveaway", "campaign_tracking"}
-_DISCLOSED_BY = {  # money signal -> signals that count as its disclosure
-    "affiliate_links": {"affiliate_disclosure"},
-    "shopping_commission": {"affiliate_disclosure", "paid_promotion_label"},
-    "use_my_link_or_code": {"affiliate_disclosure", "sponsor_read", "paid_promotion_label"},
-    "brand_code_or_link": {"sponsor_read", "paid_promotion_label", "affiliate_disclosure"},
-    "brand_affiliate_links": {"sponsor_read", "paid_promotion_label", "affiliate_disclosure"},
-    "campaign_tracking": {"sponsor_read", "paid_promotion_label"},
-    "brand_giveaway": {"sponsor_read", "paid_promotion_label", "review_unit"},
+_DISCLOSED_BY = {  # money signal -> signals that count as its disclosure ("#ad" discloses any of them)
+    "affiliate_links": {"affiliate_disclosure", "ad_tag"},
+    "shopping_commission": {"affiliate_disclosure", "paid_promotion_label", "ad_tag"},
+    "use_my_link_or_code": {"affiliate_disclosure", "sponsor_read", "paid_promotion_label", "ad_tag"},
+    "brand_code_or_link": {"sponsor_read", "paid_promotion_label", "affiliate_disclosure", "ad_tag"},
+    "brand_affiliate_links": {"sponsor_read", "paid_promotion_label", "affiliate_disclosure", "ad_tag"},
+    "campaign_tracking": {"sponsor_read", "paid_promotion_label", "ad_tag"},
+    "brand_giveaway": {"sponsor_read", "paid_promotion_label", "review_unit", "ad_tag"},
 }
 _UNDISCLOSED_PENALTY = {"brand_code_or_link": 2.5, "brand_affiliate_links": 2.5, "campaign_tracking": 1.5,
                         "brand_giveaway": 1.5, "use_my_link_or_code": 1.0, "affiliate_links": 1.0,
@@ -57,7 +57,7 @@ _UNDISCLOSED_PENALTY = {"brand_code_or_link": 2.5, "brand_affiliate_links": 2.5,
 
 # --- rigor --------------------------------------------------------------------------------------
 _UNIT = (r"(?:%|percent|degrees?|°|psi|watts?|amps?|volts?|mah|wh|kwh|db|decibels?|lbs?|pounds?|ounces?|oz|"
-         r"grams?|kg|ml|milliliters?|liters?|litres?|gallons?|gal|inch(?:es)?|mm|cm|feet|ft|seconds?|secs?|"
+         r"grams?|kg|ml|milliliters?|liters?|litres?|gallons?|gal|inch(?:es)?|mm|cm|meters?|metres?|feet|ft|seconds?|secs?|"
          r"minutes?|mins?|hours?|rpm|cfm|air ?watts|pa\b|kpa|lux|nits|fps|mph)")
 _MEASURE = re.compile(r"\b\d+(?:[.,]\d+)?\s*" + _UNIT, re.I)
 _PATTERNS = {
@@ -67,7 +67,12 @@ _PATTERNS = {
         r"(?:test|trial|run) (?:number|#)\s*\d|averaged|on average|repeat(?:ed)? (?:the|this) test|"
         r"to keep (?:it|things) fair|head[- ]to[- ]head)\b", re.I),
     "testing_language": re.compile(r"\b(?:we|i) (?:tested|measured|weighed|timed|compared|ran (?:each|the|a) test)\b"
-                                   r"|\b(?:test results?|the results|winner of this test|scored|ranked)\b", re.I),
+                                   r"|\b(?:test results?|(?:our|my) results|winner of this test|scored|ranked)\b", re.I),
+    "study_citation": re.compile(r"\b(?:a|one|this|the|that|another) (?:\d{4} )?(?:study|studies|paper|"
+                                 r"clinical trial|meta-analysis)\b|\bresearch(?:ers)? (?:shows?|showed|found|suggests?)\b|"
+                                 r"\bpublished in\b|\bpeer[- ]reviewed\b|\bamerican academy of pediatrics\b|"
+                                 r"\baccording to (?:the )?(?:research|study|guidelines?)\b|(?-i:\b(?:AAP|NHS|CDC)\b)",
+                                 re.I),
     "named_test": re.compile(r"\b(?:stain|suction|dry(?:ing)?|dry time|water recovery|noise|edge|pet hair|"
                              r"endurance|durability|battery|run ?time|drop|heat|load|speed|torque|accuracy|"
                              r"scratch|waterproof|range|brightness|latency) tests?\b", re.I),
@@ -81,7 +86,14 @@ _PATTERNS = {
                              r"multimeter|watt ?meter|kill a watt|anemometer|manometer|dyno|stopwatch|"
                              r"colorimeter|moisture meter|lux meter)\b", re.I),
     "method": re.compile(r"\b(?:methodology|how (?:we|i) test|test(?:ing)? (?:procedure|protocol|method)|"
-                         r"here'?s how (?:the|this) test works|to make (?:it|this) a fair test)\b", re.I),
+                         r"here'?s how (?:the|this) test works|to make (?:it|this) a fair test|"
+                         r"(?:tested|measured|recorded) (?:their|the|each|its|every) [\w ]{0,20}?from (?:\d+|one|two|"
+                         r"three) (?:meters?|metres?|feet|foot|ft|m)\b|from (?:\d+|one|two|three) (?:meters?|metres?|"
+                         r"feet|foot) away|(?:room|ambient|background) (?:baseline|reading|noise reading)|took (?:\d+|two|three|"
+                         r"several) readings)", re.I),
+    "data_table": re.compile(r"\b(?:(?:you can )?see (?:it )?in|in|see|pause the video[\w ,]{0,20}?(?:in|see)) "
+                             r"(?:this|my|our|the results?) (?:table|chart|graph|spreadsheet)\b|"
+                             r"\b(?:in|see) the (?:table|chart|graph) (?:below|above|here|on screen)\b", re.I),
     "long_term": re.compile(r"\b(?:\d+|six|several|a few) (?:months?|years?) (?:later|of use|in|of owning)\b"
                             r"|\blong[- ]term (?:test|review|update)\b|\bafter (?:a|one|two|\d+) years?\b", re.I),
     "spec_sheet": re.compile(r"\b(?:according to the (?:manufacturer|brand|company)|features include|"
@@ -145,10 +157,22 @@ def video_transparency(rec: dict, length_s: float | None = None) -> tuple[float 
     return _clamp(score), why
 
 
+_FIRST_PERSON_USE = re.compile(r"\b(?:i|we)(?:'ve| have| had)? (?:used?|using|measured|tested|put|set up|grabbed|"
+                               r"took|placed|hooked up|ran|got out)\b|\b(?:my|our) (?:sound|decibel|db) (?:meter|reader)\b",
+                               re.I)
+_SENT = re.compile(r"(?<=[.!?])\s+")
+
+
 def rigor_hits(text: str) -> dict[str, int]:
     out = {"measurement": len(_MEASURE.findall(text or ""))}
     for k, rx in _PATTERNS.items():
-        out[k] = len(rx.findall(text or ""))
+        if k == "instrument":
+            # Only the speaker's own use counts: "I used a sound meter", not "download a sound meter app".
+            sents = _SENT.split(text or "")
+            out[k] = sum(1 for i, x in enumerate(sents) if rx.search(x) and _FIRST_PERSON_USE.search(
+                " ".join(sents[max(0, i - 1):i + 1])))
+        else:
+            out[k] = len(rx.findall(text or ""))
     return out
 
 
@@ -164,12 +188,19 @@ def video_rigor(rec: dict) -> tuple[float | None, dict]:
     score = (min(2.5, per10["measurement"] * 0.08) + min(1.2, per10["controlled_test"] * 0.4)
              + min(1.2, per10["testing_language"] * 0.15)
              + min(1.0, per10["named_test"] * 0.25)
-             + min(1.0, hits["claim_check"] * 0.5) + min(1.0, per10["comparative"] * 0.3) + (0.6 if hits["instrument"] else 0)
-             + (0.4 if hits["method"] else 0) + (0.4 if hits["long_term"] else 0)
+             + min(1.0, hits["claim_check"] * 0.5) + min(1.0, per10["comparative"] * 0.3)
+             + (0.6 if hits["data_table"] else 0) + min(0.6, hits["method"] * 0.3) + (0.6 if hits["instrument"] else 0)
+             + (0.4 if hits["long_term"] else 0)
              - min(1.0, per10["spec_sheet"] * 0.3))
     if rec.get("likely_ai_listicle"):
         score -= 2
-    return _clamp(score), {"hits": hits, "minutes": round(minutes, 1)}
+    hands_on = (hits["testing_language"] + hits["named_test"] + hits["claim_check"] + hits["controlled_test"]
+                + hits["instrument"] + hits["method"])
+    kind = None
+    if hits["study_citation"] >= 2 and hands_on <= 1:
+        # Numbers quoted from studies or guidelines: an evidence explainer, not product testing.
+        score, kind = min(score, 1.5), "evidence explainer (cites research; no hands-on testing)"
+    return _clamp(score), {"hits": hits, "minutes": round(minutes, 1), **({"kind": kind} if kind else {})}
 
 
 def topic_terms(topic: str) -> list[str]:
@@ -235,7 +266,7 @@ def authority(rigor: float | None, trust: int | None, fcs: float | None) -> floa
 def rate_channel(name: str, recs: list[dict], info: dict | None = None, topic: str = "",
                  cited: dict[str, int] | None = None) -> dict:
     info = info or {}
-    per_video, ind, tra, rig, why_i, why_t = [], [], [], [], [], []
+    per_video, ind, tra, rig, why_i, why_t, notes_kind = [], [], [], [], [], [], []
     for r in recs:
         i, wi = video_independence(r)
         t, wt = video_transparency(r)
@@ -245,6 +276,8 @@ def rate_channel(name: str, recs: list[dict], info: dict | None = None, topic: s
         rig.append(g)
         why_i += [f"{w} ({r.get('url')})" for w in wi]
         why_t += [f"{w} ({r.get('url')})" for w in wt]
+        if gd.get("kind"):
+            notes_kind.append(gd["kind"])
         per_video.append({"url": r.get("url"), "video_id": video_id(r.get("url")), "title": r.get("title"),
                           "published": r.get("age"), "transcript": g is not None,
                           "independence": i, "transparency": t,
@@ -262,6 +295,8 @@ def rate_channel(name: str, recs: list[dict], info: dict | None = None, topic: s
         notes.append("transparency: nothing to disclose in the sample")
     if with_tx == 0:
         notes.append("rigor unknown: no transcript read for this channel")
+    notes += sorted(set(notes_kind))
+    explainer = bool(recs) and len(notes_kind) >= max(1, len(recs) / 2)
     if any(r.get("likely_ai_listicle") or r.get("amazon_influencer") for r in recs):
         notes.append("listicle or Amazon-influencer signals")
     return {
@@ -272,19 +307,29 @@ def rate_channel(name: str, recs: list[dict], info: dict | None = None, topic: s
                     "recent_uploads_seen": len(info.get("recent_titles") or [])},
         "sample": {"videos": len(recs), "with_transcript": with_tx}, "confidence": conf,
         "reasons": {"independence": why_i[:6], "transparency": why_t[:6]},
-        "notes": notes, "videos": per_video,
+        "notes": notes, "videos": per_video, **({"kind": "evidence explainer"} if explainer else {}),
         **({"covers_draft": draft_covers(info)} if info.get("recent_titles") else {}),
     }
+
+
+_ROUNDUP = re.compile(r"\b(?:best|top \d+|top (?:five|ten)|\d+ best|vs\.?|versus|compared|comparison|tested \d+|"
+                      r"every|ranked|tier list|buying guide|which)\b", re.I)
 
 
 def quadrant(r: dict) -> str:
     a = r.get("axes") or {}
     rig, ind = a.get("rigor"), a.get("independence")
+    if r.get("kind") == "evidence explainer":
+        return "evidence explainer (cites research, doesn't test products)"
     if rig is None or ind is None:
         return "unrated (needs a transcript)" if ind is not None else "unrated"
     hi_r, hi_i = rig >= 3, ind >= 3.5
+    if not hi_r and ind < 2.5:
+        return "promotional / shallow"
     if rig < 1.5 and ((r.get("context") or {}).get("affiliate_share") or 0) >= 0.8:
-        return "affiliate roundup (light testing)"
+        titles = [v.get("title") or "" for v in r.get("videos") or []]
+        roundup = sum(1 for t in titles if _ROUNDUP.search(t)) >= max(1, len(titles) / 2)
+        return "affiliate roundup (light testing)" if roundup else "affiliate-led review (light testing)"
     if not hi_r and not hi_i and ind >= 2.5:
         return "brand-supplied, light testing"
     return {(True, True): "trusted tester", (True, False): "rigorous but brand-tied",
@@ -302,6 +347,7 @@ def registry_load(path: Path) -> dict:
     except (OSError, ValueError):
         data = {}
     data.setdefault("channels", {})
+    registry_dedupe(data)  # heals older files with a name-keyed and a handle-keyed row for one channel
     return data
 
 
@@ -313,12 +359,83 @@ def registry_save(path: Path, data: dict) -> None:
     tmp.replace(p)
 
 
-def registry_find(data: dict, channel: str) -> tuple[str | None, dict | None]:
+def registry_find(data: dict, channel: str, handle: str | None = None) -> tuple[str | None, dict | None]:
+    """Find a channel by handle (preferred) or by display name or key. A name match whose row has a
+    different handle is a different channel."""
+    rows = data["channels"]
+    if handle:
+        h = _key(None, handle)
+        for key, row in rows.items():
+            if _key(None, row.get("handle")) == h or (not row.get("handle") and key == h):
+                return key, row
     k = _key(channel, None)
-    for key, row in data["channels"].items():
+    for key, row in rows.items():
         if key == k or _key(row.get("name"), None) == k or _key(None, row.get("handle")) == k:
+            if handle and row.get("handle") and _key(None, row["handle"]) != _key(None, handle):
+                continue
             return key, row
     return None, None
+
+
+def _row(data: dict, name: str, handle: str | None = None) -> dict:
+    """The channel's row, created if missing; adopts the handle on a row found by name."""
+    _, row = registry_find(data, name, handle)
+    if row is None:
+        row = data["channels"].setdefault(_key(name, handle), {"name": name, "handle": handle, "topics": {}})
+    if handle and not row.get("handle"):
+        row["handle"] = handle
+    return row
+
+
+def _merge_rows(a: dict, b: dict) -> dict:
+    """Fold row b into row a (topics, reviewed videos, observations, covers, pin)."""
+    for t, v in (b.get("topics") or {}).items():
+        if t not in a.setdefault("topics", {}) or (v.get("date") or "") > (a["topics"][t].get("date") or ""):
+            a["topics"][t] = v
+    have = {e.get("id"): e for e in a.setdefault("reviewed", [])}
+    for e in b.get("reviewed") or []:
+        if e.get("id") in have:
+            x = have[e["id"]]
+            x["topics"] = sorted(set(x.get("topics") or []) | set(e.get("topics") or []))
+            x["transcript"] = bool(x.get("transcript") or e.get("transcript"))
+            x.setdefault("scores", e.get("scores"))
+            x["first_reviewed"] = min(filter(None, [x.get("first_reviewed"), e.get("first_reviewed")]), default=None)
+            x["last_reviewed"] = max(filter(None, [x.get("last_reviewed"), e.get("last_reviewed")]), default=None)
+        else:
+            a["reviewed"].append(e)
+    seen = {(o.get("topic"), o.get("text")) for o in a.setdefault("observations", [])}
+    a["observations"] += [o for o in b.get("observations") or [] if (o.get("topic"), o.get("text")) not in seen]
+    if b.get("covers") and (b["covers"].get("date") or "") >= ((a.get("covers") or {}).get("date") or ""):
+        a["covers"] = b["covers"]
+    if b.get("pin") and not a.get("pin"):
+        a["pin"] = b["pin"]
+    a["handle"] = a.get("handle") or b.get("handle")
+    a["subscribers"] = a.get("subscribers") or b.get("subscribers")
+    return a
+
+
+def registry_dedupe(data: dict) -> int:
+    """Merge rows for the same channel: same handle, or the same display name where one row has no handle."""
+    rows = data["channels"]
+    merged = 0
+    for key in list(rows):
+        row = rows.get(key)
+        if row is None:
+            continue
+        for other in list(rows):
+            if other == key or other not in rows:
+                continue
+            o = rows[other]
+            same_handle = row.get("handle") and _key(None, row["handle"]) == _key(None, o.get("handle"))
+            same_name = _key(row.get("name"), None) == _key(o.get("name"), None) and \
+                (not row.get("handle") or not o.get("handle"))
+            if same_handle or same_name:
+                keep, drop = (key, other) if row.get("handle") or not o.get("handle") else (other, key)
+                rows[keep] = _merge_rows(rows[keep], rows.pop(drop))
+                merged += 1
+                if drop == key:
+                    break
+    return merged
 
 
 def video_id(url: str | None) -> str | None:
@@ -328,11 +445,9 @@ def video_id(url: str | None) -> str | None:
 
 def registry_add_video(data: dict, channel: str, url: str, topic: str, title: str | None = None,
                        day: str | None = None, transcript: bool | None = None, scores: dict | None = None,
-                       source: str | None = None) -> dict:
+                       source: str | None = None, handle: str | None = None) -> dict:
     """Record a reviewed video on the channel's list (one entry per video; a later review updates it)."""
-    key, row = registry_find(data, channel)
-    if row is None:
-        row = data["channels"].setdefault(_key(channel, None), {"name": channel, "handle": None, "topics": {}})
+    row = _row(data, channel, handle)
     vid = video_id(url)
     today = day or date.today().isoformat()
     lst = row.setdefault("reviewed", [])
@@ -375,18 +490,15 @@ def cumulative_axes(row: dict, topic: str | None = None) -> dict:
 
 
 def registry_put(data: dict, rating: dict) -> None:
-    key = _key(rating["channel"], rating.get("handle"))
-    _, found = registry_find(data, rating.get("handle") or rating["channel"])
-    row = found or data["channels"].setdefault(key, {"name": rating["channel"], "handle": rating.get("handle"),
-                                                     "topics": {}})
-    row["name"], row["handle"] = rating["channel"], rating.get("handle") or row.get("handle")
+    row = _row(data, rating["channel"], rating.get("handle"))
+    row["name"] = rating["channel"]
     if rating["context"].get("subscribers"):
         row["subscribers"] = rating["context"]["subscribers"]
     topic = (rating.get("topic") or "general").lower()
     for v in rating["videos"]:
         if v.get("url"):
             registry_add_video(data, row["name"], v["url"], topic, v.get("title"), rating.get("date"),
-                               v.get("transcript"), v)
+                               v.get("transcript"), v, handle=row.get("handle"))
     slim = {k: rating[k] for k in ("date", "axes", "authority", "context", "sample", "confidence", "reasons", "notes")}
     slim["videos"] = [v["url"] for v in rating["videos"]]
     slim["cumulative"] = cumulative_axes(row, topic)  # this session's videos plus earlier ones on the topic
@@ -395,9 +507,7 @@ def registry_put(data: dict, rating: dict) -> None:
 
 def registry_describe(data: dict, channel: str, summary: str, tags: list[str] | None = None) -> dict:
     """Store what a channel covers: one plain sentence plus category tags (lower-case)."""
-    key, row = registry_find(data, channel)
-    if row is None:
-        row = data["channels"].setdefault(_key(channel, None), {"name": channel, "handle": None, "topics": {}})
+    row = _row(data, channel, channel if channel.startswith("@") else None)
     row["covers"] = {"summary": summary.strip(), "tags": sorted({t.strip().lower() for t in tags or [] if t.strip()}),
                      "date": date.today().isoformat()}
     return row
@@ -416,9 +526,7 @@ def covers_topic(row: dict, topic: str) -> bool:
 def registry_observe(data: dict, channel: str, topic: str, text: str, source: str | None = None,
                      day: str | None = None) -> dict:
     """Add a dated observation (e.g. from a past report: "DJI-sponsored, paid-promotion label shown")."""
-    key, row = registry_find(data, channel)
-    if row is None:
-        row = data["channels"].setdefault(_key(channel, None), {"name": channel, "handle": None, "topics": {}})
+    row = _row(data, channel, channel if channel.startswith("@") else None)
     obs = {"date": day or date.today().isoformat(), "topic": (topic or "general").lower(), "text": text.strip()}
     if source:
         obs["source"] = source
@@ -432,10 +540,7 @@ VERDICTS = ("trusted", "mixed", "distrusted")
 
 
 def registry_pin(data: dict, channel: str, verdict: str | None, note: str = "") -> dict:
-    key, row = registry_find(data, channel)
-    if row is None:
-        key = _key(channel, None)
-        row = data["channels"].setdefault(key, {"name": channel, "handle": None, "topics": {}})
+    row = _row(data, channel, channel if channel.startswith("@") else None)
     if verdict in (None, "clear"):
         row.pop("pin", None)
     else:

@@ -16,7 +16,7 @@ SPEC = "According to the manufacturer it boasts a powerful motor. Features inclu
 
 
 def rec(url, signals=(), segments_text=None, **kw):
-    r = {"url": url, "title": url, "channel": kw.pop("channel", "Ch"), "via": "video",
+    r = {"url": url, "title": kw.pop("title", url), "channel": kw.pop("channel", "Ch"), "via": "video",
          "signals": [dict(signal=s) if isinstance(s, str) else s for s in signals], "length_s": 600, **kw}
     if segments_text is not None:
         r["segments"] = [{"text": segments_text}]
@@ -105,11 +105,17 @@ def test_cli_parses_cited_and_registry_pin(monkeypatch):
 
 
 def test_affiliate_roundup_quadrant():
-    recs = [rec(f"v{i}", ["affiliate_links", "affiliate_disclosure"], "Number one on our list is great. " * 40)
-            for i in range(2)]
+    recs = [rec(f"v{i}", ["affiliate_links", "affiliate_disclosure"], "Number one on our list is great. " * 40,
+                title=f"Best Carpet Cleaners 202{i}") for i in range(2)]
     r = CM.rate_channel("Roundups", recs, {}, "carpet cleaners")
     assert r["context"]["affiliate_share"] == 1.0
     assert CM.quadrant(r) == "affiliate roundup (light testing)"
+    single = CM.rate_channel("Single", [rec("s", ["affiliate_links", "affiliate_disclosure"], "It is nice. " * 40,
+                                            title="Hatch Rest 2 review")], {}, "x")
+    assert CM.quadrant(single) == "affiliate-led review (light testing)"
+    ad = CM.rate_channel("Ad", [rec("a", ["ad_tag", "review_unit", "use_my_link_or_code", "affiliate_links"],
+                                    "It is nice. " * 40, title="Best sound machine")], {}, "x")
+    assert CM.quadrant(ad) == "promotional / shallow"
 
 
 def test_draft_covers_and_topic_matching(tmp_path):
@@ -189,3 +195,41 @@ def test_channels_marks_videos_reviewed_before(monkeypatch, tmp_path):
     assert {v["video_id"]: v["reviewed_before"] for v in row["videos"]} == {"AAAAAAAAAAA": True, "DDDDDDDDDDD": False}
     assert row["registry"]["familiarity"]["videos"] == 1
     assert Y.registry("show", "Tester")["familiarity"]["videos"] == 1
+
+
+
+def test_registry_identity_and_dedupe(tmp_path):
+    reg = CM.registry_load(tmp_path / "r.json")
+    CM.registry_describe(reg, "No Sleepless Nights", "Measured white noise machine tests.", ["sleep"])
+    r = CM.rate_channel("No Sleepless Nights", [rec("https://youtu.be/AAAAAAAAAAA", [], TESTER)],
+                        {"handle": "@nosleeplessnights1"}, "baby white noise machines")
+    CM.registry_put(reg, r)
+    assert len(reg["channels"]) == 1
+    row = CM.registry_find(reg, "@nosleeplessnights1")[1]
+    assert row["covers"] and row["handle"] == "@nosleeplessnights1" and CM.familiarity(row)["videos"] == 1
+    # an old file with split rows heals on load
+    reg2 = {"channels": {"dmfinds": {"name": "DM Finds", "handle": None, "topics": {},
+                                     "reviewed": [{"id": "X", "topics": ["a"]}], "covers": {"summary": "s", "date": "2026-11-07"}},
+                         "dm-finds": {"name": "DM Finds", "handle": "@dm-finds", "topics": {"a": {"date": "2026-11-07"}}}}}
+    CM.registry_save(tmp_path / "old.json", reg2)
+    healed = CM.registry_load(tmp_path / "old.json")
+    assert list(healed["channels"]) == ["dm-finds"]
+    row = healed["channels"]["dm-finds"]
+    assert row["covers"]["summary"] == "s" and CM.familiarity(row)["videos"] == 1 and "a" in row["topics"]
+
+
+def test_rigor_counts_distance_tests_and_tables():
+    text = ("I tested their maximum volume from 1 meter away, and you can see in this table that the majority "
+            "reached over 60 decibels, with some approaching 80 decibels. The battery lasted 40 hours. ") * 3
+    score, d = CM.video_rigor(rec("n", segments_text=text, length_s=600))
+    assert d["hits"]["method"] >= 1 and d["hits"]["data_table"] >= 1 and score >= 2.5
+
+
+def test_study_citations_are_not_product_testing():
+    text = ("A 2014 study published in Pediatrics found machines reached 85 dB at 30 cm. The AAP suggests 50 dB. "
+            "Research shows babies sleep 20 minutes longer. ") * 4
+    score, d = CM.video_rigor(rec("e", segments_text=text, length_s=600))
+    assert score <= 1.5 and d.get("kind", "").startswith("evidence explainer")
+    r = CM.rate_channel("Explainer", [rec("e", [], text, length_s=600)], {}, "x")
+    assert any("evidence explainer" in n for n in r["notes"])
+    assert CM.quadrant(r).startswith("evidence explainer")

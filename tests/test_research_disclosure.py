@@ -236,3 +236,19 @@ def test_brand_short_link_is_affiliate():
 def test_own_site_by_channel_name_still_self_promotion():
     c = D.classify_links(["https://vacuumwars.com/best/", "https://www.patreon.com/x"], channel="Vacuum Wars")
     assert c["self_promotion_links"] == ["https://vacuumwars.com/best/", "https://www.patreon.com/x"]
+
+
+
+def test_commission_wording_is_a_disclosure_not_a_pitch():
+    import disclosure as D
+    sig = [h["signal"] for h in D.scan_text("I wasn't otherwise paid or sponsored to make this video, but I do earn a "
+                                            "small commission if you buy through my links.", "description")]
+    assert "affiliate_disclosure" in sig and "use_my_link_or_code" not in sig
+
+
+def test_ad_tag_and_sent_to_review():
+    import disclosure as D
+    assert "ad_tag" in [h["signal"] for h in D.scan_text("#Ad Momcozy sent me this one.", "description")]
+    assert "ad_tag" not in [h["signal"] for h in D.scan_text("Watch the #adorable baby.", "description")]
+    seg = [{"text": "so I was sent these to review and they all work", "sec": 30}]
+    assert "review_unit" in [h["signal"] for h in D.scan_segments(seg, "")]

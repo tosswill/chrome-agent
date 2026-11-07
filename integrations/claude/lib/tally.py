@@ -257,13 +257,17 @@ _Q_START = re.compile(r"^\s*(should i|is (?:the|it|this)|are (?:the|they)|which|
                       r"would you|help me|looking for)\b", re.I)
 _REC_NEG = re.compile(r"\b(no (?:issues?|problems?|complaints?|regrets?)|zero (?:issues?|problems?|complaints?)|"
                       r"never (?:had|have) (?:an? )?(?:issues?|problems?)|haven'?t had (?:any|a) (?:issues?|problems?)|"
-                      r"can'?t go wrong|couldn'?t be happier|not a single (?:issue|problem))\b", re.I)
+                      r"can'?t go wrong|couldn'?t be happier|not a single (?:issue|problem)|won'?t regret|"
+                      r"(?:never|haven'?t|didn'?t|don'?t) regrett?(?:ed)?|zero regrets?|no regrets?)\b", re.I)
 _COMP_NEG = re.compile(r"\b(not worth|wouldn'?t recommend|would not recommend|don'?t recommend|do not recommend|"
                        r"can'?t recommend|cannot recommend|don'?t buy|do not buy|stay away|not reliable|doesn'?t work|"
                        r"does not work|didn'?t work|stopped working|not happy|wasn'?t happy|not impressed)\b", re.I)
 _REC = re.compile(r"\b(recommend(?:ed)?|love (?:it|mine|my|the)|loving|great|excellent|amazing|awesome|fantastic|"
                   r"best|happy with|worth it|go with|get the|buy the|solid|reliable|rock solid|works (?:great|well|"
-                  r"perfectly)|perfect|favou?rite|my pick|top pick|highly|impressed|winner|no brainer|beast)\b", re.I)
+                  r"perfectly)|perfect|favou?rite|my pick|top pick|highly|impressed|winner|no brainer|beast|"
+                  r"is the answer|gold standard|swear by|hands down|going strong|still going|life ?saver|"
+                  r"game ?changer|can'?t live without|worth every penny|must[- ]have|holy grail|saved our|"
+                  r"(?:we|i) use (?:the|a|our|my)|we have (?:the|a|two|three))\b", re.I)
 _COMP = re.compile(r"\b(problems?|issues?|broke|broken|fail(?:s|ed|ing|ure)?|clog(?:s|ged|ging)?|jam(?:s|med)?|"
                    r"return(?:ed|ing)?|refund|regret|avoid|terrible|awful|worst|garbage|junk|disappoint(?:ed|ing)?|"
                    r"defect(?:ive)?|doa|hate|limitation|unreliable|poor|sucks?|annoying|warranty|rma|nightmare|"

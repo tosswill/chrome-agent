@@ -201,6 +201,9 @@ KNOWN_BRANDS = [
     "EcoFlow", "Bluetti", "Jackery", "Goal Zero", "Renogy", "Oupes", "Vtoman", "Pecron", "Allpowers", "Fossibot",
     "Bissell", "Hoover", "Shark", "Rug Doctor", "Tineco", "Dyson", "Vax", "Kärcher", "Dreame", "Roborock",
     "Ecovacs", "iRobot", "Eufy", "Kenmore", "Miele", "Sebo", "Uwant",
+    "Hatch", "Yogasleep", "Marpac", "LectroFan", "Adaptive Sound Technologies", "Snooz", "Momcozy", "Dreamegg",
+    "Nanit", "Owlet", "Loftie", "HoMedics", "Letsfit", "Frida", "Munchkin", "Skip Hop", "Baby Brezza", "Tommee Tippee",
+    "Graco", "Ergobaby", "Elvie", "Philips Avent", "VTech", "Infant Optics", "Cubo Ai", "Miku",
 ]
 BRAND_ALIASES = {"Bambu Lab": ["Bambu", "BambuLab", "Bambu Labs"], "Rode": ["RØDE"], "Prusa": ["Prusa Research"],
                  "Kärcher": ["Karcher"], "EcoFlow": ["Eco Flow"], "Rug Doctor": ["RugDoctor"],
