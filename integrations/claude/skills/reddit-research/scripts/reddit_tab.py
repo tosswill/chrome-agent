@@ -667,10 +667,20 @@ def _key(full_id: str, key: str, code: str, vk: int, modifiers: int = 0, command
                                                  "windowsVirtualKeyCode": vk, "modifiers": modifiers})
 
 
-def _type_text(full_id: str, text: str) -> None:
+# The deepest focused element (through shadow roots) is a text field inside Reddit's search box.
+_SEARCH_FOCUSED = """(() => { let a = document.activeElement; if (!a || a.tagName !== 'REDDIT-SEARCH-LARGE') return false;
+  while (a && a.shadowRoot && a.shadowRoot.activeElement) a = a.shadowRoot.activeElement;
+  return !!a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA' || a.isContentEditable); })()"""
+
+
+def _type_text(full_id: str, text: str, focus_js: str | None = None) -> bool:
     """Type like a person: per-key delays, a little slower after spaces and punctuation, an
-    occasional short hesitation."""
+    occasional short hesitation. With `focus_js`, check before every key that the search box still
+    has focus and stop at once if not (stray keys must never land on the page). Returns False if
+    it stopped early."""
     for ch in text:
+        if focus_js and not SITE.evaluate(full_id, focus_js):
+            return False
         SITE.cdp(full_id, "Input.dispatchKeyEvent", {"type": "keyDown", "key": ch, "text": ch, "unmodifiedText": ch})
         time.sleep(random.uniform(0.02, 0.06))
         SITE.cdp(full_id, "Input.dispatchKeyEvent", {"type": "keyUp", "key": ch})
@@ -680,6 +690,7 @@ def _type_text(full_id: str, text: str) -> None:
         if random.random() < 0.05:
             gap += random.uniform(0.3, 0.8)
         time.sleep(gap)
+    return True
 
 
 def _select_all(full_id: str) -> None:
@@ -743,6 +754,8 @@ def _typed_search(full_id: str, query: str, subreddit: str | None) -> tuple[dict
     r = info["rect"]
     SITE.click(full_id, r["x"] + r["width"] * random.uniform(0.3, 0.7), r["y"] + r["height"] * random.uniform(0.4, 0.6))
     pause(random.uniform(0.3, 0.7))
+    if not SITE.evaluate(full_id, _SEARCH_FOCUSED):
+        return None, "the search box didn't take focus"  # never type into the page
     _select_all(full_id)
     pause(random.uniform(0.15, 0.35))
     if not subreddit and (scope.get("type") or "global") != "global":
@@ -755,7 +768,9 @@ def _typed_search(full_id: str, query: str, subreddit: str | None) -> tuple[dict
         if SITE.evaluate(full_id, "!!document.querySelector('rpl-input-chip')"):
             _key(full_id, "Escape", "Escape", 27)
             return None, "couldn't remove the subreddit scope from the search box"
-    _type_text(full_id, query)
+    if not _type_text(full_id, query, focus_js=_SEARCH_FOCUSED):
+        _key(full_id, "Escape", "Escape", 27)
+        return None, "the search box lost focus while typing"
     pause(random.uniform(0.3, 0.8))
     now = SITE.evaluate(full_id, _SEARCH_JS) or {}
     if (now.get("value") or "").strip() != query.strip():
