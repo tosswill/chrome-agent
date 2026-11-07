@@ -326,3 +326,20 @@ def test_outermost_ads():
            {"selector": "ytd-ad-slot-renderer", "rect": r(967, 280)}]
     out = S.outermost_ads(ads)
     assert [a["rect"]["y"] for a in out] == [112, 967]
+
+
+def test_type_text_stops_when_search_box_loses_focus(monkeypatch):
+    """Stray keys on a watch page are player shortcuts (f = fullscreen, m = unmute): stop at once."""
+    typed, checks = [], iter([True, True, False, True, True])
+    monkeypatch.setattr(Y.SITE, "evaluate", lambda fid, js, timeout=30: next(checks))
+    monkeypatch.setattr(Y, "_key", lambda fid, key, *a, **k: typed.append(key))
+    monkeypatch.setattr(Y.time, "sleep", lambda s: None)
+    assert Y._type_text("T", "fmkc", focus_js="focus?") is False
+    assert typed == ["f", "m"]
+
+
+def test_type_text_without_guard_types_everything(monkeypatch):
+    typed = []
+    monkeypatch.setattr(Y, "_key", lambda fid, key, *a, **k: typed.append(key))
+    monkeypatch.setattr(Y.time, "sleep", lambda s: None)
+    assert Y._type_text("T", "ab") is True and typed == ["a", "b"]

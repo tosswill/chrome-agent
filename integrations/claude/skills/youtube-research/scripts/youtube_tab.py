@@ -371,13 +371,30 @@ def _key(full_id: str, key: str, code: str, vk: int, text: str | None = None, mo
 
 
 def _ensure_muted(full_id: str) -> bool:
-    """If the video has sound, click the player's mute button (YouTube remembers it). Not during ads."""
+    """If the video has sound, click the player's mute button (YouTube remembers it). This is done
+    during ads too: muting is a normal action; only play/pause and seeking are avoided during ads."""
     st = _state(full_id)
-    if st.get("muted") is None or st.get("muted") or st.get("ad"):
+    if st.get("muted") is None or st.get("muted"):
         return bool(st.get("muted"))
     if _click_control(full_id, ".ytp-mute-button"):
         pause(0.4)
     return bool(_state(full_id).get("muted"))
+
+
+def _ensure_quiet(full_id: str) -> dict:
+    """Undo anything a stray key could have done to the user's screen and speakers: leave fullscreen
+    (Escape, as a person would) and make sure the video is muted."""
+    fixed = {}
+    try:
+        if SITE.evaluate(full_id, "!!document.fullscreenElement"):
+            _key(full_id, "Escape", "Escape", 27)
+            pause(0.6)
+            fixed["left_fullscreen"] = not SITE.evaluate(full_id, "!!document.fullscreenElement")
+        if SITE.evaluate(full_id, "!!document.querySelector('video')"):
+            fixed["muted"] = _ensure_muted(full_id)
+    except Fail:
+        pass
+    return fixed
 
 
 def _clear_ads(full_id: str, timeout: float | None = None, log: _AdLog | None = None) -> dict:
@@ -572,9 +589,14 @@ _PUNCT = {" ": ("Space", 32, False), "-": ("Minus", 189, False), "_": ("Minus", 
           ")": ("Digit0", 48, True)}
 
 
-def _type_text(full_id: str, text: str) -> None:
-    """Type `text` key by key with uneven, human timing (short gaps, longer after spaces, rare pauses)."""
+def _type_text(full_id: str, text: str, focus_js: str | None = None) -> bool:
+    """Type `text` key by key with uneven, human timing (short gaps, longer after spaces, rare pauses).
+    With `focus_js`, check before every key that the intended field still has focus, and stop at
+    once if not: a stray key on a watch page is a player shortcut (f = fullscreen, m = mute, k = play,
+    c = captions, t = theater, i = miniplayer, digits = seek). Returns False if it stopped early."""
     for ch in text:
+        if focus_js and not SITE.evaluate(full_id, focus_js):
+            return False
         if ch.isascii() and ch.isalpha():
             code, vk, shift = f"Key{ch.upper()}", ord(ch.upper()), ch.isupper()
         elif ch.isascii() and ch.isdigit():
@@ -591,6 +613,7 @@ def _type_text(full_id: str, text: str) -> None:
         if random.random() < 0.04:
             gap += random.uniform(0.4, 1.2)  # a moment's hesitation
         time.sleep(gap)
+    return True
 
 
 _SEARCH_BOX = "input[name='search_query'], textarea[name='search_query']"
@@ -609,11 +632,16 @@ def _typed_search(full_id: str, query: str) -> tuple[dict | None, str]:
     SITE.click(full_id, r["x"] + r["width"] * random.uniform(0.2, 0.6), r["y"] + r["height"] * random.uniform(0.35, 0.65))
     pause(random.uniform(0.3, 0.7), fuzz=0)
     box_value = f"document.querySelector({json.dumps(_SEARCH_BOX)})?.value ?? null"
+    focus_js = f"!!document.activeElement && document.activeElement.matches({json.dumps(_SEARCH_BOX)})"
+    if not SITE.evaluate(full_id, focus_js):
+        return None, "url (search box did not take focus)"  # never type into the page/player
     if SITE.evaluate(full_id, box_value):
         mac = sys.platform == "darwin"
         _key(full_id, "a", "KeyA", 65, modifiers=4 if mac else 2, commands=["selectAll"])
         pause(random.uniform(0.15, 0.4), fuzz=0)
-    _type_text(full_id, query)
+    if not _type_text(full_id, query, focus_js=focus_js):
+        _ensure_quiet(full_id)
+        return None, "url (search box lost focus while typing)"
     pause(random.uniform(0.3, 0.9), fuzz=0)
     if (SITE.evaluate(full_id, box_value) or "").strip() != query.strip():
         return None, "url (typing failed)"
@@ -725,6 +753,7 @@ def search(target: str, query: str, sort: str = "relevance", upload: str | None 
     url = search_url(query, sort, upload)  # validates sort/upload
     full_id = SITE.resolve(target)
     SITE.ensure_visible(full_id)  # fail fast in a hidden window
+    _ensure_quiet(full_id)
     page, via = None, "url"
     if SORTS[sort] or upload:
         via = "url (filters)"  # filters are set through the URL, not the filter menu
@@ -814,6 +843,7 @@ def video(target: str, url: str) -> dict:
         url = f"https://www.youtube.com/watch?v={url}"
     full_id = SITE.resolve(target)
     SITE.ensure_visible(full_id)  # fail fast in a hidden window
+    _ensure_quiet(full_id)
     page, opened = (None, "url")
     if vid and "/shorts/" not in url:
         page, opened = _open_by_click(full_id, vid)
@@ -860,6 +890,7 @@ def transcript(target: str, grep: list[str] | None = None, context: int = 0,
                start: str | None = None, end: str | None = None, out_dir: str | None = None) -> dict:
     full_id = SITE.resolve(target)
     SITE.ensure_visible(full_id)  # fail fast in a hidden window
+    _ensure_quiet(full_id)
     SITE.touch(full_id)
     vid = _require_watch(full_id)
     ok, reason = _open_transcript(full_id)
@@ -928,6 +959,7 @@ def transcript(target: str, grep: list[str] | None = None, context: int = 0,
 def comments(target: str, max_comments: int = 20) -> dict:
     full_id = SITE.resolve(target)
     SITE.ensure_visible(full_id)  # fail fast in a hidden window
+    _ensure_quiet(full_id)
     vid = _require_watch(full_id)
     SITE.touch(full_id)
     if SITE.scroll_into_view(full_id, "ytd-comments#comments") is None:
@@ -1129,6 +1161,7 @@ def scan(target: str, rng: str, samples: int = 4, keep: int = 3, out_dir: str | 
         raise Fail("--scan range must end after it starts")
     full_id = SITE.resolve(target)
     SITE.ensure_visible(full_id)  # fail fast in a hidden window
+    _ensure_quiet(full_id)
     vid = _require_watch(full_id)
     SITE.touch(full_id)
     SITE.scroll_to_top(full_id)
@@ -1164,6 +1197,7 @@ def frame(target: str, at, out: str | None = None, out_dir: str | None = None,
     Returns one result, or a list for several timestamps."""
     full_id = SITE.resolve(target)
     SITE.ensure_visible(full_id)  # fail fast in a hidden window
+    _ensure_quiet(full_id)
     vid = _require_watch(full_id)
     SITE.touch(full_id)
     times = at if isinstance(at, (list, tuple)) else [at]
@@ -1217,6 +1251,7 @@ def channel(target: str, url: str) -> dict:
         return {"page": page, "channel": None}
     full_id = SITE.resolve(target)
     SITE.ensure_visible(full_id)  # fail fast in a hidden window
+    _ensure_quiet(full_id)
     ch = SITE.evaluate(full_id, _js("channel.js"))
     if ch:
         lst, why = S.likely_ai_listicle("", ch.get("name"), ch.get("handle"), ch.get("videos"))
