@@ -100,6 +100,8 @@ YouTube uses the same settings with the `YOUTUBE_TAB_` prefix. Its defaults are 
 
 Chrome barely draws a hidden window (minimized, on another desktop or workspace, or fully covered), so clicks miss, pages stay blank and scrolling stalls. The helpers check `document.visibilityState` when a window is opened and before each page load, and fail with a clear message instead of stalling.
 
+On macOS, `open` first runs a screen preflight: if the screen is locked or every display is asleep (Chrome then reports every window as hidden), it fails at once with a message asking the user to wake and unlock the computer. The same check names the cause when a window is found hidden later.
+
 Both sites share these settings:
 
 | Variable | Default | Meaning |
