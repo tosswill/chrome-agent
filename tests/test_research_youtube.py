@@ -328,18 +328,38 @@ def test_outermost_ads():
     assert [a["rect"]["y"] for a in out] == [112, 967]
 
 
-def test_type_text_stops_when_search_box_loses_focus(monkeypatch):
-    """Stray keys on a watch page are player shortcuts (f = fullscreen, m = unmute): stop at once."""
-    typed, checks = [], iter([True, True, False, True, True])
-    monkeypatch.setattr(Y.SITE, "evaluate", lambda fid, js, timeout=30: next(checks))
-    monkeypatch.setattr(Y, "_key", lambda fid, key, *a, **k: typed.append(key))
-    monkeypatch.setattr(Y.time, "sleep", lambda s: None)
-    assert Y._type_text("T", "fmkc", focus_js="focus?") is False
-    assert typed == ["f", "m"]
+
+def test_quiet_after_recovers_once_at_end_on_watch_page(monkeypatch):
+    calls = []
+    monkeypatch.setattr(Y.SITE, "resolve", lambda t: t)
+    monkeypatch.setattr(Y.SITE, "evaluate", lambda fid, js, timeout=30: "/watch" if "pathname" in js else False)
+    monkeypatch.setattr(Y, "_ensure_quiet", lambda fid: calls.append(fid) or {})
+    wrapped = Y._quiet_after(lambda target, x: x * 2)
+    assert wrapped("T", 21) == 42
+    assert calls == ["T"]
 
 
-def test_type_text_without_guard_types_everything(monkeypatch):
-    typed = []
-    monkeypatch.setattr(Y, "_key", lambda fid, key, *a, **k: typed.append(key))
-    monkeypatch.setattr(Y.time, "sleep", lambda s: None)
-    assert Y._type_text("T", "ab") is True and typed == ["a", "b"]
+def test_quiet_after_skips_off_watch_pages(monkeypatch):
+    calls = []
+    monkeypatch.setattr(Y.SITE, "resolve", lambda t: t)
+    monkeypatch.setattr(Y.SITE, "evaluate", lambda fid, js, timeout=30: "/results" if "pathname" in js else False)
+    monkeypatch.setattr(Y, "_ensure_quiet", lambda fid: calls.append(fid) or {})
+    Y._quiet_after(lambda target: None)("T")
+    assert calls == []
+
+
+def test_ensure_quiet_escapes_only_when_fullscreen(monkeypatch):
+    keys = []
+    state = {"fs": True}
+    def ev(fid, js, timeout=30):
+        if "fullscreenElement" in js:
+            return state["fs"]
+        return False  # no <video>
+    def key(fid, k, *a, **kw):
+        keys.append(k); state["fs"] = False
+    monkeypatch.setattr(Y.SITE, "evaluate", ev)
+    monkeypatch.setattr(Y, "_key", key)
+    monkeypatch.setattr(Y, "pause", lambda *a, **k: None)
+    assert Y._ensure_quiet("T")["left_fullscreen"] is True
+    Y._ensure_quiet("T")
+    assert keys == ["Escape"]  # pressed once, only while fullscreen

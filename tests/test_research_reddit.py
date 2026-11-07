@@ -270,11 +270,3 @@ def test_stop_reason_block_wins(monkeypatch):
     monkeypatch.setattr(R, "_session_cookie_valid", lambda site: True)
     assert "block" in R._stop_reason({"loggedIn": True, "blocked": True}, R.SITE)
 
-
-def test_reddit_type_text_stops_when_focus_lost(monkeypatch):
-    sent, checks = [], iter([True, False])
-    monkeypatch.setattr(R.SITE, "evaluate", lambda fid, js, timeout=30: next(checks))
-    monkeypatch.setattr(R.SITE, "cdp", lambda fid, m, p=None, timeout=60: sent.append(p.get("key")) or {})
-    monkeypatch.setattr(R.time, "sleep", lambda s: None)
-    assert R._type_text("T", "xy", focus_js="focus?") is False
-    assert sent == ["x", "x"]  # keyDown + keyUp for the first key only
