@@ -184,6 +184,29 @@ def focus(recent_titles: list[str], topic: str) -> float | None:
     return round(hit / len(recent_titles), 2)
 
 
+_TITLE_STOP = _STOP | {"this", "that", "these", "you", "your", "are", "is", "it", "its", "why", "how", "what",
+                       "new", "vs", "test", "tested", "testing", "tests", "best", "top", "worst", "really", "actually",
+                       "never", "ever", "ever", "all", "every", "one", "can", "will", "should", "get", "does", "did",
+                       "not", "don", "dont", "after", "before", "from", "into", "about", "than", "they", "them",
+                       "here", "there", "which", "who", "most", "more", "less", "good", "bad", "better", "buy",
+                       "2023", "2024", "2025", "2026", "2027", "shorts", "part", "episode", "video", "review"}
+
+
+def draft_covers(info: dict, n: int = 8) -> dict:
+    """A draft of what a channel covers, from its channel page: the tagline and the words that recur in its
+    recent upload titles (singulars merged). The agent should rewrite `summary` into one plain sentence."""
+    counts: dict[str, int] = {}
+    for t in info.get("recent_titles") or []:
+        for w in set(re.findall(r"[a-z][a-z0-9'-]+", t.lower())):
+            w = w.strip("'-")
+            w = w[:-1] if w.endswith("s") and len(w) > 4 and not w.endswith("ss") else w
+            if w not in _TITLE_STOP and len(w) > 2:
+                counts[w] = counts.get(w, 0) + 1
+    tags = [w for w, c in sorted(counts.items(), key=lambda x: (-x[1], x[0])) if c >= 2][:n]
+    return {"tagline": info.get("description"), "recurring_title_words": tags,
+            "summary": None, "tags": tags, "source": "draft from channel page"}
+
+
 def _mean(xs):
     xs = [x for x in xs if x is not None]
     return round(sum(xs) / len(xs), 1) if xs else None
@@ -248,6 +271,7 @@ def rate_channel(name: str, recs: list[dict], info: dict | None = None, topic: s
         "sample": {"videos": len(recs), "with_transcript": with_tx}, "confidence": conf,
         "reasons": {"independence": why_i[:6], "transparency": why_t[:6]},
         "notes": notes, "videos": per_video,
+        **({"covers_draft": draft_covers(info)} if info.get("recent_titles") else {}),
     }
 
 
@@ -304,6 +328,26 @@ def registry_put(data: dict, rating: dict) -> None:
     row["topics"][(rating.get("topic") or "general").lower()] = slim
 
 
+def registry_describe(data: dict, channel: str, summary: str, tags: list[str] | None = None) -> dict:
+    """Store what a channel covers: one plain sentence plus category tags (lower-case)."""
+    key, row = registry_find(data, channel)
+    if row is None:
+        row = data["channels"].setdefault(_key(channel, None), {"name": channel, "handle": None, "topics": {}})
+    row["covers"] = {"summary": summary.strip(), "tags": sorted({t.strip().lower() for t in tags or [] if t.strip()}),
+                     "date": date.today().isoformat()}
+    return row
+
+
+def covers_topic(row: dict, topic: str) -> bool:
+    """True when the channel's covers tags or summary share a term with the topic (singulars merged)."""
+    cov = row.get("covers") or {}
+    norm = lambda w: w[:-1] if w.endswith("s") and len(w) > 4 and not w.endswith("ss") else w  # noqa: E731
+    terms = {norm(t) for t in topic_terms(topic)}
+    words = {norm(w) for t in cov.get("tags") or [] for w in topic_terms(t)}
+    words |= {norm(w) for w in topic_terms(cov.get("summary") or "")}
+    return bool(terms & words)
+
+
 def registry_pin(data: dict, channel: str, verdict: str | None, note: str = "") -> dict:
     key, row = registry_find(data, channel)
     if row is None:
@@ -330,6 +374,8 @@ def registry_lookup(data: dict, channel: str, topic: str) -> dict | None:
     if not row:
         return None
     topics = row.get("topics") or {}
+    if not topics and not row.get("pin") and not row.get("covers"):
+        return None
     t = (topic or "general").lower()
     hit = topics.get(t)
     which = t
@@ -339,7 +385,7 @@ def registry_lookup(data: dict, channel: str, topic: str) -> dict | None:
             if terms & set(topic_terms(name)):
                 hit, which = rating, name
                 break
-    out = {"name": row.get("name"), "handle": row.get("handle"), "pin": row.get("pin")}
+    out = {"name": row.get("name"), "handle": row.get("handle"), "pin": row.get("pin"), "covers": row.get("covers")}
     if hit:
         out.update({"topic": which, "rating": hit, "stale": stale(hit.get("date")),
                     "same_topic": which == t})

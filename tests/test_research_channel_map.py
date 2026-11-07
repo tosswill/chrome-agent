@@ -110,3 +110,29 @@ def test_affiliate_roundup_quadrant():
     r = CM.rate_channel("Roundups", recs, {}, "carpet cleaners")
     assert r["context"]["affiliate_share"] == 1.0
     assert CM.quadrant(r) == "affiliate roundup (light testing)"
+
+
+def test_draft_covers_and_topic_matching(tmp_path):
+    info = {"description": "We test products head to head.",
+            "recent_titles": ["Best Cordless Drill? Let's Find Out!", "Which Impact Driver Is Best?",
+                              "Cordless Drills Tested", "Best Car Wax", "Car Wax vs Ceramic Coating",
+                              "Impact Driver Showdown"]}
+    d = CM.draft_covers(info)
+    assert {"cordless", "drill", "impact", "driver", "car", "wax"} <= set(d["tags"]) and d["summary"] is None
+    reg = CM.registry_load(tmp_path / "r.json")
+    CM.registry_describe(reg, "Project Farm", "Head-to-head tests of tools, automotive and household products.",
+                         ["Power Tools", "automotive", "carpet cleaners"])
+    row = CM.registry_find(reg, "Project Farm")[1]
+    assert CM.covers_topic(row, "cordless power tools") and CM.covers_topic(row, "carpet cleaner")
+    assert not CM.covers_topic(row, "gaming headsets")
+    assert CM.registry_lookup(reg, "Project Farm", "gaming headsets")["covers"]["tags"][0] == "automotive"
+
+
+def test_registry_describe_cli_and_topic_list(monkeypatch, tmp_path):
+    monkeypatch.setattr(Y, "CHANNELS", tmp_path / "reg.json")
+    out = Y._dispatch("registry", ["describe", "Project", "Farm", "--covers", "Tool and household product tests.",
+                                   "--tags", "power tools, carpet cleaners"])
+    assert out["covers"]["tags"] == ["carpet cleaners", "power tools"]
+    listed = Y._dispatch("registry", ["list", "--topic", "carpet cleaner machines"])
+    assert [c["channel"] for c in listed["channels"]] == ["Project Farm"]
+    assert Y._dispatch("registry", ["list", "--topic", "espresso"])["channels"] == []
