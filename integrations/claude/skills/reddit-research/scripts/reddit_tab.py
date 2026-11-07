@@ -60,13 +60,39 @@ def _js(name: str) -> str:
     return (HERE / name).read_text()
 
 
+def _session_cookie_valid(site: Site) -> bool | None:
+    """Whether the browser holds an unexpired reddit_session cookie (read over CDP, invisible to
+    the page). None when it can't be checked."""
+    try:
+        tabs = site.targets()
+        if not tabs:
+            return None
+        res = site.cdp(tabs[0]["id"], "Network.getCookies", {"urls": ["https://www.reddit.com/"]})
+    except (Fail, KeyError, ValueError):
+        return None
+    now = time.time()
+    return any(c.get("name") == "reddit_session" and (c.get("expires", -1) <= 0 or c["expires"] > now)
+               for c in res.get("cookies", []))
+
+
 def _stop_reason(state: dict, site: Site) -> str | None:
     if state.get("blocked"):
         return "Reddit is showing a block or CAPTCHA page. Stop and ask the user; do not retry."
-    if not state.get("loggedIn"):
-        return ("Reddit is not signed in. Ask the user to log in manually in the browser window, "
-                f"then save it: chrome-agent save {site.instance} --overwrite")
-    return None
+    if state.get("loggedIn") is True:
+        return None
+    # The header may simply not have rendered yet (slow, throttled or covered window). Only stop when
+    # the page shows a log-in button AND the browser has no valid session cookie.
+    cookie = _session_cookie_valid(site)
+    if cookie:
+        state["loggedIn"] = True
+        state["login_check"] = ("account menu not found on the page, but the session cookie is valid; "
+                                "treated as signed in")
+        return None
+    if state.get("loggedIn") is None and cookie is None:
+        state["login_check"] = "sign-in could not be confirmed (header not rendered, cookie check failed)"
+        return None
+    return ("Reddit is not signed in. Ask the user to log in manually in the browser window, "
+            f"then save it: chrome-agent save {site.instance} --overwrite")
 
 
 # The page content in viewport coordinates: below the top bar (username, avatar), right of the left

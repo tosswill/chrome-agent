@@ -13,7 +13,10 @@
   return {
     url: location.href,
     title: document.title,
-    loggedIn: !!document.querySelector("#expand-user-drawer-button") && !document.querySelector("#login-button"),
+    // true: the account menu is there; false: a log-in button is there instead; null: the header
+    // hasn't rendered either yet (slow or throttled page), which is not evidence of being signed out.
+    loggedIn: document.querySelector("#expand-user-drawer-button") ? true
+      : document.querySelector("#login-button") ? false : null,
     blocked: challenge || /whoa there|blocked by network security|unusual activity|too many requests|prove you're human/.test(t + " " + b),
   };
 })()
