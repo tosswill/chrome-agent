@@ -93,6 +93,10 @@ _LISTICLE_NAME = re.compile(
     r"(picks?\b|picks?of|reviews?\s*(?:club|lab|hub|zone|guru|world|daily|central|expert|insider|corner|scout)|"
     r"scou+t|\btop\s*\d+|top\d+|\d+\s*best|best\s*(?:ones|buys?|picks|choices?|products?|reviews?|gear|gadgets)\b|"
     r"\branked\b|product\s*(?:reviews?|guides?)|gadget\s*(?:hub|zone|world|lab))", re.I)
+_RETAILER_AFF = re.compile(r"(?:amzn\.to|amazon\.[a-z.]+/|link\.amazon|geni\.us|howl\.me|bestbuy\.|bhpho\.to|"
+                           r"walmart\.|target\.com|homedepot\.|lowes\.|kohls\.|costco\.|ebay\.|ebay\.io|"
+                           r"shareasale|skimresources|sjv\.io|\.pxf\.io|7tiv\.net|avantlink|linksynergy|awin1\.com|"
+                           r"tidd\.ly|prf\.hn|anrdoezrs|dpbolvw|tkqlhce|jdoqocy|kqzyfj|rstyle\.me)", re.I)
 _LISTICLE_TITLE = re.compile(r"\b(top|best)\s*\d+\b", re.I)
 _YEAR = re.compile(r"(?<!\d)(20\d\d)(?!\d)")
 
@@ -106,7 +110,7 @@ def likely_ai_listicle(title: str = "", channel: str | None = None, handle: str 
     name = f"{channel or ''} {handle or ''}"
     if any(int(y) > year for y in _YEAR.findall(name)):
         strong.append("future year in channel name/handle")
-    if _LISTICLE_NAME.search(name.replace("@", " ")):
+    if _LISTICLE_NAME.search(name.replace("@", " ")) and not detect_brands(name):  # "Hoover Product Guides"
         strong.append("generic listicle channel name")
     if any(int(y) > year for y in _YEAR.findall(title or "")):
         weak.append("future year in title")
@@ -365,6 +369,17 @@ def per_brand(hits: list[dict], brands: list[str], description: str = "", links_
         for url in (links_by_kind or {}).get(kind) or []:
             owners = _link_brands(url, description, brands)
             sig = "brand_affiliate_links" if kind == "affiliate_links" else "campaign_tracking"
+            if kind == "affiliate_links" and _RETAILER_AFF.search(url):
+                # An Amazon/retailer/network link next to a product name earns the retailer's commission,
+                # not brand money: a light per-brand affiliate signal, not brand_affiliate_links.
+                for b in owners:
+                    if not any(x["signal"] in ("affiliate_links", "brand_affiliate_links") for x in per[b]):
+                        per[b].append({"signal": "affiliate_links", "weight": D.WEIGHTS["affiliate_links"],
+                                       "source": "description", "text": url})
+                if not owners and not any(x["signal"] == "affiliate_links" for x in shared):
+                    shared.append({"signal": "affiliate_links", "weight": D.WEIGHTS["affiliate_links"],
+                                   "source": "description", "text": url})
+                continue
             hit = {"signal": sig, "weight": D.WEIGHTS[sig] if sig in D.WEIGHTS else 0.2, "source": "description",
                    "text": url}
             if owners:

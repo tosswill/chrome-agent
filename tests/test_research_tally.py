@@ -236,3 +236,9 @@ def test_polarity_reads_common_endorsements():
               "Our Hatch has been going strong for 3 years.", "We swear by our Dohm."]:
         assert T.polarity(t) == "recommend", t
     assert T.polarity("The Hatch app is garbage.") == "complain"
+
+
+def test_negated_praise_is_a_complaint():
+    import tally as T
+    assert T.polarity("The Shark is not great for deep cleaning.") == "complain"
+    assert T.polarity("Honestly it isn't that good on stairs.") == "complain"

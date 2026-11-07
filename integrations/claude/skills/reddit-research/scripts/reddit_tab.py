@@ -203,7 +203,8 @@ KNOWN_BRANDS = {b.split()[0].lower() for b in TL.GARBLES} | {
     "synco", "ugreen", "framework", "lenovo", "dell", "asus", "acer", "msi", "nvidia", "amd", "intel", "kobra",
     "snapmaker", "bambu", "formlabs", "phrozen", "artillery", "kingroon", "ratrig", "flsun", "peopoly", "raise3d",
     "bluetti", "goalzero", "bissell", "hoover", "tineco", "karcher", "vax", "kenmore", "miele",
-    "sebo", "dreame", "roomba", "irobot", "eureka", "rugdoctor",
+    "sebo", "dreame", "roomba", "irobot", "eureka", "rugdoctor", "shark", "ninja", "vax", "tineco",
+    "hatch", "yogasleep", "lectrofan", "snooz", "dreamegg", "momcozy", "nanit", "owlet",
 }
 # Words that look like names in title-case titles but are never a brand.
 COMMON = D.GENERIC | {
@@ -359,8 +360,8 @@ def subreddit_brand(sub: str, strong: set, weak: set = frozenset()) -> str | Non
     return None
 
 
-_ROLE_SUFFIX = re.compile(r"^(?P<b>[A-Za-z0-9][A-Za-z0-9_-]*?)[_-]?(?P<k>support|official|team|staff|help|helpdesk|"
-                          r"care|cs|rep|hq|cares)$", re.I)
+_ROLE_SUFFIX = re.compile(r"^(?P<b>[A-Za-z0-9][A-Za-z0-9_-]*?)(?:[_-]?(?P<k>support|official|team|staff|helpdesk|"
+                          r"cares)|[_-](?P<k2>help|care|cs|rep|hq))$", re.I)
 _ROLE_PREFIX = re.compile(r"^(?P<k>official|team)[_-](?P<b>[A-Za-z0-9][A-Za-z0-9_-]{2,})$", re.I)
 _TEAM_FLAIR = re.compile(r"\b(team|staff|employee|official|support|rep|representative|community manager|"
                          r"cm|engineer|developer|dev|founder|ceo|pr|marketing)\b", re.I)
@@ -458,10 +459,10 @@ def brand_account(author: str | None, flair: str | None = None, text: str = "", 
         b = _tok(m.group("b"))
         if b and (b in brands or name_brand(b, brands, weak) or any(_shares_core(b, d) for d in emails)
                   or (sub_brand and sub_brand in b)):
-            return {"author": author, "reason": f"username: brand + '{m.group('k')}'", "brand": name_brand(b, brands, weak) or b,
+            return {"author": author, "reason": f"username: brand + '{(m.groupdict().get('k') or m.groupdict().get('k2'))}'", "brand": name_brand(b, brands, weak) or b,
                     "confidence": "likely"}
         if len(b) >= 2:
-            return {"author": author, "reason": f"username ends in '{m.group('k')}'", "brand": b, "confidence": "possible"}
+            return {"author": author, "reason": f"username ends in '{(m.groupdict().get('k') or m.groupdict().get('k2'))}'", "brand": b, "confidence": "possible"}
     fl = (flair or "").strip()
     if fl:
         why = staff_flair(fl, brands, weak, sub_brand=sub_brand, is_mod=is_mod)
@@ -671,8 +672,14 @@ def content_marketing(data: dict, comments: list[dict]) -> list[dict]:
 
 # Strongest first: a commission disclaimer beats a "deals" rule.
 _SIDEBAR_AFFILIATE = [re.compile(p, re.I) for p in (
-    r"as an amazon associate", r"earn(?:s)? (?:a )?(?:small )?commission", r"\baffiliate links?\b", r"\bwe may earn\b",
+    r"as an amazon associate", r"\b(?:we|this (?:sub|subreddit|community)|mods?) (?:may |might |do )?earns? "
+    r"(?:a )?(?:small )?(?:commission|from)", r"\bwe may earn\b", r"affiliate links? (?:help|support|fund|keep)",
     r"self-promotion (?:is )?allowed", r"\bgenuine deals\b")]
+# A rule line that bans or limits something ("No review blogs, link shorteners, or affiliate links";
+# "Prohibited: affiliate links or free product") is never an earning statement.
+_SIDEBAR_RULE_BAN = re.compile(r"\b(?:no|not|don'?t|do not|never|without|ban(?:ned|s)?|prohibit(?:ed|s)?|"
+                               r"forbid(?:den|s)?|remove[ds]?|disallow(?:ed)?|zero|isn'?t allowed|aren'?t allowed|"
+                               r"will be (?:removed|banned)|rule \d+)\b", re.I)
 
 
 def affiliate_community(sidebar_text: str) -> str | None:
@@ -681,10 +688,12 @@ def affiliate_community(sidebar_text: str) -> str | None:
     t = sidebar_text or ""
     for rx in _SIDEBAR_AFFILIATE:
         for m in rx.finditer(t):
-            # A rule against affiliate links ("No affiliate links", "affiliate links will be removed") is the
-            # opposite signal.
-            before, after = t[max(0, m.start() - 45):m.start()], t[m.end():m.end() + 45]
-            if _SIDEBAR_BAN_BEFORE.search(before) or _SIDEBAR_BAN_AFTER.search(after):
+            a = max(t.rfind(c, 0, m.start()) for c in "\n•") + 1
+            ends = [i for i in (t.find("\n", m.end()), t.find("•", m.end())) if i >= 0]
+            line = t[a:min(ends) if ends else len(t)]
+            # The rule line, plus the heading line just above it ("Prohibited:" over a list).
+            head = t[max(0, t.rfind("\n", 0, max(0, a - 1)) + 1):a]
+            if _SIDEBAR_RULE_BAN.search(line) or _SIDEBAR_RULE_BAN.search(head[-60:]):
                 continue
             return TL.snippet(t, m.start(), m.end(), 70)
     return None
@@ -1061,6 +1070,26 @@ def _typed_search(full_id: str, query: str, subreddit: str | None) -> tuple[dict
     return {"loads": loads, "_failed": True}, "the results page didn't open after Enter"
 
 
+_TIME_DAYS = {"hour": 1 / 24, "day": 1, "week": 7, "month": 31, "year": 366}
+
+
+def time_outside(posts: list[dict], time_filter: str | None, today: date | None = None) -> int:
+    """How many results are clearly older than the time filter (with 50% slack); 0 without a filter."""
+    days = _TIME_DAYS.get(time_filter or "")
+    if not days:
+        return 0
+    today = today or date.today()
+    n = 0
+    for p in posts:
+        try:
+            d = date.fromisoformat((p.get("created") or "")[:10])
+        except ValueError:
+            continue
+        if (today - d).days > days * 1.5 + 1:
+            n += 1
+    return n if n >= max(2, len(posts) // 3) else 0
+
+
 def off_scope(posts: list[dict], subreddit: str) -> list[str]:
     """Subreddits of results that aren't from `subreddit` (a subreddit search that came back
     site-wide). Empty when the results carry no subreddit names."""
@@ -1118,6 +1147,11 @@ def search(target: str, query: str | None = None, *, url: str | None = None,
         if off:
             page["note"] = (f"{len(off)} of {len(posts)} results aren't from r/{subreddit.removeprefix('r/')} "
                             f"(e.g. r/{off[0]}); Reddit may have widened the search.")
+    stale = time_outside(posts, time_filter)
+    if stale:
+        page["note"] = ((page.get("note") + " ") if page.get("note") else "") + (
+            f"{stale} of {len(posts)} results are older than the '{time_filter}' filter: Reddit didn't apply it "
+            "(it often widens scoped or sparse searches). Check `created` before calling results recent.")
     if not posts:
         scope = f"r/{subreddit.removeprefix('r/')}" if subreddit else "all of Reddit"
         page["note"] = (f"No results for {query!r} in {scope}. Simplify the query (fewer words, drop the quotes), "
@@ -1493,6 +1527,10 @@ def thread(target: str, url: str, max_comments: int = 15, replies: int = 0, expa
             c.pop("roles", None)
     data["comments"] = chosen
     data["counts"] = counts
+    if not chosen and not data.get("note"):
+        data["note"] = ("No comments were read: " + ("Reddit rendered none (if this is a cross-post, the discussion "
+                        "is on the original post; open that instead)." if not counts.get("comments_rendered")
+                        else "all rendered comments were deleted, removed or AutoModerator stickies."))
     data["reading"] = reading
     data["comment_order"] = ("sort=" + url.split("sort=")[1].split("&")[0]) if explicit_sort else "Reddit default (best)"
     for k in ("post_bottom", "doc_height", "view_height", "scroll_y"):

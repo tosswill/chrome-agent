@@ -538,3 +538,17 @@ def test_save_transcript_replaces_partial_copy(tmp_path):
     assert len(list(tmp_path.glob("*_pfoegHxzzm8_transcript.json"))) == 1
     same = S.save_transcript(tmp_path, meta, [{"sec": 0, "text": "a"}], today=date(2026, 11, 9))
     assert same["reused"]
+
+
+def test_retailer_affiliate_links_are_not_brand_money():
+    desc = "Shark EX301: https://amzn.to/aaa\nBissell Big Green: https://amzn.to/bbb\nHoover PowerScrub: https://amzn.to/ccc"
+    brands = S.detect_brands("Best carpet cleaners", desc, [], ())
+    pb = S.per_brand([], brands, desc, {"affiliate_links": ["https://amzn.to/aaa", "https://amzn.to/bbb", "https://amzn.to/ccc"]})
+    for b, row in pb["by_brand"].items():
+        assert row["score"] < 0.6, (b, row)
+        assert not any(e["signal"] == "brand_affiliate_links" for e in row.get("evidence", []))
+
+
+def test_brand_named_channels_are_not_listicles():
+    assert not S.likely_ai_listicle("", "HOOVER Product Guides", None)[0]
+    assert S.likely_ai_listicle("", "Gadget Product Guides", None)[0]
