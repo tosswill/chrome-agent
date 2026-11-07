@@ -179,8 +179,12 @@ def rigor_hits(text: str) -> dict[str, int]:
 def video_rigor(rec: dict) -> tuple[float | None, dict]:
     """Rigor from the transcript (None without one). Densities are per 10 minutes of video."""
     segs = rec.get("segments")
+    sd = rec.get("screen_data") or {}
+    screen = 0.0
+    if sd.get("table_like"):  # a results table or chart read off the screen (OCR of a frame)
+        screen = 1.0 + min(0.8, (sd.get("numbers") or 0) * 0.02)
     if not segs:
-        return None, {}
+        return (_clamp(screen), {"hits": {"on_screen_table": 1}, "minutes": None}) if screen else (None, {})
     text = " ".join(s.get("text") or "" for s in segs)
     hits = rigor_hits(text)
     minutes = (rec.get("length_s") or 0) / 60 or max(1.0, len(text.split()) / 150)  # ~150 spoken words/min
@@ -192,10 +196,12 @@ def video_rigor(rec: dict) -> tuple[float | None, dict]:
              + (0.6 if hits["data_table"] else 0) + min(0.6, hits["method"] * 0.3) + (0.6 if hits["instrument"] else 0)
              + (0.4 if hits["long_term"] else 0)
              - min(1.0, per10["spec_sheet"] * 0.3))
+    score += screen
+    hits["on_screen_table"] = 1 if screen else 0
     if rec.get("likely_ai_listicle"):
         score -= 2
     hands_on = (hits["testing_language"] + hits["named_test"] + hits["claim_check"] + hits["controlled_test"]
-                + hits["instrument"] + hits["method"])
+                + hits["instrument"] + hits["method"] + hits["on_screen_table"] * 2)
     kind = None
     if hits["study_citation"] >= 2 and hands_on <= 1:
         # Numbers quoted from studies or guidelines: an evidence explainer, not product testing.

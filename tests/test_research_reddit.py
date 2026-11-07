@@ -488,3 +488,24 @@ def test_time_filter_ignored_is_noted():
     posts = [{"created": "2025-12-01"}, {"created": "2026-01-10"}, {"created": "2026-11-01"}]
     assert R.time_outside(posts, "month", date(2026, 11, 7)) == 2
     assert R.time_outside(posts, None) == 0
+
+
+def test_coordinated_links_and_named_guide_plugs():
+    data = {"author": "op", "url": "https://www.reddit.com/r/x/comments/abc/", "body": "Which carpet cleaner?"}
+    comments = [{"author": f"u{i}", "text": "Love it, works great.", "links": ["https://lovable.dev/badge"],
+                 "link": f"l{i}"} for i in range(4)]
+    hits = R.content_marketing(data, comments)
+    co = [h for h in hits if h["signal"] == "coordinated_links"]
+    assert co and co[0]["weight"] == 0.3
+    plug = [{"author": "z", "text": "Check out the Newborn Sound Machine Guide, it covers all of them.", "links": [],
+             "link": "lz"}]
+    assert any(h["signal"] == "dangling_roundup_reference" for h in R.content_marketing(data, plug))
+
+
+def test_reviewer_names_are_not_brand_tokens(monkeypatch, tmp_path):
+    import json
+    p = tmp_path / "reg.json"
+    p.write_text(json.dumps({"channels": {"projectfarm": {"name": "Project Farm"}, "hoover": {"name": "Hoover"}}}))
+    monkeypatch.setenv("YOUTUBE_TAB_CHANNELS", str(p))
+    monkeypatch.setattr(R, "_REVIEWERS", None)
+    assert R._reviewer_names() == {"projectfarm"}

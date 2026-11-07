@@ -45,6 +45,7 @@ $Y shot <ID> --out-dir <report dir>              # visible page content (top bar
 $Y shot <ID> --selector '#description' --out-dir <dir>   # one element, scrolled into view first
 $Y channel <ID> @handle                          # channel header + recent uploads (1 page load)
 $Y tally <ID> "Bambu P2S" "Qidi Q2" --alias "Bambu P2S=P2S; Qidi Q2=Q2,Cheety Q2"   # channels / independent channels per name (no load)
+$Y screen-text <ID> <frame.jpg> [...]            # OCR of captured frames: text + results-table check (no load)
 $Y channels <ID> --topic "carpet cleaners" --cited "Project Farm=4" [--save]   # channel map: independence/transparency/rigor (no load)
 $Y registry list [--topic T] | show <channel> | describe <channel> --covers "..." --tags "a, b" | observe <channel> --topic T --note "..." [--source URL] | pin <channel> trusted|mixed|distrusted|clear --note "..."  # saved ratings, coverage, user pins
 $Y transcript <ID> --from 4:00 --to 6:30         # only a time window (e.g. one chapter)
@@ -110,7 +111,7 @@ Run it **after a landscape pass** (reusing the videos already read) or **on its 
    - **transparency** (0–5, `null` = nothing to disclose): whether money is disclosed clearly and early (the paid-promotion label, a spoken sponsor read, an affiliate disclosure). Brand links or codes with no disclosure, or a disclosure only late in the video, cost the most.
    - **rigor** (0–5, `null` = no transcript read): measured results with units, controlled side-by-side tests, named tests, instruments, a stated method, long-term follow-ups. Spec-sheet reading lowers it.
    - **authority** (derived): rigor 60%, trust 25%, focus 15%. It's never based on subscribers alone. `context` gives subscribers, focus and trust citations, plus a `quadrant` (trusted tester; rigorous but brand-tied; independent, light testing; affiliate roundup (light testing, most videos earn from affiliate links); brand-supplied, light testing (review units or brand links, some testing); affiliate-led review (a single product, light testing); evidence explainer (cites studies or guidelines, doesn't test products: judge its sources, not its rigor score); promotional/shallow), `confidence` (by sample size and transcripts) and per-video evidence.
-6. **Rigor reads only what's spoken.** Channels that put results in on-screen tables or charts (e.g. a pass-count or water-use table) score low. When a channel's titles or chapters promise test data but rigor is under 2, capture a frame of the results (`frame --scan`), and record what it shows with `registry observe`. The map is sorted by `rank_score`: authority discounted for a one-video sample or a channel under 1,000 subscribers.
+6. **Rigor reads only what's spoken.** Channels that put results in on-screen tables or charts (e.g. a pass-count or water-use table) score low. When a channel's titles or chapters promise test data but rigor is under 2, capture a frame of the results (`frame --scan`) and read it with `$Y screen-text <ID> <frame.jpg> ...` (on-device OCR, no page load). A frame it marks `table_like` counts toward that video's rigor in the map. Check the image before quoting a number, and record what it shows with `registry observe` if useful. The map is sorted by `rank_score`: authority discounted for a one-video sample or a channel under 1,000 subscribers.
 6. **Read the evidence before quoting a rating,** and correct it in the report when the heuristic is plainly wrong (e.g. a measured lab test the patterns missed). Then **save** with `save` so later research can reuse it. Never pin a channel yourself; pins are the user's call. Offer to pin when the user states a verdict ("Project Farm is the gold standard").
 
 **Output:** a channel table (channel linked, what it covers, subscribers, focus, independence, transparency, rigor, authority, quadrant, confidence, the main reasons with video links), plus 2–4 sentences on who to trust for what (e.g. "trust X's measurements; read Y for features, but its reviews are brand-supplied and disclosed"). Weight landscape findings by it: claims from high-rigor, high-independence channels count more. If a chart helps, plot rigor against independence, with transparency as the marker.
@@ -168,6 +169,8 @@ Always start with `video`: disclosure signals, chapters, description, metadata. 
 `$Y close <ID>`.
 
 ## Weighing sources
+
+- **`unnamed_sponsor`:** YouTube's paid-promotion label is shown but no sponsor is named. Treat the video as paid by a reviewed brand, and look at which product it favors (often a newly launched one).
 
 **Creators are marketing-adjacent until shown otherwise.** Lean on videos for features, demos, interest level, comparisons, and alternatives, more than for verdicts.
 

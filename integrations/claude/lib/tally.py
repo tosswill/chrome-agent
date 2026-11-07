@@ -218,6 +218,23 @@ def _right_boundary_ok(folded: str, end: int) -> bool:
     return True
 
 
+# Brands whose model names collide across makers (SmartWash: Hoover vs Vax; Revolution; Pro).
+BRAND_WORDS = {"hoover", "vax", "bissell", "shark", "ninja", "dyson", "tineco", "kenmore", "karcher", "dreame",
+               "roborock", "ecovacs", "eufy", "miele", "sebo", "rug", "ecoflow", "bluetti", "jackery", "anker",
+               "dji", "rode", "hollyland", "sony", "canon", "nikon", "bambu", "prusa", "creality", "elegoo", "qidi",
+               "hatch", "yogasleep", "lectrofan", "snooz", "dreamegg", "momcozy"}
+
+
+def _other_brand_before(folded: str, start: int, term: "Term") -> bool:
+    """True when the word just before a match is a different brand than the term's own ("Vax SmartWash"
+    for "Hoover SmartWash" via a bare "SmartWash" alias)."""
+    own = set(re.findall(r"[a-z0-9]+", _fold(term.name)[0]))
+    if not own & BRAND_WORDS:
+        return False  # "Power Scrub", "Big Green": no brand of its own, so any brand may precede it
+    prev = re.findall(r"[a-z0-9]+", folded[max(0, start - 20):start])
+    return bool(prev) and prev[-1] in BRAND_WORDS and prev[-1] not in own
+
+
 def find_mentions(text: str, terms: list[Term]) -> list[tuple[str, int, int]]:
     """Whole-name, longest-match, non-overlapping mentions: [(term_name, start, end)] in `text` indices."""
     folded, idx = _fold(text or "")
@@ -225,7 +242,7 @@ def find_mentions(text: str, terms: list[Term]) -> list[tuple[str, int, int]]:
     for t in terms:
         for p in t.patterns:
             for m in p.finditer(folded):
-                if _right_boundary_ok(folded, m.end()):
+                if _right_boundary_ok(folded, m.end()) and not _other_brand_before(folded, m.start(), t):
                     cands.append((m.start(), m.end(), t.name))
     chosen: list[tuple[int, int, str]] = []
     for c in sorted(cands, key=lambda c: (-(c[1] - c[0]), c[0])):  # longest first among overlaps

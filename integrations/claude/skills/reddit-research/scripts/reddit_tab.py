@@ -240,6 +240,25 @@ def _tok(w: str) -> str:
     return re.sub(r"[^a-z0-9]", "", w.lower())
 
 
+_REVIEWERS: set | None = None
+
+
+def _reviewer_names() -> set:
+    """Names of YouTube channels in the research channel registry (if any), as brand tokens: a query
+    like "Project Farm carpet cleaner" names a reviewer, not a brand."""
+    global _REVIEWERS
+    if _REVIEWERS is None:
+        p = Path(os.environ.get("YOUTUBE_TAB_CHANNELS",
+                                "~/.local/share/chrome-agent-research/youtube-channels.json")).expanduser()
+        try:
+            rows = json.loads(p.read_text()).get("channels", {}).values()
+            _REVIEWERS = {_tok(r.get("name") or "") for r in rows} - {""}
+        except (OSError, ValueError, AttributeError):
+            _REVIEWERS = set()
+        _REVIEWERS -= KNOWN_BRANDS  # a brand's own channel ("Hoover") is still a brand
+    return _REVIEWERS
+
+
 def brand_candidates(title: str = "", query: str = "", flair: str = "", explicit=()) -> tuple[set, set]:
     """Brand tokens for a thread: (strong, weak). Strong: known brands, explicit --brand names, quoted
     or capitalized query words, ALLCAPS words and names followed by a model number. Weak: other
@@ -563,6 +582,9 @@ _EDIT_ARTICLE = re.compile(r"\b(?:edit|update|upd)\b[^\n]{0,120}?\b(?:article|li
 _DANGLING = re.compile(r"\b(?:this|that|the following)\s+(?:\w+\s+){0,4}?(?:roundup|round-up|breakdown|guide|article|"
                        r"listicle|comparison|write-?up|buying guide)\b|\b(?:breakdown|roundup|round-up|comparison) of "
                        r"(?:the )?(?:top|best)\b[^.]{0,60}\b(?:in this thread|here)\b", re.I)
+# A Title Case guide name with no link: "the Newborn Sound Machine Guide", "Ultimate Carpet Cleaner Roundup".
+_NAMED_GUIDE = re.compile(r"(?-i:\b(?:[A-Z][\w'&-]+\s+){1,5}(?:Guide|Roundup|Round-Up|Buying Guide|Comparison|"
+                          r"Breakdown|Report|Checklist|Cheat Sheet))\b")
 _BIASED = re.compile(r"\b(?:i'?m|i am|i'?ll admit i'?m)\s+(?:a (?:bit|little)|slightly|kinda|somewhat|admittedly|"
                      r"probably|totally)?\s*biased\b|\bfull disclosure\b|\bi work (?:for|at|with)\b", re.I)
 _DOMAIN_TEXT = re.compile(r"\b(?:[a-z0-9-]+\.)+(?:com|net|org|io|co|shop|store|us|uk|ca|de)\b", re.I)
@@ -623,9 +645,12 @@ def content_marketing(data: dict, comments: list[dict]) -> list[dict]:
             hits.append({"signal": "repeated_external_links", "weight": 0.15, "source": f"comment by u/{c.get('author')}",
                          "link": c.get("link"), "text": f"One comment links to {top[0]} {top[1]} times"})
     multi = sorted((h for h, a in by_comment.items() if len(a - {host}) >= 3), key=lambda h: -len(by_comment[h]))
-    if multi and not any(x["signal"] == "repeated_external_links" for x in hits):
-        hits.append({"signal": "repeated_external_links", "weight": 0.15, "source": "comments",
-                     "text": f"{len(by_comment[multi[0]])} different users link to {multi[0]}"})
+    if multi:
+        # Three or more different users linking the same uncommon site (a badge, an app, a shop) looks
+        # coordinated: seeded threads plant the same link in several "independent" comments.
+        n = len(by_comment[multi[0]] - {host})
+        hits.append({"signal": "coordinated_links", "weight": 0.3 if n >= 4 else 0.25, "source": "comments",
+                     "text": f"{n} different users link to {multi[0]} (possible seeded thread)"})
     shorts = [(src, link, u) for src, link, us in [("post", url, (data.get("links") or []))] +
               [(f"comment by u/{c.get('author')}", c.get("link"), c.get("links") or []) for c in comments]
               for u in us if _PARTNER_SHORT.search(u)]
@@ -642,10 +667,12 @@ def content_marketing(data: dict, comments: list[dict]) -> list[dict]:
         t = c.get("text") or ""
         if c.get("author") == host or _hosts(c.get("links")):
             continue
-        mm = _DANGLING.search(t)
+        mm = _DANGLING.search(t) or _NAMED_GUIDE.search(t)
         if mm:
             dangling.append((c, t[max(0, mm.start() - 40):mm.end() + 40].strip()))
-    if len({c.get("author") for c, _ in dangling}) >= 2 or (dangling and TL.polarity(dangling[0][0].get("text", "")) == "recommend"):
+    named = [d for d in dangling if _NAMED_GUIDE.search(d[1])]
+    if len({c.get("author") for c, _ in dangling}) >= 2 or named or \
+            (dangling and TL.polarity(dangling[0][0].get("text", "")) == "recommend"):
         c, snip = dangling[0]
         hits.append({"signal": "dangling_roundup_reference", "weight": 0.1, "source": f"comment by u/{c.get('author')}",
                      "link": c.get("link"), "text": snip + (f" (+{len(dangling) - 1} similar)" if len(dangling) > 1 else "")})
@@ -714,7 +741,10 @@ def promo_bias(data: dict, query: str = "", brands=()) -> dict:
     subreddit counts as the brand's own only when its name is a brand (R12)."""
     sub = (data.get("subreddit") or "").removeprefix("r/")
     title = data.get("title") or ""
-    strong, weak = brand_candidates(title, query, data.get("flair") or "", brands)
+    body_brands = {t for t in (_tok(w) for w in _WORD.findall(data.get("body") or "")) if t in KNOWN_BRANDS}
+    strong, weak = brand_candidates(title, query, data.get("flair") or "", set(brands) | body_brands)
+    reviewers = _reviewer_names()
+    strong, weak = strong - reviewers, weak - reviewers
     sub_brand = subreddit_brand(sub, strong, weak)
     if sub_brand:
         strong = strong | {sub_brand}
@@ -1194,16 +1224,20 @@ def back(target: str) -> dict:
                 return True
         return False
 
+    # Testing only: REDDIT_TAB_TEST_BACK=arrow skips the mouse button, =toolbar skips the arrow too.
+    test = os.environ.get("REDDIT_TAB_TEST_BACK", "")
     x, y = SITE.pointer_into(full_id, SITE.evaluate(full_id, MAIN_JS))
     pause(random.uniform(0.2, 0.6))
-    SITE.cdp(full_id, "Input.dispatchMouseEvent", {"type": "mousePressed", "x": x, "y": y, "button": "back",
-                                                   "buttons": 8, "clickCount": 1})
-    time.sleep(random.uniform(0.06, 0.13))
-    SITE.cdp(full_id, "Input.dispatchMouseEvent", {"type": "mouseReleased", "x": x, "y": y, "button": "back",
-                                                   "buttons": 0, "clickCount": 1})
-    if moved():
+    if not test:
+        SITE.cdp(full_id, "Input.dispatchMouseEvent", {"type": "mousePressed", "x": x, "y": y, "button": "back",
+                                                       "buttons": 8, "clickCount": 1})
+        time.sleep(random.uniform(0.06, 0.13))
+        SITE.cdp(full_id, "Input.dispatchMouseEvent", {"type": "mouseReleased", "x": x, "y": y, "button": "back",
+                                                       "buttons": 0, "clickCount": 1})
+    if not test and moved():
         via = "mouse back button"
-    elif SITE.rect(full_id, _PDP_BACK) and SITE.click_on(full_id, _PDP_BACK, look=random.uniform(0.3, 0.8)) and moved():
+    elif test != "toolbar" and SITE.rect(full_id, _PDP_BACK) and \
+            SITE.click_on(full_id, _PDP_BACK, look=random.uniform(0.3, 0.8)) and moved():
         via = "Reddit back arrow"
     else:
         SITE.cdp(full_id, "Page.navigateToHistoryEntry", {"entryId": prev["id"]})

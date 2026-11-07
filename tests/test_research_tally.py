@@ -242,3 +242,10 @@ def test_negated_praise_is_a_complaint():
     import tally as T
     assert T.polarity("The Shark is not great for deep cleaning.") == "complain"
     assert T.polarity("Honestly it isn't that good on stairs.") == "complain"
+
+
+def test_bare_alias_after_another_brand_is_not_this_product():
+    import tally as T
+    terms = T.build_terms(["Hoover SmartWash"], "Hoover SmartWash=SmartWash")
+    assert T.find_mentions("I love my Vax SmartWash.", terms) == []
+    assert T.find_mentions("Our SmartWash leaks.", terms)

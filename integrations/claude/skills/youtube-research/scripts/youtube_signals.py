@@ -677,3 +677,45 @@ def save_transcript(out_dir: str | Path | None, meta: dict, segments: list[dict]
     if replaced is not None:
         out["replaced_partial"] = f"an earlier copy with {replaced} segments was replaced"
     return out
+
+
+# --- on-screen text (OCR of captured frames) ------------------------------------------------------
+OCR_SWIFT = Path(__file__).with_name("ocr.swift")
+_NUM_CELL = re.compile(r"^[<>~≈]?\s*\d+(?:[.,]\d+)?\s*(?:%|s|sec|min|h|hrs?|db|dba|oz|ml|lbs?|kg|g|w|wh|psi|°[cf]?|/\d+)?$",
+                       re.I)
+_RESULT_WORDS = re.compile(r"\b(?:test|tests|tested|results?|score|scores|passes|ranking|ranked|rating|seconds|"
+                           r"minutes|db|dba|decibels?|recovery|runtime|average|avg|time|measured|percent)\b", re.I)
+
+
+def ocr_images(paths: list[str], timeout: float = 90) -> dict[str, list[dict]]:
+    """On-device OCR (Apple Vision, via swift) of image files -> {path: [{x, y, text}]} (y from the top).
+    Raises OSError when swift or Vision isn't available (non-macOS)."""
+    import shutil
+    import subprocess
+    if not shutil.which("swift") or not OCR_SWIFT.exists():
+        raise OSError("on-screen text needs macOS with swift (Apple Vision)")
+    out = subprocess.run(["swift", str(OCR_SWIFT), *paths], capture_output=True, text=True, timeout=timeout)
+    res: dict[str, list[dict]] = {}
+    cur = None
+    for line in out.stdout.splitlines():
+        if line.startswith("\x01FILE\t"):
+            cur = line.split("\t", 1)[1]
+            res[cur] = []
+        elif line.startswith("\x01ERROR\t"):
+            res[line.split("\t", 1)[1]] = []
+        elif cur is not None and line.count("\t") >= 2:
+            x, y, text = line.split("\t", 2)
+            res[cur].append({"x": float(x), "y": float(y), "text": text.strip()})
+    return res
+
+
+def screen_data(lines: list[dict]) -> dict:
+    """Is this frame a results table or chart? Counts numeric cells, the rows that hold them, and
+    result words ("Passes to Clean", "dB", "seconds")."""
+    nums = [ln for ln in lines if _NUM_CELL.match(ln["text"])]
+    rows = {round(ln["y"], 2) for ln in nums}
+    words = sum(1 for ln in lines if _RESULT_WORDS.search(ln["text"]))
+    table = len(nums) >= 8 and len(rows) >= 3 and words >= 1 or len(nums) >= 20
+    head = sorted((ln for ln in lines if not _NUM_CELL.match(ln["text"])), key=lambda ln: ln["y"])[:3]
+    return {"numbers": len(nums), "rows_with_numbers": len(rows), "result_words": words, "table_like": bool(table),
+            "headline": " / ".join(ln["text"] for ln in head)}
