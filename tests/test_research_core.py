@@ -61,6 +61,7 @@ def test_ensure_visible_fails_fast_when_hidden(monkeypatch):
     states = iter(["hidden", "hidden"])
     monkeypatch.setattr(C.Site, "evaluate", lambda self, t, e, timeout=30: next(states))
     monkeypatch.setattr(C, "pause", lambda *a, **k: None)
+    monkeypatch.setattr(C.Site, "place_windows", lambda self: None)
     with pytest.raises(C.Fail, match="hidden"):
         site.ensure_visible("T")
 
@@ -72,4 +73,34 @@ def test_ensure_visible_tolerates_brief_hidden(monkeypatch):
     states = iter(["hidden", "visible"])
     monkeypatch.setattr(C.Site, "evaluate", lambda self, t, e, timeout=30: next(states))
     monkeypatch.setattr(C, "pause", lambda *a, **k: None)
+    monkeypatch.setattr(C.Site, "place_windows", lambda self: None)
     site.ensure_visible("T")  # no raise
+
+
+def test_place_windows_moves_only_own_browser(monkeypatch):
+    import research_core as C
+    site = C.Site.__new__(C.Site)
+    calls = []
+    def fake(self, *args):
+        calls.append(args)
+        if args[0] == "list-windows":
+            return "11|500|4\n12|500|9\n13|777|7\n"
+        if args[:2] == ("list-workspaces", "--monitor"):
+            return "1\n4\n9\n"
+        return ""
+    monkeypatch.setenv("RESEARCH_AEROSPACE_WORKSPACE", "9")
+    monkeypatch.setattr(C.shutil, "which", lambda name: "/bin/" + name)
+    monkeypatch.setattr(C.Site, "_aerospace", fake)
+    monkeypatch.setattr(C.Site, "_browser_pid", lambda self: 500)
+    monkeypatch.setattr(C, "pause", lambda *a, **k: None)
+    res = site.place_windows()
+    assert res == {"workspace": "9", "moved": 1, "shown": False}
+    moves = [c for c in calls if c[0] == "move-node-to-workspace"]
+    assert moves == [("move-node-to-workspace", "--window-id", "11", "9")]  # never 13 (the user's Chrome)
+    assert not any(c[0] == "workspace" for c in calls)  # already visible: no focus change
+
+
+def test_place_windows_off_without_setting(monkeypatch):
+    import research_core as C
+    monkeypatch.delenv("RESEARCH_AEROSPACE_WORKSPACE", raising=False)
+    assert C.Site.__new__(C.Site).place_windows() is None
