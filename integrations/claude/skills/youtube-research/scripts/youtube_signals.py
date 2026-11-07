@@ -1,9 +1,13 @@
 """Pure YouTube-side heuristics for youtube_tab.py: no browser, stdlib only, unit-tested.
 
     dedupe_segments(segments) -> (segments, removed)          Y1: one copy of each (sec, text)
+    transcript_coverage(segments, length_s)                   first/last, gaps, complete
+    merge_segments(*lists)                                    union of reads at several scroll positions
     likely_ai_listicle(title, channel, handle, uploads, year) Y3: (bool, reasons)
+    near_duplicate_clips(results)                             content-farm hint: {channel: reasons}
     amazon_influencer(title, description, links, length_s, views)  Y17: (bool, reasons)
-    detect_brands(title, description, links, own_domains)     brands named in a video (Y6)
+    detect_brands(title, description, links, own_domains)     brands named in a video (Y6), gear lists skipped
+    strip_gear_blocks(description)                            the description without the creator's gear lists
     per_brand(hits, brands, description, links)               Y6: {by_brand, shared_score}
     score_for_term(record, term)                              the sponsor score that applies to a tally term
     comment_promo_hints(comments, brands)                     Y18: low-confidence seeded-comment hint
@@ -41,6 +45,46 @@ def dedupe_segments(segments: list[dict]) -> tuple[list[dict], int]:
     return out, len(segments or []) - len(out)
 
 
+def transcript_coverage(segments: list[dict], length_s: int | None = None) -> dict:
+    """How much of the video the segments cover: first/last segment start, gaps longer than
+    max(45 s, 6x the median spacing), and the missing tail. `complete` is False when there are gaps or the
+    last segment starts more than 60 s before the end. Gaps can be genuine silence (music, b-roll)."""
+    secs = sorted({s["sec"] for s in segments or [] if s.get("sec") is not None})
+    if not secs:
+        return {"complete": False, "segments": 0, "gaps": [], "note": "no timed segments"}
+    steps = sorted(b - a for a, b in zip(secs, secs[1:]))
+    median = steps[len(steps) // 2] if steps else 0
+    limit = max(45, 6 * median)
+    gaps = [{"from": _clock(a), "to": _clock(b), "seconds": b - a} for a, b in zip(secs, secs[1:]) if b - a > limit]
+    tail = (length_s - secs[-1]) if length_s else None
+    out = {"segments": len(secs), "first": _clock(secs[0]), "last": _clock(secs[-1]),
+           "length": _clock(length_s) if length_s else None, "gaps": gaps,
+           "complete": not gaps and (tail is None or tail <= 60) and secs[0] <= 60}
+    if tail is not None and tail > 60:
+        out["missing_tail_s"] = tail
+    return out
+
+
+def _clock(sec: float | None) -> str | None:
+    if sec is None:
+        return None
+    sec = int(sec)
+    h, m, s = sec // 3600, sec % 3600 // 60, sec % 60
+    return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
+
+
+def merge_segments(*lists: list[dict]) -> list[dict]:
+    """Union of segment lists read at different scroll positions, sorted by start time."""
+    seen, out = set(), []
+    for lst in lists:
+        for s in lst or []:
+            k = (s.get("sec"), re.sub(r"\s+", " ", s.get("text") or "").strip())
+            if k not in seen:
+                seen.add(k)
+                out.append(s)
+    return sorted(out, key=lambda s: (s.get("sec") is None, s.get("sec") or 0))
+
+
 # -------------------------------------------------------------------------
 # Y3: AI-listicle channels / Y17: Amazon-influencer clips
 # -------------------------------------------------------------------------
@@ -76,6 +120,42 @@ def likely_ai_listicle(title: str = "", channel: str | None = None, handle: str 
     return flagged, (strong + weak) if flagged else []
 
 
+def _len_s(text) -> int | None:
+    m = re.fullmatch(r"\s*(\d{1,2})(?::(\d{2}))(?::(\d{2}))?\s*", str(text or ""))
+    if not m:
+        return None
+    parts = [int(x) for x in m.groups() if x is not None]
+    sec = 0
+    for x in parts:
+        sec = sec * 60 + x
+    return sec
+
+
+def _title_words(t: str) -> set[str]:
+    return {w for w in re.findall(r"[a-z0-9]{3,}", (t or "").lower()) if not w.isdigit() or len(w) > 4}
+
+
+def near_duplicate_clips(results: list[dict], min_count: int = 3) -> dict[str, list[str]]:
+    """Content-farm hint: one channel with `min_count`+ results in the same list that are short clips
+    (under 3 minutes, or Shorts) with near-identical titles (word overlap >= 0.5 with another of them).
+    Returns {channel: reasons}."""
+    by_ch: dict[str, list[dict]] = {}
+    for r in results or []:
+        if r.get("channel"):
+            by_ch.setdefault(r["channel"], []).append(r)
+    out = {}
+    for ch, rs in by_ch.items():
+        short = [r for r in rs if r.get("type") == "short" or ((_len_s(r.get("length")) or 10**6) < 180)]
+        if len(short) < min_count:
+            continue
+        words = [_title_words(r.get("title")) for r in short]
+        alike = {i for i in range(len(short)) for j in range(len(short)) if i != j and words[i] and words[j]
+                 and len(words[i] & words[j]) / len(words[i] | words[j]) >= 0.5}
+        if len(alike) >= min_count:
+            out[ch] = [f"{len(alike)} near-identical short clips from one channel in these results"]
+    return out
+
+
 _STOREFRONT = re.compile(r"amazon\.[a-z.]+/(shop|live|influencers?)/|amazon\.[a-z.]+/stores/|/influencer/", re.I)
 _AMAZON_ANY = re.compile(r"amazon\.[a-z.]+/|amzn\.to/|amzn\.eu/|link\.amazon/|a\.co/", re.I)
 _AMZ_TAGS = re.compile(r"#(amazonfinds?|amazonmusthaves?|founditonamazon|amazoninfluencer|amazonreview|"
@@ -83,20 +163,27 @@ _AMZ_TAGS = re.compile(r"#(amazonfinds?|amazonmusthaves?|founditonamazon|amazoni
 
 
 def amazon_influencer(title: str = "", description: str = "", links=(), length_s: int | None = None,
-                      views: int | None = None) -> tuple[bool, list[str]]:
-    """Amazon-influencer style clip: storefront links, #amazonfinds-style tags, or a very short "review"
-    with Amazon links and little reach (often of an unbranded kit)."""
+                      views: int | None = None, subscribers: int | None = None) -> tuple[bool, list[str]]:
+    """Amazon-influencer style clip. Needs TWO or more signals: storefront link, #amazonfinds-style tags,
+    a very short "review" with Amazon links, a clip under 90 s with Amazon links, little reach. A single
+    storefront link is common on ordinary review channels (an 8.5-minute video from a 164K channel was
+    flagged on one link), so it never flags alone. Returns (flagged, reasons); reasons are [] when not
+    flagged."""
     reasons = []
     links = list(links or [])
+    amazon = any(_AMAZON_ANY.search(u) for u in links) or bool(_AMAZON_ANY.search(description or ""))
     if any(_STOREFRONT.search(u) for u in links) or _STOREFRONT.search(description or ""):
         reasons.append("Amazon storefront link")
     if _AMZ_TAGS.search(f"{title} {description}"):
         reasons.append("Amazon-finds hashtag")
-    if (length_s is not None and length_s < 300 and re.search(r"\breview\b", title or "", re.I)
-            and (any(_AMAZON_ANY.search(u) for u in links) or _AMAZON_ANY.search(description or ""))
-            and (views is None or views < 10_000)):
-        reasons.append("short 'review' with Amazon links and little reach")
-    return bool(reasons), reasons
+    if (length_s is not None and length_s < 300 and re.search(r"\breview\b", title or "", re.I) and amazon):
+        reasons.append("short 'review' with Amazon links")
+    elif length_s is not None and length_s < 90 and amazon:
+        reasons.append("clip under 90 s with Amazon links")
+    if amazon and ((views is not None and views < 10_000) or (subscribers is not None and subscribers < 5_000)):
+        reasons.append("little reach")
+    flagged = len(reasons) >= 2
+    return flagged, reasons if flagged else []
 
 
 # -------------------------------------------------------------------------
@@ -111,8 +198,12 @@ KNOWN_BRANDS = [
     "Apple", "Samsung", "Google", "Meta", "Xreal", "Viture", "Rokid", "RayNeo", "Even Realities", "Brilliant Labs",
     "Logitech", "Razer", "Corsair", "Anker", "Ugreen", "Belkin", "Asus", "Acer", "Lenovo", "Dell", "HP", "MSI",
     "Garmin", "Fitbit", "Xiaomi", "OnePlus", "Bose", "Jabra", "Elgato", "Blue Yeti", "Audio-Technica",
+    "EcoFlow", "Bluetti", "Jackery", "Goal Zero", "Renogy", "Oupes", "Vtoman", "Pecron", "Allpowers", "Fossibot",
+    "Bissell", "Hoover", "Shark", "Rug Doctor", "Tineco", "Dyson", "Vax", "Kärcher", "Dreame", "Roborock",
+    "Ecovacs", "iRobot", "Eufy", "Kenmore", "Miele", "Sebo", "Uwant",
 ]
 BRAND_ALIASES = {"Bambu Lab": ["Bambu", "BambuLab", "Bambu Labs"], "Rode": ["RØDE"], "Prusa": ["Prusa Research"],
+                 "Kärcher": ["Karcher"], "EcoFlow": ["Eco Flow"], "Rug Doctor": ["RugDoctor"],
                  "Qidi": ["Qidi Tech", "QIDI"], "Insta360": ["Insta 360"], "Even Realities": ["Even G1", "Even G2"]}
 # Hosts that never name a reviewed brand.
 _PLATFORM = re.compile(r"(^|\.)(youtube|youtu|google|goo|amazon|amzn|instagram|facebook|fb|twitter|x|tiktok|"
@@ -126,7 +217,38 @@ _URL = re.compile(r"https?://\S+")
 
 
 def _fold(s: str) -> str:
-    return (s or "").lower().replace("ø", "o").replace("é", "e")
+    return (s or "").lower().replace("ø", "o").replace("é", "e").replace("ä", "a")
+
+
+# The creator's own equipment lists ("My gear:", "Current Video Gear", "Camera: ...") name camera and mic
+# brands that are not reviewed in the video.
+_GEAR_HEAD = re.compile(
+    r"^\W*(?:(?:my|our|current|video|filming|camera|youtube|studio|recording)\s+){0,3}"
+    r"(?:gear|equipment|kit|setup|set-?up)(?:\s+(?:i|we)\s+use|\s+used|\s+list)?\b[^\n]{0,30}:?\s*$|"
+    r"^\W*(?:what|gear|equipment|tools?)\s+(?:i|we)\s+use\b[^\n]{0,40}:?\s*$|"
+    r"^\W*(?:filmed|shot|recorded)\s+(?:with|on|using)\b", re.I)
+_GEAR_LINE = re.compile(r"^\W*(?:main |b-?roll |second |a-?cam |b-?cam )?(?:cameras?|lens(?:es)?|mics?|microphones?|lav(?:alier)?s?|"
+                        r"lights?|lighting|tripods?|gimbals?|audio|recorder|sd cards?|monitor|drone|editing|"
+                        r"computer|laptop)\s*[:\-–]", re.I)
+
+
+def strip_gear_blocks(description: str) -> str:
+    """The description without the creator's gear/equipment sections: a gear header and the lines under it
+    (until a blank line), and single "Camera: ..."/"Mic: ..." lines."""
+    out, skipping = [], False
+    for ln in (description or "").splitlines():
+        if _GEAR_HEAD.search(ln):
+            skipping = not re.match(r"^\W*(?:filmed|shot|recorded)\b", ln, re.I)
+            continue
+        if skipping:
+            if not ln.strip():
+                skipping = False
+                out.append(ln)
+            continue
+        if _GEAR_LINE.search(ln):
+            continue
+        out.append(ln)
+    return "\n".join(out)
 
 
 def _alnum(s: str) -> str:
@@ -146,8 +268,10 @@ def _mentions(text: str, brand: str) -> bool:
 def detect_brands(title: str = "", description: str = "", links=(), own_domains=()) -> list[str]:
     """Brands named in the title or description: a built-in brand list, plus link hosts (not platforms,
     networks, or the channel's own sites) whose name also appears in the text."""
-    text = _URL.sub(" ", f"{title}\n{description}")
+    kept = strip_gear_blocks(description)
+    text = _URL.sub(" ", f"{title}\n{kept}")
     found = [b for b in KNOWN_BRANDS if _mentions(text, b)]
+    gear_links = set(re.findall(r"https?://\S+", description or "")) - set(re.findall(r"https?://\S+", kept))
     own = {_alnum(d) for d in own_domains or ()}
     words = _alnum(text)
     from urllib.parse import urlparse
@@ -156,7 +280,8 @@ def detect_brands(title: str = "", description: str = "", links=(), own_domains=
             host = (urlparse(u).hostname or "").lower().removeprefix("www.")
         except ValueError:
             continue
-        if not host or _PLATFORM.search(host + ".") or any(o and o in _alnum(host) for o in own):
+        if (not host or u in gear_links or _PLATFORM.search(host + ".")
+                or any(o and o in _alnum(host) for o in own)):
             continue
         stem = host.split(".")[-2] if host.count(".") >= 1 else host
         if len(stem) < 4 or _alnum(stem) in {_alnum(b) for b in found}:
@@ -165,6 +290,15 @@ def detect_brands(title: str = "", description: str = "", links=(), own_domains=
             continue
         if re.search(r"(?<![a-z0-9])" + re.escape(stem) + r"(?![a-z0-9])", _fold(text)):
             found.append(stem.capitalize())
+            continue
+        # A brand site whose name is the brand plus a word ("bluettipower.com", "ankerfast.club"): a
+        # capitalized word of 4+ letters in the text that the host name starts with.
+        for w in dict.fromkeys(re.findall(r"\b[A-Z][A-Za-z]{3,}\b", text)):
+            if _alnum(stem).startswith(_alnum(w)) and len(_alnum(stem)) > len(_alnum(w)) \
+                    and _alnum(w) not in {"https", "http", "shop", "store", "check", "link", "free", "best"}:
+                if not any(_alnum(w) == _alnum(b) for b in found):
+                    found.append(w)
+                break
     return found
 
 
@@ -193,6 +327,7 @@ def per_brand(hits: list[dict], brands: list[str], description: str = "", links_
     Returns {by_brand: {brand: {score, level, signals}}, shared_score}."""
     import disclosure as D  # noqa: WPS433 (lib is on sys.path in youtube_tab)
     score_fn = score_fn or D.score
+    description = strip_gear_blocks(description)
     per = {b: [] for b in brands}
     shared: list[dict] = []
     sponsored_brands: set[str] = set()
@@ -475,11 +610,20 @@ def save_transcript(out_dir: str | Path | None, meta: dict, segments: list[dict]
     d.mkdir(parents=True, exist_ok=True)
     vid = meta.get("video_id") or "video"
     existing = sorted(d.glob(f"*_{vid}_transcript.json"))
+    replaced = None
     if existing:
         j = existing[-1]
-        md = j.with_suffix(".md")
-        return {"json": str(j), "md": str(md) if md.exists() else None, "reused": True,
-                "note": "A transcript of this video was already saved there; it was reused, not rewritten."}
+        try:
+            had = int(json.loads(j.read_text()).get("total_segments") or 0)
+        except (OSError, ValueError):
+            had = 0
+        if had >= len(segments or []):
+            md = j.with_suffix(".md")
+            return {"json": str(j), "md": str(md) if md.exists() else None, "reused": True,
+                    "note": "A transcript of this video was already saved there; it was reused, not rewritten."}
+        replaced = had  # the earlier copy was partial: write the fuller one
+        for old in (j, j.with_suffix(".md")):
+            old.unlink(missing_ok=True)
     stem = f"{(today or date.today()).isoformat()}_{vid}_transcript"
     segs = [{"sec": s.get("sec"), "at": s.get("at") or _mmss(s.get("sec")), "link": s.get("link"),
              "text": s.get("text")} for s in segments]
@@ -492,7 +636,7 @@ def save_transcript(out_dir: str | Path | None, meta: dict, segments: list[dict]
         "sponsor_bias": {"score": sb.get("score"), "level": sb.get("level"), "confidence": sb.get("confidence"),
                          "evidence": [{k: e.get(k) for k in ("signal", "weight", "source", "text", "link") if e.get(k) is not None}
                                       for e in sb.get("evidence", [])]} if sb else None,
-        "total_segments": len(segs), "segments": segs,
+        "total_segments": len(segs), "coverage": meta.get("coverage"), "segments": segs,
     }
     j = d / f"{stem}.json"
     j.write_text(json.dumps(doc, indent=1, ensure_ascii=False))
@@ -505,8 +649,13 @@ def save_transcript(out_dir: str | Path | None, meta: dict, segments: list[dict]
         sigs = ", ".join(e.get("signal", "?") for e in sb.get("evidence", []))
         lines.append(f"- Sponsor bias at fetch: {sb.get('score')} ({sb.get('level')}, {sb.get('confidence')} confidence)"
                      + (f": {sigs}" if sigs else ""))
-    lines += [f"- Segments: {len(segs)}", ""]
+    cov = meta.get("coverage") or {}
+    gaps = ", ".join(f"{g['from']}–{g['to']}" for g in cov.get("gaps") or [])
+    lines += [f"- Segments: {len(segs)}" + (f" (gaps: {gaps})" if gaps else ""), ""]
     lines += [f"[{s['at']}]({s['link']}) {s['text']}" if s.get("link") else f"[{s['at']}] {s['text']}" for s in segs]
     md = d / f"{stem}.md"
     md.write_text("\n".join(lines) + "\n")
-    return {"json": str(j), "md": str(md), "reused": False}
+    out = {"json": str(j), "md": str(md), "reused": False}
+    if replaced is not None:
+        out["replaced_partial"] = f"an earlier copy with {replaced} segments was replaced"
+    return out

@@ -133,10 +133,20 @@ def test_listicle_high_uploads():
 
 
 def test_amazon_influencer_flag():
+    # Two or more signals flag a clip.
     assert S.amazon_influencer("MAYBESTA wireless lav review", "", ["https://amzn.to/x"], length_s=95, views=300)[0]
-    assert S.amazon_influencer("Great mic #amazonfinds")[0]
-    assert S.amazon_influencer("Mic", "Shop my picks: https://www.amazon.com/shop/someone")[0]
+    assert S.amazon_influencer("Great mic #amazonfinds", "https://www.amazon.com/shop/someone")[0]
     assert not S.amazon_influencer("DJI Mic 3 long-term review", "", ["https://amzn.to/x"], length_s=1500, views=90_000)[0]
+
+
+def test_amazon_influencer_single_signal_never_flags():
+    # An 8.5-minute video from a 164K-subscriber channel with one storefront link (2026-11-06 false positive).
+    flagged, why = S.amazon_influencer("EcoFlow Delta 3 review after a year",
+                                       "Shop my picks: https://www.amazon.com/shop/someone",
+                                       ["https://www.amazon.com/shop/someone"], length_s=510, views=40_000,
+                                       subscribers=164_000)
+    assert not flagged and why == []
+    assert not S.amazon_influencer("Great mic #amazonfinds")[0]
 
 
 # --- Y18 --------------------------------------------------------------------
@@ -363,3 +373,168 @@ def test_ensure_quiet_escapes_only_when_fullscreen(monkeypatch):
     assert Y._ensure_quiet("T")["left_fullscreen"] is True
     Y._ensure_quiet("T")
     assert keys == ["Escape"]  # pressed once, only while fullscreen
+
+
+# --- chapters / duration / search settling (video.js, search_results.js) -----
+
+def test_video_js_chapters_and_duration_present():
+    js = (ROOT / "skills" / "youtube-research" / "scripts" / "video.js").read_text()
+    assert "chapters_source" in js and "duration:" in js
+    assert "get(\"v\") === vd.videoId" in js  # markers are filtered to this video's own links
+
+
+def test_search_results_js_reads_visible_results_only():
+    js = (ROOT / "skills" / "youtube-research" / "scripts" / "search_results.js").read_text()
+    assert "getClientRects().length > 0" in js and "ytd-search ytd-video-renderer" in js
+
+
+def test_settle_results_waits_for_stable_echoed_list(monkeypatch):
+    reads = iter([{"on_results": True, "echoed": False, "n": 2, "first": "a"},
+                  {"on_results": True, "echoed": True, "n": 9, "first": "b"},
+                  {"on_results": True, "echoed": True, "n": 15, "first": "b"},
+                  {"on_results": True, "echoed": True, "n": 15, "first": "b"}])
+    monkeypatch.setattr(Y.SITE, "evaluate", lambda *a, **k: next(reads))
+    monkeypatch.setattr(Y, "pause", lambda *a, **k: None)
+    assert Y._settle_results("T", "lav mic") == {"settled": True, "results_visible": 15}
+
+
+def test_settle_results_times_out(monkeypatch):
+    monkeypatch.setattr(Y.SITE, "evaluate", lambda *a, **k: {"on_results": True, "echoed": False, "n": 3})
+    monkeypatch.setattr(Y, "pause", lambda *a, **k: None)
+    res = Y._settle_results("T", "q", timeout=0.01)
+    assert res["settled"] is False and "partial" in res["note"]
+
+
+def test_settle_results_stable_empty_page(monkeypatch):
+    monkeypatch.setattr(Y.SITE, "evaluate", lambda *a, **k: {"on_results": True, "echoed": True, "n": 0})
+    monkeypatch.setattr(Y, "pause", lambda *a, **k: None)
+    res = Y._settle_results("T", "q")
+    assert res["settled"] is True and res["results_visible"] == 0 and "Shorts" in res["note"]
+
+
+# --- content-farm clips -----------------------------------------------------------
+
+def test_near_duplicate_clips_flags_one_channel():
+    rs = [{"channel": "Origin Finds", "title": f"This carpet cleaner is amazing #{i}", "length": "0:41"} for i in range(4)]
+    rs += [{"channel": "Vacuum Wars", "title": "Best carpet cleaners 2026", "length": "18:02"},
+           {"channel": "Solo", "title": "Bissell Big Green review", "length": "0:59"}]
+    out = S.near_duplicate_clips(rs)
+    assert list(out) == ["Origin Finds"] and "near-identical" in out["Origin Finds"][0]
+
+
+def test_near_duplicate_clips_ignores_long_or_distinct():
+    rs = [{"channel": "A", "title": t, "length": "12:00"} for t in ("x one test", "x one test", "x one test")]
+    rs += [{"channel": "B", "title": t, "length": "0:30"} for t in ("Shark review", "Bissell steam", "Hoover leak fix")]
+    assert S.near_duplicate_clips(rs) == {}
+
+
+# --- brands: gear lists, brand+word hosts --------------------------------------------
+
+_DESC = """Best power stations tested.
+Bluetti AC180: https://www.bluettipower.com/products/ac180?ref=abc
+Anker SOLIX: https://ankerfast.club/anker.solix_tsl
+EcoFlow Delta 3: https://amzn.to/abc
+
+Current Video Gear
+Camera: Sony A7IV https://amzn.to/s1
+Mic: Rode Wireless Pro https://amzn.to/r1
+Phone: Samsung S24
+
+Filmed with a Canon R5"""
+
+
+def test_detect_brands_skips_gear_and_finds_brand_hosts():
+    links = ["https://www.bluettipower.com/products/ac180?ref=abc", "https://ankerfast.club/anker.solix_tsl",
+             "https://amzn.to/abc", "https://amzn.to/s1", "https://amzn.to/r1"]
+    found = S.detect_brands("Bluetti vs EcoFlow vs Anker", _DESC, links)
+    assert set(found) == {"Bluetti", "EcoFlow", "Anker"}
+    assert not {"Sony", "Rode", "Samsung", "Canon"} & set(found)
+
+
+def test_strip_gear_blocks():
+    out = S.strip_gear_blocks(_DESC)
+    assert "Sony" not in out and "Rode" not in out and "Canon" not in out and "Bluetti AC180" in out
+
+
+def test_per_brand_attributes_affiliate_link_to_bluetti():
+    import disclosure as D
+    links = ["https://www.bluettipower.com/products/ac180?ref=abc", "https://amzn.to/abc"]
+    d = D.classify_links(links, channel="The Solar Lab", description=_DESC)
+    pb = S.per_brand([], ["Bluetti", "EcoFlow", "Anker"], _DESC, d)
+    assert "brand_affiliate_links" in pb["by_brand"]["Bluetti"]["signals"]
+
+
+# --- transcript coverage ------------------------------------------------------------------
+
+def test_transcript_coverage_finds_gaps_and_tail():
+    segs = [{"sec": s, "text": str(s)} for s in list(range(0, 306, 5)) + [446, 538]]
+    cov = S.transcript_coverage(segs, 600)
+    assert not cov["complete"]
+    assert [(g["from"], g["to"]) for g in cov["gaps"]] == [("5:05", "7:26"), ("7:26", "8:58")]
+    assert cov["missing_tail_s"] == 62
+
+
+def test_transcript_coverage_complete():
+    segs = [{"sec": s, "text": str(s)} for s in range(0, 600, 4)]
+    assert S.transcript_coverage(segs, 610)["complete"]
+
+
+def test_merge_segments_unions_and_sorts():
+    a = [{"sec": 0, "text": "a"}, {"sec": 10, "text": "b"}]
+    b = [{"sec": 10, "text": "b"}, {"sec": 5, "text": "m"}]
+    assert [s["sec"] for s in S.merge_segments(a, b)] == [0, 5, 10]
+
+
+def test_collect_transcript_scrolls_until_bottom(monkeypatch):
+    pages = [[{"sec": 0, "text": "a"}], [{"sec": 30, "text": "b"}], [{"sec": 60, "text": "c"}], [], []]
+    state = {"i": 0}
+    boxes = [{"x": 0, "y": 0, "width": 300, "height": 400, "top": 0, "max": 900}]
+
+    def ev(t, js, timeout=30):
+        if js == Y._TRANSCRIPT_BOX_JS:
+            top = min(900, 300 * state["i"])
+            return {**boxes[0], "top": top}
+        segs = pages[min(state["i"], len(pages) - 1)]
+        return {"segments": segs}
+
+    def wheel(t, dy, x=None, y=None, area=None):
+        state["i"] += 1
+    monkeypatch.setattr(Y.SITE, "evaluate", ev)
+    monkeypatch.setattr(Y.SITE, "wheel", wheel)
+    monkeypatch.setattr(Y, "pause", lambda *a, **k: None)
+    segs, info = Y._collect_transcript("T", [{"sec": 0, "text": "a"}], 70)
+    assert [s["sec"] for s in segs] == [0, 30, 60] and info["scrolled"] and info["reached_bottom"]
+
+
+def test_collect_transcript_keeps_scrolling_past_idle_stretch(monkeypatch):
+    # Live 2026-11-07: rows in later chapters appear only near the end; 6 idle steps mid-list isn't the end.
+    state = {"i": 0}
+
+    def ev(t, js, timeout=30):
+        if js == Y._TRANSCRIPT_BOX_JS:
+            return {"x": 0, "y": 0, "width": 300, "height": 400, "top": min(3000, 300 * state["i"]), "max": 3000}
+        return {"segments": [{"sec": 600, "text": "late"}] if state["i"] >= 9 else []}
+
+    def wheel(t, dy, x=None, y=None, area=None):
+        state["i"] += 1
+    monkeypatch.setattr(Y.SITE, "evaluate", ev)
+    monkeypatch.setattr(Y.SITE, "wheel", wheel)
+    monkeypatch.setattr(Y, "pause", lambda *a, **k: None)
+    segs, info = Y._collect_transcript("T", [{"sec": 0, "text": "a"}], 700)
+    assert [s["sec"] for s in segs] == [0, 600] and info["reached_bottom"]
+
+
+def test_gap_note_names_incomplete_creator_track():
+    assert "creator-uploaded" in Y._gap_note(["en", "en (auto)"])
+    assert "silent" in Y._gap_note(["en (auto)"])
+
+
+def test_save_transcript_replaces_partial_copy(tmp_path):
+    meta = {"video_id": "pfoegHxzzm8", "title": "t"}
+    S.save_transcript(tmp_path, meta, [{"sec": 0, "text": "a"}], today=date(2026, 11, 7))
+    again = S.save_transcript(tmp_path, {**meta, "coverage": {"gaps": []}},
+                              [{"sec": 0, "text": "a"}, {"sec": 9, "text": "b"}], today=date(2026, 11, 8))
+    assert not again["reused"] and "replaced_partial" in again
+    assert len(list(tmp_path.glob("*_pfoegHxzzm8_transcript.json"))) == 1
+    same = S.save_transcript(tmp_path, meta, [{"sec": 0, "text": "a"}], today=date(2026, 11, 9))
+    assert same["reused"]

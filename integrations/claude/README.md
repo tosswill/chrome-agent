@@ -29,6 +29,8 @@ On Reddit that means: searches are typed into Reddit's search box with human key
 
 The CLIs (`reddit_tab.py`, `youtube_tab.py`) and the MCP tools call the same functions, so they behave identically.
 
+Every result, errors included, carries `timings`: `total_s` plus per-step totals and counts (`visibility_check`, `place_windows`, `pace_wait`, `page_load`, and site-specific steps), so slow calls can be traced to waiting, loading or reading.
+
 ## Setup
 
 Prerequisites: `uv tool install chrome-agent`, and Google Chrome.

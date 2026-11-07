@@ -25,6 +25,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "skills" / "reddit-research" / "scripts"))
 sys.path.insert(0, str(HERE.parent / "skills" / "youtube-research" / "scripts"))
 import reddit_tab  # noqa: E402
+from research_core import attach_timings, timings_reset  # noqa: E402
 import youtube_tab  # noqa: E402
 
 BIN = shutil.which("chrome-agent") or str(Path.home() / ".local/bin/chrome-agent")
@@ -63,10 +64,11 @@ def _run(args: list[str], timeout: float) -> str:
 
 
 def _reddit(fn, *args, **kwargs) -> str:
+    timings_reset()
     try:
-        return json.dumps(fn(*args, **kwargs), ensure_ascii=False)
+        return json.dumps(attach_timings(fn(*args, **kwargs)), ensure_ascii=False)
     except reddit_tab.Fail as e:  # the same Fail class backs both sites
-        return json.dumps({"error": str(e)})
+        return json.dumps(attach_timings({"error": str(e)}))
 
 
 def _frame_images(target, at, burst, out_dir=None, scan=None, samples=4):
@@ -83,10 +85,13 @@ def _frame_images(target, at, burst, out_dir=None, scan=None, samples=4):
 
 def _with_image(fn, *args, **kwargs):
     """Run a capture and return its JSON plus the image itself, so the model can check it."""
+    timings_reset()
     try:
         res = fn(*args, **kwargs)
     except youtube_tab.Fail as e:
-        return json.dumps({"error": str(e)})
+        return json.dumps(attach_timings({"error": str(e)}))
+    if isinstance(res, dict) and "result" in res:
+        attach_timings(res["result"])
     if isinstance(res, dict) and "images" in res:
         return [json.dumps(res["result"], ensure_ascii=False)] + [Image(path=p) for p in res["images"]]
     return [json.dumps(res, ensure_ascii=False), Image(path=res["path"])]
@@ -187,8 +192,11 @@ def reddit_search(target: str, query: str, subreddit: str | None = None,
     community (e.g. 'Xreal'). sort: relevance|new|top|comments. time: hour|day|week|month|year|all.
     With no sort/time (Reddit's defaults: relevance, all time) the query is typed into Reddit's search
     box like a person when the window is already on a Reddit page; otherwise the search URL is loaded.
-    page.via says which ("typed", "url", "url (<why>)").
-    Returns {page: {loggedIn, blocked, loads, via, stop?}, posts: [{id, sub, url, title, author, score,
+    page.via says which ("typed", "url", "url (<why>)"). With subreddit, a typed search whose results
+    came from other subreddits is reloaded by URL. For recency checks (sort "new"), quote brand and
+    model and prefer subreddit with the category's main subreddits. An empty result, or results still
+    outside the subreddit, come back with page.note.
+    Returns {page: {loggedIn, blocked, loads, via, note?, stop?}, posts: [{id, sub, url, title, author, score,
     comments, created, match: "post"|"comment", snippet?, snippet_link?}]}. match "comment" means a
     comment in that thread matched; title is still the real post title and snippet is the comment.
     If page.stop is present, stop researching and tell the user."""
@@ -204,7 +212,8 @@ def reddit_thread(target: str, url: str, max_comments: int = 15, replies: int = 
     "clicked (second try)", "url (click missed)", "url", "already open"). Pass a URL with ?sort=top to
     force top order (URL load).
     Returns the post (author, author_flair, author_badges, score, upvote ratio, created, flair, body,
-    links, moderators, moderators_truncated), up to max_comments top-level comments plus the OP's
+    links, moderators, moderators_truncated, moderators_note when the sidebar showed none,
+    thread_status "locked"/"archived" when it is), up to max_comments top-level comments plus the OP's
     replies under them (with replies=N, also up to N depth-1 replies from anyone per comment). Each
     comment has link, created, score, is_op, flair (user flair, often owned gear), badges (Reddit
     achievements such as "Top 1% Commenter"), ai_declared, text. Deleted and empty comments and empty
@@ -213,7 +222,10 @@ def reddit_thread(target: str, url: str, max_comments: int = 15, replies: int = 
     not_scrolled_into_view} explain a short list. Only comments scrolled into view are returned.
     expand: collapsed comment chains to open with a click (default: sometimes one). brands: product
     brands to check for brand accounts (the last query's brands are used anyway). promo_bias is
-    0.0-1.0 with linked evidence. If page.stop is present, stop researching and tell the user."""
+    0.0-1.0 with linked evidence (brand accounts and staff flair, brand-moderated or brand-named
+    subreddits, affiliate/deals communities, affiliate and partner short links, content-marketing
+    patterns). If page.stop is
+    present, stop researching and tell the user."""
     return _reddit(reddit_tab.thread, target, url, max_comments, replies=replies, expand=expand, brands=brands)
 
 
@@ -241,7 +253,10 @@ def reddit_tally(target: str, names: list[str], alias: str | None = None, exclud
     One+"; "MK4" doesn't count "MK4S"), with common brand misspellings built in. alias groups variants:
     "Core One=C1,Core 1,Core1; MK4S=MK 4S". Search titles and snippets are kept apart
     (search_only_threads), the OP counts once across cross-posts, an OP's question isn't an
-    endorsement, and exclude_op drops the OP's own mentions entirely. Use it in a landscape pass."""
+    endorsement, and exclude_op drops the OP's own mentions entirely (OPs then count toward no users
+    or threads). Each row's name is in `term`; polarity is read on the clause around each mention;
+    `implied` lists recommendation-style replies that don't name the product, in threads whose
+    title names only it (kept apart from the counts). Use it in a landscape pass."""
     return _reddit(reddit_tab.tally, target, names, aliases=alias, exclude_op=exclude_op)
 
 
@@ -282,7 +297,8 @@ def youtube_search(target: str, query: str, sort: str = "relevance", upload: str
     "url (filters)"). sort: relevance|views (YouTube no longer honors date sorting; use upload).
     upload: hour|today|week|month|year restricts to recent uploads. shorts: include Shorts (keep minor).
     Phrase use-case queries as "best <product> for <task>" or "which <product> for <task>".
-    Returns {page: {loggedIn, blocked, loads, via, stop?}, results: [{type, title, url, channel, verified,
+    Results are read once the list has settled (page.settled; false = possibly partial, repeat once).
+    Returns {page: {loggedIn, blocked, loads, via, settled, stop?}, results: [{type, title, url, channel, verified,
     views, age, length, likely_ai_listicle?, amazon_influencer?}]}. Skip flagged results (AI listicles,
     Amazon-influencer clips). If page.stop is present, stop and tell the user."""
     return _reddit(youtube_tab.search, target, query, sort, upload, shorts)
@@ -291,7 +307,8 @@ def youtube_search(target: str, query: str, sort: str = "relevance", upload: str
 @mcp.tool()
 def youtube_video(target: str, url: str) -> str:
     """Open a video (one page load) and return its metadata: channel, subscribers (and collaborators),
-    views, likes, published, length, chapters, captions, full description, description links, and
+    views, likes, published, length_s and duration, chapters of this video only (chapters_source),
+    captions, full description, description links, and
     sponsor_bias (paid-promotion label, sponsor phrases, affiliate links; `by_brand` and `roundup` for
     multi-brand videos: read the brand's own score there). The video is clicked in the current search
     results when listed there (page.opened "clicked" / "clicked (after back)"), else loaded by URL.
@@ -308,7 +325,9 @@ def youtube_transcript(target: str, grep: list[str] | None = None, context: int 
     neighboring segments each side. start/end (e.g. "4:00", "6:30") limit it to a time window.
     The FULL transcript is always saved as YYYY-MM-DD_<id>_transcript.json and .md in out_dir (the
     report folder), else ~/.local/share/chrome-agent-research/youtube-transcripts/; `saved` gives the
-    paths (an existing file is reused). List saved transcripts in the report's sources.
+    paths (an existing file is reused unless this read is fuller). List saved transcripts in the report's
+    sources. `coverage` gives first/last/gaps/complete; when the first read falls short the list is
+    scrolled and collected. Remaining gaps are silent stretches or a creator caption track that skips sections (coverage.note).
     Also returns disclosure_mentions and an updated sponsor_bias."""
     return _reddit(youtube_tab.transcript, target, grep, context, start, end, out_dir)
 

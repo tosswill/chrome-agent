@@ -26,7 +26,27 @@
   const tagged = (info.match(/(\d+)\s+products?\b/i) || [])[1];
   const panel = document.querySelectorAll("ytd-product-list-item-renderer #affiliate-disclaimer-text").length;
   const commission = panel || ([...document.querySelectorAll("a div")].some(d => d.childElementCount === 0 && d.textContent.trim() === "Earns commission") ? 1 : 0);
-  const chapters = [...document.querySelectorAll("ytd-macro-markers-list-item-renderer")].map(c => {
+  // Chapters of THIS video only. YouTube keeps chapter lists of earlier videos (and the related list's
+  // markers) in the DOM after in-page navigation, so: (1) the creator's own chapter list in the description
+  // (YouTube's rule: the first stamp is 0:00, at least three, ascending), else (2) rendered markers whose
+  // link points at this video, else (3) markers in this watch page's own chapter panels.
+  const toSec = t => String(t).split(":").reduce((a, b) => a * 60 + +b, 0);
+  const lenS = vd.lengthSeconds ? +vd.lengthSeconds : null;
+  const fromDesc = (() => {
+    const out = [];
+    for (const ln of desc.split("\n")) {
+      const m = ln.match(/^\s*[\[(]?(\d{1,2}(?::\d{2}){1,2})[\])]?\s*[-–—:|.]?\s*(.+?)\s*$/) ||
+                ln.match(/^\s*(.+?)\s*[-–—:|(\[]?\s*(\d{1,2}(?::\d{2}){1,2})[\])]?\s*$/);
+      if (!m) continue;
+      const [at, title] = /^\d/.test(m[1]) && /:/.test(m[1]) && !/[a-z]/i.test(m[1]) ? [m[1], m[2]] : [m[2], m[1]];
+      if (!title || /^https?:/.test(title)) continue;
+      out.push({ title: title.replace(/^[-–—:|.\s]+/, ""), at, sec: toSec(at) });
+    }
+    if (out.length < 3 || out[0].sec !== 0) return null;
+    for (let i = 1; i < out.length; i++) if (out[i].sec <= out[i - 1].sec) return null;
+    return out.map(({ title, at }) => ({ title, at }));
+  })();
+  const parseMarker = c => {
     const t = c.innerText.replace(/\s+/g, " ").trim();
     const m = t.match(/^(.*?)\s+(\d{1,2}(?::\d{2}){1,2})(?:\s|$)/);
     if (!m) return { title: t, at: null };
@@ -34,7 +54,22 @@
     const half = title.length / 2;  // the title is often rendered twice ("X X")
     if (Number.isInteger(half - 0.5) && title.slice(0, half - 0.5) === title.slice(half + 0.5)) title = title.slice(0, half - 0.5);
     return { title, at: m[2] };
-  });
+  };
+  const markers = [...document.querySelectorAll("ytd-macro-markers-list-item-renderer")];
+  const forThis = markers.filter(c => { const h = c.querySelector("a#endpoint, a[href*='/watch']")?.getAttribute("href") || "";
+    return h && new URLSearchParams(h.split("?")[1] || "").get("v") === vd.videoId; });
+  const panelOwn = markers.filter(c => !c.closest("#related, ytd-watch-next-secondary-results-renderer, .ytp-endscreen-content") &&
+    c.closest("ytd-engagement-panel-section-list-renderer[target-id*='macro-markers']"));
+  const anyLinked = markers.some(c => c.querySelector("a#endpoint, a[href*='/watch']")?.getAttribute("href"));
+  let chapters, chapters_source;
+  if (fromDesc) { chapters = fromDesc; chapters_source = "description"; }
+  else if (forThis.length) { chapters = forThis.map(parseMarker); chapters_source = "player markers"; }
+  else if (!anyLinked && panelOwn.length) { chapters = panelOwn.map(parseMarker); chapters_source = "chapter panel (unlinked)"; }
+  else { chapters = []; chapters_source = null; }
+  if (lenS) chapters = chapters.filter(c => c.at === null || toSec(c.at) <= lenS);
+  let durS = lenS;
+  if (!durS) { try { const d = mp?.getDuration?.(); if (d > 0) durS = Math.round(d); } catch (e) {} }
+  const mmss = s => s == null ? null : (s >= 3600 ? `${Math.floor(s / 3600)}:${String(Math.floor(s % 3600 / 60)).padStart(2, "0")}` : `${Math.floor(s / 60)}`) + `:${String(s % 60).padStart(2, "0")}`;
   // Collaboration videos ("A and B") show no subscriber count; the owner data lists each channel's.
   const id0 = window.ytInitialData?.currentVideoEndpoint?.watchEndpoint?.videoId;
   const subsList = [];
@@ -59,10 +94,10 @@
     ...(subsList.length > 1 ? { collaborators: subsList } : {}),
     views: vd.viewCount ? +vd.viewCount : null,
     likes: num(document.querySelector("like-button-view-model button, #segmented-like-button button")?.getAttribute("aria-label")?.match(/[\d,.]+\s*[KMB]?/i)?.[0]),
-    published: mf.publishDate || null, length_s: vd.lengthSeconds ? +vd.lengthSeconds : null,
+    published: mf.publishDate || null, length_s: durS, duration: mmss(durS),
     category: mf.category || null, is_live: !!vd.isLiveContent, keywords: (vd.keywords || []).slice(0, 15),
     captions: (pr.captions?.playerCaptionsTracklistRenderer?.captionTracks || []).map(c => c.languageCode + (c.kind === "asr" ? " (auto)" : "")),
-    chapters: chapters.filter(c => !seenCh.has(c.title + c.at) && seenCh.add(c.title + c.at)),
+    chapters: chapters.filter(c => !seenCh.has(c.title + c.at) && seenCh.add(c.title + c.at)), chapters_source,
     disclosure: { paid_promotion_label: !!paidText, paid_promotion_text: paidText || null,
                   affiliate_links: affiliate, campaign_links: campaign, short_links: short,
                   tagged_products: tagged ? +tagged : 0, products_earning_commission: tagged ? Math.min(commission, +tagged) : commission },
