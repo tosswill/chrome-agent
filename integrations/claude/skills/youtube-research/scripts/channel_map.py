@@ -245,7 +245,9 @@ def rate_channel(name: str, recs: list[dict], info: dict | None = None, topic: s
         rig.append(g)
         why_i += [f"{w} ({r.get('url')})" for w in wi]
         why_t += [f"{w} ({r.get('url')})" for w in wt]
-        per_video.append({"url": r.get("url"), "title": r.get("title"), "independence": i, "transparency": t,
+        per_video.append({"url": r.get("url"), "video_id": video_id(r.get("url")), "title": r.get("title"),
+                          "published": r.get("age"), "transcript": g is not None,
+                          "independence": i, "transparency": t,
                           "rigor": g, **({"rigor_hits": gd["hits"]} if gd else {}),
                           "sponsor_score": r.get("sponsor_score")})
     with_tx = sum(1 for g in rig if g is not None)
@@ -319,15 +321,76 @@ def registry_find(data: dict, channel: str) -> tuple[str | None, dict | None]:
     return None, None
 
 
+def video_id(url: str | None) -> str | None:
+    m = re.search(r"(?:v=|youtu\.be/|/shorts/)([\w-]{11})", url or "")
+    return m.group(1) if m else (url or None)
+
+
+def registry_add_video(data: dict, channel: str, url: str, topic: str, title: str | None = None,
+                       day: str | None = None, transcript: bool | None = None, scores: dict | None = None,
+                       source: str | None = None) -> dict:
+    """Record a reviewed video on the channel's list (one entry per video; a later review updates it)."""
+    key, row = registry_find(data, channel)
+    if row is None:
+        row = data["channels"].setdefault(_key(channel, None), {"name": channel, "handle": None, "topics": {}})
+    vid = video_id(url)
+    today = day or date.today().isoformat()
+    lst = row.setdefault("reviewed", [])
+    entry = next((e for e in lst if e.get("id") == vid), None)
+    if entry is None:
+        entry = {"id": vid, "url": url, "first_reviewed": today}
+        lst.append(entry)
+    entry.update({k: v for k, v in {"title": title, "last_reviewed": today, "source": source}.items() if v})
+    entry.setdefault("topics", [])
+    t = (topic or "general").lower()
+    if t not in entry["topics"]:
+        entry["topics"].append(t)
+    if transcript is not None:
+        entry["transcript"] = bool(entry.get("transcript")) or transcript
+    if scores:
+        entry["scores"] = {k: scores.get(k) for k in ("independence", "transparency", "rigor", "sponsor_score")}
+    return entry
+
+
+def familiarity(row: dict) -> dict:
+    """How well we know a channel: videos reviewed (with transcripts), per topic, first/last dates."""
+    lst = row.get("reviewed") or []
+    topics: dict[str, int] = {}
+    for e in lst:
+        for t in e.get("topics") or ["general"]:
+            topics[t] = topics.get(t, 0) + 1
+    n, tx = len(lst), sum(1 for e in lst if e.get("transcript"))
+    level = ("none" if n == 0 else "light" if n <= 2 else "moderate" if n <= 5 or tx < 3 else "well known")
+    days = sorted(d for e in lst for d in (e.get("first_reviewed"), e.get("last_reviewed")) if d)
+    return {"videos": n, "with_transcript": tx, "level": level, "by_topic": topics,
+            "first": days[0] if days else None, "last": days[-1] if days else None}
+
+
+def cumulative_axes(row: dict, topic: str | None = None) -> dict:
+    """Mean per-video axes over every scored video reviewed (optionally for one topic), across sessions."""
+    t = topic.lower() if topic else None
+    es = [e for e in row.get("reviewed") or [] if e.get("scores") and (t is None or t in (e.get("topics") or []))]
+    return {"videos": len(es), **{k: _mean([e["scores"].get(k) for e in es])
+                                  for k in ("independence", "transparency", "rigor")}}
+
+
 def registry_put(data: dict, rating: dict) -> None:
     key = _key(rating["channel"], rating.get("handle"))
-    row = data["channels"].setdefault(key, {"name": rating["channel"], "handle": rating.get("handle"), "topics": {}})
+    _, found = registry_find(data, rating.get("handle") or rating["channel"])
+    row = found or data["channels"].setdefault(key, {"name": rating["channel"], "handle": rating.get("handle"),
+                                                     "topics": {}})
     row["name"], row["handle"] = rating["channel"], rating.get("handle") or row.get("handle")
     if rating["context"].get("subscribers"):
         row["subscribers"] = rating["context"]["subscribers"]
+    topic = (rating.get("topic") or "general").lower()
+    for v in rating["videos"]:
+        if v.get("url"):
+            registry_add_video(data, row["name"], v["url"], topic, v.get("title"), rating.get("date"),
+                               v.get("transcript"), v)
     slim = {k: rating[k] for k in ("date", "axes", "authority", "context", "sample", "confidence", "reasons", "notes")}
     slim["videos"] = [v["url"] for v in rating["videos"]]
-    row["topics"][(rating.get("topic") or "general").lower()] = slim
+    slim["cumulative"] = cumulative_axes(row, topic)  # this session's videos plus earlier ones on the topic
+    row["topics"][topic] = slim
 
 
 def registry_describe(data: dict, channel: str, summary: str, tags: list[str] | None = None) -> dict:
@@ -394,7 +457,7 @@ def registry_lookup(data: dict, channel: str, topic: str) -> dict | None:
     if not row:
         return None
     topics = row.get("topics") or {}
-    if not topics and not row.get("pin") and not row.get("covers") and not row.get("observations"):
+    if not topics and not any(row.get(k) for k in ("pin", "covers", "observations", "reviewed")):
         return None
     t = (topic or "general").lower()
     hit = topics.get(t)
@@ -406,7 +469,8 @@ def registry_lookup(data: dict, channel: str, topic: str) -> dict | None:
                 hit, which = rating, name
                 break
     out = {"name": row.get("name"), "handle": row.get("handle"), "pin": row.get("pin"), "covers": row.get("covers"),
-           "observations": row.get("observations") or []}
+           "observations": row.get("observations") or [], "familiarity": familiarity(row),
+           "reviewed_ids": [e.get("id") for e in row.get("reviewed") or []]}
     if hit:
         out.update({"topic": which, "rating": hit, "stale": stale(hit.get("date")),
                     "same_topic": which == t})
