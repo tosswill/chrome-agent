@@ -308,6 +308,62 @@ class Site:
                        "delivers wheel scrolls to a visible window. Ask the user to bring the research browser "
                        "window into view, then retry.")
 
+    # ---- Optional window-manager placement (AeroSpace) ---------------------------------------
+    # With RESEARCH_AEROSPACE_WORKSPACE=<name> set, this instance's browser windows are moved to
+    # that workspace, and the workspace is brought on screen if it isn't (then focus returns to the
+    # workspace the user was on, so a workspace on another monitor stays visible without taking
+    # focus). Only windows of this instance's own Chrome process are touched, never the user's.
+    def _aerospace(self, *args: str) -> str | None:
+        exe = shutil.which("aerospace")
+        if not exe:
+            return None
+        try:
+            p = subprocess.run([exe, *args], capture_output=True, text=True, timeout=10,
+                               stdin=subprocess.DEVNULL)
+        except (OSError, subprocess.SubprocessError):
+            return None
+        return p.stdout if p.returncode == 0 else None
+
+    def _browser_pid(self) -> int | None:
+        inst = self._status() or {}
+        if inst.get("pid"):
+            return int(inst["pid"])
+        port = inst.get("port")
+        if not port:
+            return None
+        try:
+            out = subprocess.run(["lsof", "-nP", "-t", f"-iTCP:{port}", "-sTCP:LISTEN"],
+                                 capture_output=True, text=True, timeout=10).stdout.split()
+        except (OSError, subprocess.SubprocessError):
+            return None
+        return int(out[0]) if out else None
+
+    def place_windows(self) -> dict | None:
+        ws = os.environ.get("RESEARCH_AEROSPACE_WORKSPACE", "").strip()
+        if not ws or not shutil.which("aerospace"):
+            return None
+        pid = self._browser_pid()
+        if not pid:
+            return {"workspace": ws, "error": "browser process not found"}
+        listing = self._aerospace("list-windows", "--all", "--format", "%{window-id}|%{app-pid}|%{workspace}") or ""
+        moved = 0
+        for line in listing.splitlines():
+            parts = line.split("|")
+            if len(parts) == 3 and parts[1].strip() == str(pid) and parts[2].strip() != ws:
+                if self._aerospace("move-node-to-workspace", "--window-id", parts[0].strip(), ws) is not None:
+                    moved += 1
+        visible = (self._aerospace("list-workspaces", "--monitor", "all", "--visible") or "").split()
+        shown = False
+        if ws not in visible:
+            prev = (self._aerospace("list-workspaces", "--focused") or "").strip()
+            self._aerospace("workspace", ws)
+            if prev and prev != ws:
+                self._aerospace("workspace", prev)  # give focus back; ws stays shown on its own monitor
+            shown = True
+        if moved or shown:
+            pause(0.8)  # let Chrome notice it is visible again
+        return {"workspace": ws, "moved": moved, "shown": shown}
+
     HIDDEN_MSG = ("the research window is hidden (minimized, on another desktop/workspace, or fully covered). "
                   "Chrome barely draws hidden windows, so scrolling stalls and pages load very slowly. Ask the "
                   "user to bring the research browser window into view, then retry.")
@@ -321,6 +377,7 @@ class Site:
             except Fail:
                 return None
         if vis() == "hidden":
+            self.place_windows()
             pause(grace)
             if vis() == "hidden":
                 raise Fail(self.HIDDEN_MSG)
@@ -615,6 +672,7 @@ class Site:
                 raise Fail(f"all {self.max_claims} research windows are in use. Wait and retry "
                            "(open --wait), or ask the user.")
             pause(min(15, max(1, deadline - time.time())))
+        placed = self.place_windows()
         if self.on_open:
             self.on_open(self, full_id)
         try:
@@ -622,7 +680,10 @@ class Site:
         except Fail:
             self.close(full_id)  # release the claim; nothing useful can run in a hidden window
             raise
-        return {"target": full_id, "slots_in_use": busy + 1, "max_slots": self.max_claims}
+        res = {"target": full_id, "slots_in_use": busy + 1, "max_slots": self.max_claims}
+        if placed:
+            res["placement"] = placed
+        return res
 
     def check_url(self, url: str) -> None:
         host = urlparse(url).netloc.lower()

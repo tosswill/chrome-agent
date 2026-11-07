@@ -96,6 +96,17 @@ Prerequisites: `uv tool install chrome-agent`, and Google Chrome.
 
 YouTube uses the same settings with the `YOUTUBE_TAB_` prefix. Its defaults are `youtube-research-01`, a 6 s gap, and 45 loads per window, with state in `/tmp/chrome-agent-youtube`, plus `YOUTUBE_TAB_SHOTS` (default `<state>/shots`) for captured frames, `YOUTUBE_TAB_TRANSCRIPTS` (default `~/.local/share/chrome-agent-research/youtube-transcripts`) for saved transcripts when no `--out-dir` is given, and `YOUTUBE_TAB_AD_TIMEOUT` (default 60 s) for how long `frame` waits for an ad to end.
 
+### Keeping research windows visible
+
+Chrome barely draws a hidden window (minimized, on another desktop or workspace, or fully covered), so clicks miss, pages stay blank and scrolling stalls. The helpers check `document.visibilityState` when a window is opened and before each page load, and fail with a clear message instead of stalling.
+
+Both sites share these settings:
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `RESEARCH_AEROSPACE_WORKSPACE` | unset | With [AeroSpace](https://github.com/nikitabobko/AeroSpace), move this instance's browser windows to that workspace. If the workspace isn't on screen, switch to it and back again, so that a workspace assigned to another monitor stays visible without taking focus. Only the research browser's own windows are moved, never your own Chrome. A good choice is a workspace on a spare monitor (`workspace-to-monitor-force-assignment`). |
+| `<PREFIX>_LONG_IDLE_P` / `<PREFIX>_LONG_IDLE` | `0.125` / `20-60` | Chance of an occasional long idle period before a page load, and its length in seconds. Set the chance to `0` to turn it off. |
+
 ## Notes
 
 - `save`/`restore` on macOS needs the `/proc` fix on the `macos-snapshot-proc` branch.
