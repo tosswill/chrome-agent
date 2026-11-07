@@ -96,8 +96,9 @@ Prerequisites: `uv tool install chrome-agent`, and Google Chrome.
 | `REDDIT_TAB_TYPE` | `1` | type searches into Reddit's search box when possible; `0` always loads search URLs |
 | `REDDIT_TAB_READ_CAP` | `45` | longest reading dwell per thread, in seconds |
 | `REDDIT_TAB_TEST_MISS` | `0` | testing only: make the first N result clicks miss, to exercise the URL fallback |
+| `REDDIT_TAB_TEST_BACK` | unset | testing only: `arrow` skips the mouse back button (Reddit's back arrow is used), `toolbar` skips the arrow too (browser back) |
 
-YouTube uses the same settings with the `YOUTUBE_TAB_` prefix. Its defaults are `youtube-research-01`, a 6 s gap, and 45 loads per window, with state in `/tmp/chrome-agent-youtube`, plus `YOUTUBE_TAB_SHOTS` (default `<state>/shots`) for captured frames, `YOUTUBE_TAB_TRANSCRIPTS` (default `~/.local/share/chrome-agent-research/youtube-transcripts`) for saved transcripts when no `--out-dir` is given, `YOUTUBE_TAB_AD_TIMEOUT` (default 60 s) for how long `frame` waits for an ad to end, and `YOUTUBE_TAB_CHANNELS` (default `~/.local/share/chrome-agent-research/youtube-channels.json`) for the channel registry: dated, topic-scoped channel ratings from `channels --save`, and the user's `trusted`/`distrusted` pins.
+YouTube uses the same settings with the `YOUTUBE_TAB_` prefix. Its defaults are `youtube-research-01`, a 6 s gap, and 45 loads per window, with state in `/tmp/chrome-agent-youtube`, plus `YOUTUBE_TAB_SHOTS` (default `<state>/shots`) for captured frames, `YOUTUBE_TAB_TRANSCRIPTS` (default `~/.local/share/chrome-agent-research/youtube-transcripts`) for saved transcripts when no `--out-dir` is given, `YOUTUBE_TAB_AD_TIMEOUT` (default 60 s) for how long `frame` waits for an ad to end, `swift` (built into macOS) for `screen-text`, the on-device OCR of captured frames, and `YOUTUBE_TAB_CHANNELS` (default `~/.local/share/chrome-agent-research/youtube-channels.json`) for the channel registry: dated, topic-scoped channel ratings from `channels --save`, and the user's `trusted`/`distrusted` pins.
 
 ### Keeping research windows visible
 

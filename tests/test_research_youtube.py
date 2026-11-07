@@ -552,3 +552,22 @@ def test_retailer_affiliate_links_are_not_brand_money():
 def test_brand_named_channels_are_not_listicles():
     assert not S.likely_ai_listicle("", "HOOVER Product Guides", None)[0]
     assert S.likely_ai_listicle("", "Gadget Product Guides", None)[0]
+
+
+def test_screen_data_detects_results_tables():
+    rows = [{"x": 0.1, "y": 0.02, "text": "Upright Stain Test - Passes to Clean"}]
+    for i in range(6):
+        rows += [{"x": 0.1, "y": 0.2 + i * 0.05, "text": f"Machine {i}"}] + \
+                [{"x": 0.3 + j * 0.1, "y": 0.2 + i * 0.05, "text": str(3 + i + j)} for j in range(3)]
+    sd = S.screen_data(rows)
+    assert sd["table_like"] and sd["numbers"] == 18 and "Passes" in sd["headline"]
+    assert not S.screen_data([{"x": 0.1, "y": 0.1, "text": "Big Green Machine"}, {"x": 0.2, "y": 0.2, "text": "3"}])["table_like"]
+
+
+def test_on_screen_table_raises_rigor():
+    import channel_map as CM
+    talk = [{"text": "Here is the Big Green. It is nice and it cleans well. " * 20}]
+    plain, _ = CM.video_rigor({"segments": talk, "length_s": 600})
+    shown, d = CM.video_rigor({"segments": talk, "length_s": 600,
+                               "screen_data": {"table_like": True, "numbers": 121}})
+    assert shown >= plain + 1.5 and d["hits"]["on_screen_table"] == 1

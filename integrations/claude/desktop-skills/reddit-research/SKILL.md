@@ -75,6 +75,7 @@ Use a **full pass** when no products are named or the question is about a catego
   - an affiliate or deals community (the sidebar says it earns commissions or allows self-promotion)
   - content marketing: one outside site linked repeatedly or a listicle-shaped post, an OP edit pointing to a "helpful article", "this roundup/breakdown" comments with no link left, ad-copy comments, "I'm a bit biased" plus a store
   - sponsor or review-unit mentions
+  - content marketing: an OP edit pointing to an article, repeated outside links, partner short links, unlinked guide plugs ("the Newborn Sound Machine Guide"), ad-copy comments, and `coordinated_links` (3+ different users linking the same uncommon site, a sign of a seeded thread)
   - "I bought it myself" claims, which lower it
 
   `brand_tokens` shows which names were treated as brands (add more with `brands`). It's page-only (no account age or karma); `confidence: "low"` means the community sidebar wasn't rendered, so moderators couldn't be checked. Brand involvement is context, not proof of bad faith, but include an independent community. **Report the score and reasons.**

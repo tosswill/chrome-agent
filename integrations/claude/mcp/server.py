@@ -390,6 +390,15 @@ def youtube_tally(target: str, names: list[str], aliases: str | None = None,
 
 
 @mcp.tool()
+def youtube_screen_text(target: str, paths: list[str]) -> str:
+    """Read the text in frames you captured (on-device OCR with Apple Vision; no page load): the lines,
+    and whether each frame is a results table or chart (`screen_data.table_like`, numbers, headline).
+    A results table counts toward the loaded video's rigor in youtube_channels, so channels that show
+    their test data on screen instead of speaking it get credit. Check the image before quoting a number."""
+    return _reddit(youtube_tab.screen_text, target, paths)
+
+
+@mcp.tool()
 def youtube_channels(target: str, topic: str, cited: str | None = None, save: bool = False) -> str:
     """Channel map for a topic, from the videos this window has read (no page load). Per channel:
     independence (little brand money behind the coverage), transparency (money disclosed clearly and

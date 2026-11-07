@@ -41,6 +41,8 @@ CLI (each command prints JSON):
                        channels and independent channels mentioning each name among everything this
                        window has seen (search results merged with loaded videos, their descriptions,
                        links and read transcripts), with snippets and links. No page load.
+    youtube_tab.py screen-text ID IMAGE [IMAGE ...]       on-device OCR (macOS Vision) of captured frames: the
+                       text, and whether a frame is a results table (credited to the loaded video's rigor)
     youtube_tab.py channels ID --topic "TOPIC" [--cited "Name=N; Other=N"] [--save]
                        channel map: independence / transparency / rigor (0-5), derived authority,
                        reach, focus and trust per channel from the videos this window read, plus
@@ -65,6 +67,7 @@ STATE (/tmp/chrome-agent-youtube), SHOTS (STATE/shots),
 TRANSCRIPTS (~/.local/share/chrome-agent-research/youtube-transcripts). Needs `chrome-agent` on PATH.
 """
 import base64
+import subprocess
 import json
 import os
 import random
@@ -241,7 +244,7 @@ def _seen_load(full_id: str) -> dict:
     items = data.get("items") or []
     if legacy and not items:
         items = [{**x, "id": video_id_of(x.get("url") or "") or x.get("url")} for x in legacy]
-    return {"items": items, "channels": data.get("channels") or {}}
+    return {"items": items, "channels": data.get("channels") or {}, "screen": data.get("screen") or {}}
 
 
 def _seen_save(full_id: str, data: dict) -> None:
@@ -959,6 +962,13 @@ def sponsor_bias(data: dict, transcript_hits: list[dict] | None = None) -> dict:
                        "text": f"{h.get('text') or 'Includes paid promotion'} (the named sponsor is a third party: "
                                f"{', '.join(names) or 'not the reviewed brand'})"}
     res = D.score(page, extra)
+    if d.get("paid_promotion_label") and not third and not brand_reads and not any(
+            h["signal"] in ("sponsor_read", "ad_tag") for h in every):
+        # YouTube's label without a named sponsor: assume a reviewed brand paid until the video says otherwise.
+        res["unnamed_sponsor"] = True
+        res["unnamed_sponsor_note"] = ("The paid-promotion label is shown but no sponsor is named in the description "
+                                       "or (if read) the transcript. Treat it as paid by a reviewed brand: check which "
+                                       "product the video favors, especially a newly launched one.")
     brands = S.detect_brands(data.get("title") or "", data.get("description") or "",
                              data.get("description_links") or (), own)
     if len(brands) >= 2:
@@ -1488,7 +1498,8 @@ def channels(target: str, topic: str, cited=None, save: bool = False) -> dict:
         if not ch:
             continue
         if r.get("via") == "video":
-            loaded.setdefault(ch, []).append(r)
+            sd = (seen.get("screen") or {}).get(r.get("id") or "")
+            loaded.setdefault(ch, []).append({**r, "screen_data": sd} if sd else r)
         else:
             search_only[ch] = search_only.get(ch, 0) + 1
     reg = CM.registry_load(CHANNELS)
@@ -1587,6 +1598,32 @@ def registry(action: str, channel: str | None = None, verdict: str | None = None
     raise Fail(f"unknown registry action {action!r}")
 
 
+def screen_text(target: str, paths: list[str]) -> dict:
+    """Read the text in captured frames (on-device OCR, no page load) and note results tables for the
+    loaded video, so the channel map can credit on-screen test data that the transcript doesn't speak."""
+    full_id = SITE.resolve(target)
+    vid = _video_id(full_id)
+    try:
+        found = S.ocr_images([str(Path(p).expanduser()) for p in paths])
+    except (OSError, subprocess.SubprocessError) as e:
+        raise Fail(f"couldn't read on-screen text: {e}")
+    frames, best = [], None
+    for p, lines in found.items():
+        sd = S.screen_data(lines)
+        frames.append({"path": p, "screen_data": sd, "lines": [ln["text"] for ln in lines][:80]})
+        if best is None or (sd["table_like"], sd["numbers"]) > (best["table_like"], best["numbers"]):
+            best = {**sd, "path": p}
+    if vid and best:
+        data = _seen_load(full_id)
+        prev = data["screen"].get(vid) or {}
+        if (best["table_like"], best["numbers"]) >= (prev.get("table_like", False), prev.get("numbers", 0)):
+            data["screen"][vid] = best
+            _seen_save(full_id, data)
+    return {"video_id": vid, "frames": frames, "best": best,
+            "note": "OCR text from the images; check the image before quoting a number. Results tables count "
+                    "toward the channel map's rigor for this video."}
+
+
 def close(target: str) -> dict:
     full_id = SITE.resolve(target)
     res = SITE.close(target)
@@ -1654,6 +1691,10 @@ def _dispatch(cmd: str, args: list[str]):
         return shot(args[0], out, out_dir, full, selector)
     if cmd == "channel" and len(args) == 2:
         return channel(*args)
+    if cmd == "screen-text":
+        if len(args) < 2:
+            raise Fail("usage: screen-text ID IMAGE [IMAGE ...]   (OCR of frames you captured; no page load)")
+        return screen_text(args[0], args[1:])
     if cmd == "channels":
         cited, save = opt(args, "--cited"), bool(opt(args, "--save", False))
         topic = opt(args, "--topic")
