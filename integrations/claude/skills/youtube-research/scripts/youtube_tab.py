@@ -1511,7 +1511,7 @@ def channels(target: str, topic: str, cited=None, save: bool = False) -> dict:
         _, row = CM.registry_find(reg, ch, info.get("handle"))
         rating["familiarity"] = CM.familiarity(row or {})  # before this session's videos are saved
         rows.append(rating)
-    rows.sort(key=lambda r: (-(r["authority"] or 0), -(r["axes"]["independence"] or 0)))
+    rows.sort(key=lambda r: (-(r.get("rank_score") or 0), -(r["axes"]["independence"] or 0)))
     rated = {r["channel"] for r in rows}
     candidates = sorted(((c, n) for c, n in search_only.items() if c not in rated), key=lambda x: -x[1])[:12]
     cand_rows = []

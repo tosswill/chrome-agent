@@ -252,3 +252,10 @@ def test_ad_tag_and_sent_to_review():
     assert "ad_tag" not in [h["signal"] for h in D.scan_text("Watch the #adorable baby.", "description")]
     seg = [{"text": "so I was sent these to review and they all work", "sec": 30}]
     assert "review_unit" in [h["signal"] for h in D.scan_segments(seg, "")]
+
+
+def test_plain_amazon_share_link_is_not_affiliate():
+    import disclosure as D
+    out = D.classify_links(["https://www.amazon.com/dp/B0ABC12345?ref=ppx_pop_mob_ap_share",
+                            "https://www.amazon.com/dp/B0ABC12345?tag=creator-20", "https://amzn.to/3abc"])
+    assert out["affiliate_links"] == ["https://www.amazon.com/dp/B0ABC12345?tag=creator-20", "https://amzn.to/3abc"]

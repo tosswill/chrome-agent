@@ -468,3 +468,23 @@ def test_affiliate_community_ignores_rules_banning_affiliate_links():
     assert R.affiliate_community("Rule 4: No affiliate links or referral codes.") is None
     assert R.affiliate_community("Affiliate links will be removed and repeat offenders banned.") is None
     assert R.affiliate_community("As an Amazon Associate, we earn from qualifying purchases.")
+
+
+def test_sidebar_rule_lists_banning_affiliates_dont_count():
+    assert R.affiliate_community("Rules\n• No Review Blogs, Spam, Link Shorteners, or Affiliate Links\n• Be civil") is None
+    assert R.affiliate_community("Prohibited:\nAffiliate links or free/discounted product\nAsking for money") is None
+    assert R.affiliate_community("This subreddit may earn a commission from links.") is not None
+
+
+def test_short_role_suffix_needs_a_separator():
+    assert R.brand_account("value-no-mics", None, "", strong={"value"}, weak=set()) is None or \
+        R.brand_account("value-no-mics", None, "", strong={"value"}, weak=set()).get("confidence") != "strong"
+    hit = R.brand_account("ecoflow_cs", None, "", strong={"ecoflow"}, weak=set())
+    assert hit and "cs" in hit["reason"]
+
+
+def test_time_filter_ignored_is_noted():
+    from datetime import date
+    posts = [{"created": "2025-12-01"}, {"created": "2026-01-10"}, {"created": "2026-11-01"}]
+    assert R.time_outside(posts, "month", date(2026, 11, 7)) == 2
+    assert R.time_outside(posts, None) == 0

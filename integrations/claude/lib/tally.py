@@ -261,7 +261,9 @@ _REC_NEG = re.compile(r"\b(no (?:issues?|problems?|complaints?|regrets?)|zero (?
                       r"(?:never|haven'?t|didn'?t|don'?t) regrett?(?:ed)?|zero regrets?|no regrets?)\b", re.I)
 _COMP_NEG = re.compile(r"\b(not worth|wouldn'?t recommend|would not recommend|don'?t recommend|do not recommend|"
                        r"can'?t recommend|cannot recommend|don'?t buy|do not buy|stay away|not reliable|doesn'?t work|"
-                       r"does not work|didn'?t work|stopped working|not happy|wasn'?t happy|not impressed)\b", re.I)
+                       r"does not work|didn'?t work|stopped working|not happy|wasn'?t happy|not impressed|"
+                       r"(?:not|isn'?t|wasn'?t|aren'?t) (?:that |very |so |really |super |too )?(?:great|good|"
+                       r"impressive|strong|powerful|effective|reliable|worth it))\b", re.I)
 _REC = re.compile(r"\b(recommend(?:ed)?|love (?:it|mine|my|the)|loving|great|excellent|amazing|awesome|fantastic|"
                   r"best|happy with|worth it|go with|get the|buy the|solid|reliable|rock solid|works (?:great|well|"
                   r"perfectly)|perfect|favou?rite|my pick|top pick|highly|impressed|winner|no brainer|beast|"
@@ -426,6 +428,8 @@ def _implied(recs: list[dict], term: Term, terms: list[Term], indep_fn, max_exam
             continue
         if (r.get("depth") or 0) != 0 or indep_fn(r):
             continue
+        if re.fullmatch(r"(?i)automoderator|.*bot", r.get("author") or ""):
+            continue  # bots and mod tools never endorse
         txt = r.get("text") or ""
         if not txt or find_mentions(txt, terms) or polarity(txt) != "recommend":
             continue

@@ -253,6 +253,17 @@ def _cited(cited: dict[str, int] | None, name: str | None, handle: str | None) -
     return 0
 
 
+def _rank(auth: float | None, conf: str, subs: int | None) -> float:
+    """Sort key for the map: authority discounted for a thin sample (one video) and tiny reach, so a
+    72-subscriber channel's one good video doesn't top channels known from several."""
+    if auth is None:
+        return 0.0
+    k = {"high": 1.0, "medium": 0.9, "low": 0.75}[conf]
+    if subs is not None and subs < 1000:
+        k *= 0.8
+    return round(auth * k, 2)
+
+
 def authority(rigor: float | None, trust: int | None, fcs: float | None) -> float | None:
     """Derived: rigor (70%) + trust (30%; 3+ independent citations = full), plus up to +0.4 for focus.
     Focus is a small bonus only, so a generalist tester (Project Farm) isn't marked down for covering
@@ -302,6 +313,7 @@ def rate_channel(name: str, recs: list[dict], info: dict | None = None, topic: s
     return {
         "channel": name, "handle": info.get("handle"), "topic": topic, "date": date.today().isoformat(),
         "axes": axes, "authority": authority(axes["rigor"], trust, fcs),
+        "rank_score": _rank(authority(axes["rigor"], trust, fcs), conf, info.get("subscribers")),
         "context": {"subscribers": info.get("subscribers"), "focus": fcs, "trust_citations": trust,
                     "affiliate_share": aff_share,
                     "recent_uploads_seen": len(info.get("recent_titles") or [])},
@@ -312,8 +324,8 @@ def rate_channel(name: str, recs: list[dict], info: dict | None = None, topic: s
     }
 
 
-_ROUNDUP = re.compile(r"\b(?:best|top \d+|top (?:five|ten)|\d+ best|vs\.?|versus|compared|comparison|tested \d+|"
-                      r"every|ranked|tier list|buying guide|which)\b", re.I)
+_ROUNDUP = re.compile(r"\b(?:best|top \d+|top (?:five|ten)|\d+ best|tested \d+|every|ranked|tier list|"
+                      r"buying guide|which \w+ should)\b", re.I)  # a two-machine "X vs Y" is a head-to-head
 
 
 def quadrant(r: dict) -> str:

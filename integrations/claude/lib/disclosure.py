@@ -445,6 +445,13 @@ _AFF_LINK = re.compile(
     r"anrdoezrs|dpbolvw|tkqlhce|jdoqocy|kqzyfj|bestbuy\.7tiv|bhpho\.to|/(affiliates?|aff|partners?/ref)/|"
     r"[?&](aff|affiliate|aff_id|affid|ref_id|associate|sca_ref|rfsn|referral|refer|irclickid|ref|rf|"
     r"partner|partner_id|ranMID|ranEAID|clickid|subid|discount)=", re.I)
+def _AMAZON_PLAIN(url: str) -> bool:
+    """A plain Amazon product or share link ("?ref=ppx_pop_mob_ap_share"): Amazon's own ref codes,
+    no associate tag. amzn.to and link.amazon short links stay affiliate links."""
+    u = url.lower()
+    return bool(re.search(r"//(?:www\.|smile\.)?amazon\.[a-z.]+/", u)) and not re.search(r"[?&](tag|linkcode|ascsubtag)=", u)
+
+
 # A retailer or brand link carrying a referral/code parameter is a third-party affiliate link even on a
 # "my favorite products:" line: the creator earns from it, but it isn't their own store.
 _REF_PARAM = re.compile(r"[?&](ref|rf|aff|affiliate|aff_id|affid|ref_id|sca_ref|rfsn|referral|refer|partner|code|"
@@ -497,7 +504,7 @@ def classify_links(links: list[str], *, channel: str | None = None, description:
             if host and host not in out["own_domains"] and not _CREATOR_HOSTS.search(host):
                 out["own_domains"].append(host)
             continue
-        if _AFF_LINK.search(url):
+        if _AFF_LINK.search(url) and not _AMAZON_PLAIN(url):
             out["affiliate_links"].append(url)
         if _UTM.search(url):
             out["campaign_links"].append(url)

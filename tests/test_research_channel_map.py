@@ -233,3 +233,15 @@ def test_study_citations_are_not_product_testing():
     r = CM.rate_channel("Explainer", [rec("e", [], text, length_s=600)], {}, "x")
     assert any("evidence explainer" in n for n in r["notes"])
     assert CM.quadrant(r).startswith("evidence explainer")
+
+
+def test_rank_discounts_thin_samples_and_tiny_channels():
+    one = CM.rate_channel("Tiny", [rec("t", [], TESTER)], {"subscribers": 72}, "x")
+    many = CM.rate_channel("Known", [rec(f"k{i}", [], TESTER) for i in range(3)], {"subscribers": 500000}, "x")
+    assert one["authority"] == many["authority"] and one["rank_score"] < many["rank_score"]
+
+
+def test_head_to_head_is_not_a_roundup():
+    r = CM.rate_channel("H2H", [rec("h", ["affiliate_links", "affiliate_disclosure"], "It is nice. " * 40,
+                                    title="Bissell Big Green vs Rug Doctor")], {}, "x")
+    assert CM.quadrant(r) == "affiliate-led review (light testing)"
