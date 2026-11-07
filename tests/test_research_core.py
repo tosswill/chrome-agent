@@ -104,3 +104,13 @@ def test_place_windows_off_without_setting(monkeypatch):
     import research_core as C
     monkeypatch.delenv("RESEARCH_AEROSPACE_WORKSPACE", raising=False)
     assert C.Site.__new__(C.Site).place_windows() is None
+
+
+def test_lone_tab_reuses_only_a_blank_tab_alone_in_its_window(monkeypatch):
+    import research_core as C
+    site = C.Site.__new__(C.Site)
+    windows = {"A": 1, "B": 2, "C": 2, "D": 3}
+    monkeypatch.setattr(C.Site, "_window_of", lambda self, fid: windows[fid])
+    tabs = [{"full_id": k} for k in windows]
+    assert site._lone_tab([{"full_id": "C"}], tabs) is None   # shares window 2 with B
+    assert site._lone_tab([{"full_id": "C"}, {"full_id": "A"}], tabs) == "A"
