@@ -240,6 +240,9 @@ def _tok(w: str) -> str:
     return re.sub(r"[^a-z0-9]", "", w.lower())
 
 
+# Misspelled brand tokens -> the brand (from tally's built-in garbles).
+_BRAND_FIX = {_tok(v): _tok(k.split()[0]) for k, vs in TL.GARBLES.items() for v in vs if _tok(v) and _tok(v) != _tok(k)}
+_BRAND_FIX.update({_tok(v): _tok(k) for k, vs in TL.GARBLES.items() for v in vs if " " in k and _tok(v)})
 _REVIEWERS: set | None = None
 
 
@@ -286,6 +289,16 @@ def brand_candidates(title: str = "", query: str = "", flair: str = "", explicit
                 if run:
                     strong.add(run)
                     skip |= {_tok(w) for w in ws}
+        if kind in ("title", "flair"):
+            # "Rug Doctor" -> rugdoctor, "Bissel" -> bissell: known brands written as two words or misspelled.
+            for m in re.finditer(r"(?:\b[A-Z][\w&+'-]*\s+)*[A-Z][\w&+'-]*\b", text):
+                ws = _WORD.findall(m.group(0))
+                for a in range(len(ws)):
+                    for b in range(a + 1, min(len(ws), a + 2) + 1):
+                        t = _BRAND_FIX.get(_tok("".join(ws[a:b])), _tok("".join(ws[a:b])))
+                        if t in KNOWN_BRANDS:
+                            strong.add(t)
+                            skip |= {_tok(w) for w in ws[a:b]}
         for i, w in enumerate(words):
             t = _tok(w)
             if len(t) < 2 or t in COMMON or t.isdigit() or t in skip:
@@ -510,7 +523,7 @@ def _empty(c: dict) -> bool:
 
 
 def select_comments(comments: list[dict], host: str | None, max_comments: int = 15, replies: int = 0,
-                    read_bottom: float | None = None) -> tuple[list[dict], dict]:
+                    read_bottom: float | None = None, revealed: set | None = None) -> tuple[list[dict], dict]:
     """Pick the comments to return, in page order:
 
     - up to `max_comments` top-level comments; deleted/removed or empty ones and empty AutoModerator
@@ -519,12 +532,27 @@ def select_comments(comments: list[dict], host: str | None, max_comments: int = 
       depth-1 replies, plus up to `replies` depth-1 replies from anyone
     - with `read_bottom` (document px reached while reading), only comments that were scrolled into
       view; the rest are counted in not_scrolled_into_view
+    - with `revealed` (ids of collapsed chains this read opened), up to 3 direct replies under each,
+      whatever their depth, marked `revealed: true` (they're why the chain was opened)
+    - a repeat of the same text by the same user is skipped (skipped_duplicates)
 
     Returns (comments, counts)."""
     out = []
     counts = {"comments_rendered": len(comments), "skipped_deleted": 0, "skipped_automod": 0,
-              "collapsed_chains": sum(1 for c in comments if c.get("collapsed")), "not_scrolled_into_view": 0}
+              "collapsed_chains": sum(1 for c in comments if c.get("collapsed")), "not_scrolled_into_view": 0,
+              "skipped_duplicates": 0}
     kept_top, in_range, per_parent = 0, False, 0
+    said: set = set()
+
+    def dup(c: dict) -> bool:
+        key = (c.get("author"), re.sub(r"\s+", " ", (c.get("text") or "").strip().lower()))
+        if not key[1] or len(key[1]) < 12:
+            return False
+        if key in said:
+            counts["skipped_duplicates"] += 1
+            return True
+        said.add(key)
+        return False
     for c in comments:
         depth = c.get("depth") or 0
         if depth == 0:
@@ -543,6 +571,8 @@ def select_comments(comments: list[dict], host: str | None, max_comments: int = 
                 counts["not_scrolled_into_view"] += 1
                 in_range = False
                 continue
+            if dup(c):
+                continue
             out.append(c)
             kept_top += 1
             continue
@@ -557,9 +587,25 @@ def select_comments(comments: list[dict], host: str | None, max_comments: int = 
         if read_bottom is not None and (c.get("top") or 0) > read_bottom:
             counts["not_scrolled_into_view"] += 1
             continue
+        if dup(c):
+            continue
         if not is_op:
             per_parent += 1
         out.append(c)
+    if revealed:
+        have = {id(c) for c in out}
+        order = {id(c): i for i, c in enumerate(comments)}
+        for rid in revealed:
+            kids = [c for c in comments if c.get("parent") == rid and id(c) not in have
+                    and not c.get("deleted") and not _empty(c)
+                    and (read_bottom is None or (c.get("top") or 0) <= read_bottom)]
+            for c in kids[:3]:
+                if not dup(c):
+                    out.append({**c, "revealed": True})
+                    have.add(id(c))
+                    order[id(out[-1])] = order[id(c)]
+        out.sort(key=lambda c: order.get(id(c), 0))
+        counts["revealed_replies"] = sum(1 for c in out if c.get("revealed"))
     counts["comments_returned"] = len(out)
     return out, counts
 
@@ -1511,7 +1557,7 @@ def thread(target: str, url: str, max_comments: int = 15, replies: int = 0, expa
     expanded = []
     if want:
         area = SITE.evaluate(full_id, MAIN_JS)
-        cands = [c for c in data["comments"] if c.get("collapsed") and c.get("id") and c.get("depth", 0) <= 1
+        cands = [c for c in data["comments"] if c.get("collapsed") and c.get("id") and c.get("depth", 0) <= 2
                  and (c.get("top") or 0) <= reading["read_bottom"] + 2000]
         for c in cands[:want]:
             if _expand(full_id, c["id"], area):
@@ -1521,8 +1567,14 @@ def thread(target: str, url: str, max_comments: int = 15, replies: int = 0, expa
             reading["read_bottom"] = max(reading["read_bottom"], (SITE.evaluate(full_id, "scrollY + innerHeight") or 0))
     all_comments = data["comments"]
     chosen, counts = select_comments(all_comments, data.get("author"), max_comments, replies,
-                                     read_bottom=reading["read_bottom"])
+                                     read_bottom=reading["read_bottom"], revealed=set(expanded))
     counts.update(comments_total=data.get("comments_total"), expanded_chains=len(expanded))
+    deep = sum(1 for c in all_comments if c.get("collapsed") and (c.get("depth") or 0) > 2)
+    if deep:
+        counts["collapsed_too_deep"] = deep  # chains below depth 2 aren't opened
+    beyond = sum(1 for c in all_comments if c.get("collapsed") and (c.get("top") or 0) > reading["read_bottom"] + 2000)
+    if beyond:
+        counts["collapsed_not_reached"] = beyond  # below where this read stopped: raise --max to reach them
     last = _claim(full_id).get("last_search") or {}
     readable = [c for c in all_comments if (c.get("top") or 0) <= reading["read_bottom"]]
     data["promo_bias"] = promo_bias({**data, "comments": readable}, query=last.get("query", ""), brands=brands or ())

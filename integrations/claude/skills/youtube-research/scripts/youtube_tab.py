@@ -289,6 +289,25 @@ def _video_record(data: dict, sb: dict, segments: list[dict] | None = None) -> d
     return rec
 
 
+def _refresh_label(full_id: str, vid: str | None = None) -> bool:
+    """YouTube shows "Includes paid promotion" only once the video itself plays, so a preroll ad at load
+    hides it. Read it again (after the ad) and record it on the remembered video. True when newly found."""
+    page = _recall(full_id, vid or _video_id(full_id) or "")
+    if not page or (page.get("disclosure") or {}).get("paid_promotion_label"):
+        return False
+    try:
+        text = SITE.evaluate(full_id, "(document.querySelector('.ytp-paid-content-overlay-text')?.textContent || '').trim()"
+                             " || (document.querySelector('#movie_player')?.getPlayerResponse?.()?.paidContentOverlay"
+                             " ? 'Includes paid promotion' : '')")
+    except Fail:
+        return False
+    if not text:
+        return False
+    page["disclosure"] = {**(page.get("disclosure") or {}), "paid_promotion_label": True, "paid_promotion_text": text}
+    _remember(full_id, page)
+    return True
+
+
 def _remember(full_id: str, data: dict) -> None:
     c = SITE.claims().get(full_id)
     if c is not None:
@@ -1038,6 +1057,12 @@ def video(target: str, url: str) -> dict:
     # Let it play (muted) for a few seconds, as a person settling in would, before doing anything else.
     SITE.read_pause(full_id, random.uniform(3, 7))
     st = _state(full_id)  # re-read: an ad may have started or ended meanwhile (Y15)
+    if data and not st.get("ad") and _refresh_label(full_id, data.get("video_id")):
+        # The label appeared once the preroll ended: rescore with it.
+        data["disclosure"] = (_recall(full_id, data["video_id"]) or {}).get("disclosure") or data.get("disclosure")
+        data["sponsor_bias"] = sponsor_bias(data)
+        data["paid_promotion_seen_after_ad"] = True
+        _seen_add(full_id, [_video_record(data, data["sponsor_bias"])])
     return {"page": page, "video": data, "ad_playing": bool(st.get("ad")),
             "ad_state": {"ad": bool(st.get("ad")), "checked_at": st.get("checked_at"),
                          "note": "Ad state when `video` returned; `frame` reads it again before every capture."},
@@ -1051,6 +1076,7 @@ def transcript(target: str, grep: list[str] | None = None, context: int = 0,
     SITE.ensure_visible(full_id)  # fail fast in a hidden window
     SITE.touch(full_id)
     vid = _require_watch(full_id)
+    _refresh_label(full_id, vid)  # a preroll at load can hide the paid-promotion label
     ok, reason = _open_transcript(full_id)
     if not ok:
         SITE.scroll_to_top(full_id)

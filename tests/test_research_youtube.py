@@ -571,3 +571,12 @@ def test_on_screen_table_raises_rigor():
     shown, d = CM.video_rigor({"segments": talk, "length_s": 600,
                                "screen_data": {"table_like": True, "numbers": 121}})
     assert shown >= plain + 1.5 and d["hits"]["on_screen_table"] == 1
+
+
+def test_refresh_label_after_preroll(monkeypatch):
+    remembered = {"video_id": "WtVT6gLdgoI", "disclosure": {"paid_promotion_label": False}}
+    monkeypatch.setattr(Y, "_recall", lambda fid, vid: remembered if vid == "WtVT6gLdgoI" else None)
+    monkeypatch.setattr(Y, "_remember", lambda fid, d: remembered.update(d))
+    monkeypatch.setattr(Y.SITE, "evaluate", lambda fid, js, **k: "Includes paid promotion")
+    assert Y._refresh_label("T", "WtVT6gLdgoI")
+    assert remembered["disclosure"]["paid_promotion_label"] and not Y._refresh_label("T", "WtVT6gLdgoI")
