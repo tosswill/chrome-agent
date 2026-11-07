@@ -283,6 +283,8 @@ def quadrant(r: dict) -> str:
     hi_r, hi_i = rig >= 3, ind >= 3.5
     if rig < 1.5 and ((r.get("context") or {}).get("affiliate_share") or 0) >= 0.8:
         return "affiliate roundup (light testing)"
+    if not hi_r and not hi_i and ind >= 2.5:
+        return "brand-supplied, light testing"
     return {(True, True): "trusted tester", (True, False): "rigorous but brand-tied",
             (False, True): "independent, light testing", (False, False): "promotional / shallow"}[(hi_r, hi_i)]
 
@@ -348,6 +350,24 @@ def covers_topic(row: dict, topic: str) -> bool:
     return bool(terms & words)
 
 
+def registry_observe(data: dict, channel: str, topic: str, text: str, source: str | None = None,
+                     day: str | None = None) -> dict:
+    """Add a dated observation (e.g. from a past report: "DJI-sponsored, paid-promotion label shown")."""
+    key, row = registry_find(data, channel)
+    if row is None:
+        row = data["channels"].setdefault(_key(channel, None), {"name": channel, "handle": None, "topics": {}})
+    obs = {"date": day or date.today().isoformat(), "topic": (topic or "general").lower(), "text": text.strip()}
+    if source:
+        obs["source"] = source
+    row.setdefault("observations", [])
+    if not any(o["text"] == obs["text"] and o["topic"] == obs["topic"] for o in row["observations"]):
+        row["observations"].append(obs)
+    return row
+
+
+VERDICTS = ("trusted", "mixed", "distrusted")
+
+
 def registry_pin(data: dict, channel: str, verdict: str | None, note: str = "") -> dict:
     key, row = registry_find(data, channel)
     if row is None:
@@ -374,7 +394,7 @@ def registry_lookup(data: dict, channel: str, topic: str) -> dict | None:
     if not row:
         return None
     topics = row.get("topics") or {}
-    if not topics and not row.get("pin") and not row.get("covers"):
+    if not topics and not row.get("pin") and not row.get("covers") and not row.get("observations"):
         return None
     t = (topic or "general").lower()
     hit = topics.get(t)
@@ -385,7 +405,8 @@ def registry_lookup(data: dict, channel: str, topic: str) -> dict | None:
             if terms & set(topic_terms(name)):
                 hit, which = rating, name
                 break
-    out = {"name": row.get("name"), "handle": row.get("handle"), "pin": row.get("pin"), "covers": row.get("covers")}
+    out = {"name": row.get("name"), "handle": row.get("handle"), "pin": row.get("pin"), "covers": row.get("covers"),
+           "observations": row.get("observations") or []}
     if hit:
         out.update({"topic": which, "rating": hit, "stale": stale(hit.get("date")),
                     "same_topic": which == t})

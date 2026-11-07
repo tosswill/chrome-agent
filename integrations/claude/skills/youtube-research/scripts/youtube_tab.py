@@ -45,8 +45,10 @@ CLI (each command prints JSON):
                        channel map: independence / transparency / rigor (0-5), derived authority,
                        reach, focus and trust per channel from the videos this window read, plus
                        search-only candidates and any saved registry rating or pin. No page load.
-    youtube_tab.py registry list [--topic T] | show CHANNEL | pin CHANNEL trusted|distrusted|clear [--note TEXT]
+    youtube_tab.py registry list [--topic T] | show CHANNEL | pin CHANNEL trusted|mixed|distrusted|clear [--note TEXT]
                        | describe CHANNEL --covers "one plain sentence" [--tags "a, b, c"]
+                       | observe CHANNEL --topic T --note "what was seen" [--source URL]
+                       pin verdicts: trusted, mixed (sponsored and independent work, disclosed), distrusted
                        (list --topic also matches channels whose covers tags fit the topic)
                        saved channel ratings (YOUTUBE_TAB_CHANNELS, default
                        ~/.local/share/chrome-agent-research/youtube-channels.json) and the user's pins
@@ -1522,7 +1524,7 @@ def channels(target: str, topic: str, cited=None, save: bool = False) -> dict:
 def registry(action: str, channel: str | None = None, verdict: str | None = None, note: str = "",
              topic: str | None = None) -> dict:
     """Saved channel ratings, what each channel covers, and pins. list [--topic T] | show CHANNEL |
-    describe CHANNEL (note = the one-line summary, topic = comma-separated tags) | pin CHANNEL trusted|distrusted|clear."""
+    describe CHANNEL (note = the one-line summary, topic = comma-separated tags) | pin CHANNEL trusted|mixed|distrusted|clear."""
     reg = CM.registry_load(CHANNELS)
     if action == "list":
         out = []
@@ -1533,17 +1535,23 @@ def registry(action: str, channel: str | None = None, verdict: str | None = None
                 if not hit.get("rating") and not CM.covers_topic(row, topic):
                     continue
             out.append({"channel": row.get("name"), "handle": row.get("handle"), "pin": row.get("pin"),
-                        "covers": row.get("covers"),
+                        "covers": row.get("covers"), "observations": len(row.get("observations") or []),
                         "topics": {t: {"date": v.get("date"), "axes": v.get("axes"), "authority": v.get("authority"),
                                        "stale": CM.stale(v.get("date"))} for t, v in topics.items()}})
         return {"registry": str(CHANNELS), "channels": out}
     if not channel:
-        raise Fail("usage: registry list [--topic T] | registry show CHANNEL | registry pin CHANNEL trusted|distrusted|clear [--note TEXT]")
+        raise Fail("usage: registry list [--topic T] | registry show CHANNEL | registry pin CHANNEL trusted|mixed|distrusted|clear [--note TEXT]")
     if action == "show":
         _, row = CM.registry_find(reg, channel)
         if not row:
             return {"channel": channel, "found": False}
         return {"channel": channel, "found": True, **row}
+    if action == "observe":
+        if not note:
+            raise Fail('observe needs --note "what was seen" (and --topic T, optionally --source URL)')
+        row = CM.registry_observe(reg, channel, topic or "general", note, verdict)
+        CM.registry_save(CHANNELS, reg)
+        return {"channel": row.get("name"), "observations": row.get("observations")}
     if action == "describe":
         if not note:
             raise Fail('describe needs --covers "one plain sentence" (and optionally --tags "a, b, c")')
@@ -1551,8 +1559,8 @@ def registry(action: str, channel: str | None = None, verdict: str | None = None
         CM.registry_save(CHANNELS, reg)
         return {"channel": row.get("name"), "covers": row.get("covers")}
     if action == "pin":
-        if verdict not in ("trusted", "distrusted", "clear"):
-            raise Fail("pin needs a verdict: trusted, distrusted or clear")
+        if verdict not in (*CM.VERDICTS, "clear"):
+            raise Fail("pin needs a verdict: trusted, mixed, distrusted or clear")
         row = CM.registry_pin(reg, channel, verdict, note)
         CM.registry_save(CHANNELS, reg)
         return {"channel": row.get("name"), "pin": row.get("pin")}
@@ -1635,10 +1643,14 @@ def _dispatch(cmd: str, args: list[str]):
     if cmd == "registry":
         note, topic = opt(args, "--note", ""), opt(args, "--topic")
         if not args:
-            raise Fail("usage: registry list [--topic T] | show CHANNEL | pin CHANNEL trusted|distrusted|clear [--note TEXT]")
+            raise Fail("usage: registry list [--topic T] | show CHANNEL | pin CHANNEL trusted|mixed|distrusted|clear [--note TEXT]")
         action, rest = args[0], args[1:]
         if action == "pin" and len(rest) >= 2:
             return registry("pin", " ".join(rest[:-1]), rest[-1], str(note or ""))
+        if action == "observe":
+            source = opt(args, "--source")
+            return registry("observe", " ".join(args[1:]) or None, source if isinstance(source, str) else None,
+                            str(note or ""), topic if isinstance(topic, str) else None)
         if action == "describe":
             covers, tags = opt(args, "--covers"), opt(args, "--tags")
             rest = args[1:]
