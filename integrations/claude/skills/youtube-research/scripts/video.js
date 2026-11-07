@@ -20,7 +20,10 @@
   const affiliate = links.filter(l => AFF.test(l));
   const campaign = links.filter(l => /[?&]utm_(medium|campaign|source)=[^&]*(kol|influencer|creator|sponsor|partner|launch|ambassador|paid)/i.test(l));
   const short = links.filter(l => /\/\/(bit\.ly|tinyurl\.com|t\.co|ow\.ly|rebrand\.ly|lnk\.to|linktr\.ee)\//i.test(l));
-  const paidText = document.querySelector(".ytp-paid-content-overlay-text")?.innerText.trim() || "";
+  // The paid-promotion overlay fades (and is hidden during a preroll); the player response carries it too.
+  const pco = pr?.paidContentOverlay?.paidContentOverlayRenderer;
+  const pcoText = pco ? (pco.text?.simpleText || (pco.text?.runs || []).map(r => r.text).join("") || "Includes paid promotion") : "";
+  const paidText = (document.querySelector(".ytp-paid-content-overlay-text")?.textContent || "").trim() || pcoText;
   // YouTube Shopping: products the creator tagged, marked "Earns commission" when they get paid per sale.
   const info = document.querySelector("#description #info, ytd-watch-info-text #info")?.textContent || "";
   const tagged = (info.match(/(\d+)\s+products?\b/i) || [])[1];
@@ -71,14 +74,20 @@
   if (!durS) { try { const d = mp?.getDuration?.(); if (d > 0) durS = Math.round(d); } catch (e) {} }
   const mmss = s => s == null ? null : (s >= 3600 ? `${Math.floor(s / 3600)}:${String(Math.floor(s % 3600 / 60)).padStart(2, "0")}` : `${Math.floor(s / 60)}`) + `:${String(s % 60).padStart(2, "0")}`;
   // Collaboration videos ("A and B") show no subscriber count; the owner data lists each channel's.
-  const id0 = window.ytInitialData?.currentVideoEndpoint?.watchEndpoint?.videoId;
+  // After an in-app (clicked) navigation ytInitialData still describes the first video; the current
+  // watch-next data lives on the app/watch elements. Use whichever matches this video.
+  const app = document.querySelector("ytd-app"), flexy = document.querySelector("ytd-watch-flexy");
+  const nextData = [window.ytInitialData, app?.data?.response, app?.__data?.data?.response, flexy?.data?.response,
+                    flexy?.__data?.watchNextData, flexy?.watchNextData]
+    .find(d => d?.currentVideoEndpoint?.watchEndpoint?.videoId === vd.videoId);
   const subsList = [];
-  if (id0 === vd.videoId) {
+  if (nextData) {
     const walk = (o, depth) => { if (!o || typeof o !== "object" || depth > 40 || subsList.length > 8) return;
       if (o.listItemViewModel) { const t = o.listItemViewModel.title?.content, st = o.listItemViewModel.subtitle?.content || "";
-        const m = st.match(/([\d.,]+\s*[KMB]?)\s+subscribers?/i); if (t && m) subsList.push({ channel: t, subscribers: num(m[1]), text: m[0] }); }
+        const m = st.match(/([\d.,]+\s*[KMB]?)\s+subscribers?/i);
+        if (t && m && !subsList.some(x => x.channel === t)) subsList.push({ channel: t, subscribers: num(m[1]), text: m[0] }); }
       for (const k in o) walk(o[k], depth + 1); };
-    try { const c = window.ytInitialData.contents?.twoColumnWatchNextResults?.results?.results?.contents || [];
+    try { const c = nextData.contents?.twoColumnWatchNextResults?.results?.results?.contents || [];
       for (const x of c) if (x.videoSecondaryInfoRenderer) walk(x.videoSecondaryInfoRenderer.owner, 0); } catch (e) {}
   }
   const subText = document.querySelector("#owner-sub-count")?.textContent.trim() || null;

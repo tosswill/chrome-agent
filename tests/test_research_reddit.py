@@ -509,3 +509,21 @@ def test_reviewer_names_are_not_brand_tokens(monkeypatch, tmp_path):
     monkeypatch.setenv("YOUTUBE_TAB_CHANNELS", str(p))
     monkeypatch.setattr(R, "_REVIEWERS", None)
     assert R._reviewer_names() == {"projectfarm"}
+
+
+def test_title_brands_two_words_and_misspelled():
+    strong, _ = R.brand_candidates("For a home carpet cleaning machine, should I purchase Bissel Big Green or Rug Doctor?")
+    assert {"bissell", "rugdoctor"} <= strong
+
+
+def test_revealed_replies_and_duplicates():
+    comments = [{"id": "a", "depth": 0, "author": "u1", "text": "Top comment here, quite long."},
+                {"id": "b", "depth": 1, "parent": "a", "author": "u2", "text": "[deleted]", "deleted": True,
+                 "collapsed": True},
+                {"id": "c", "depth": 2, "parent": "b", "author": "u3", "text": "Hidden reply that was revealed."},
+                {"id": "d", "depth": 0, "author": "spam", "text": "Try the lovable badge app, it's great."},
+                {"id": "e", "depth": 0, "author": "spam", "text": "Try the lovable badge app, it's great."}]
+    out, counts = R.select_comments(comments, "op", 15, 0, revealed={"b"})
+    ids = [c["id"] for c in out]
+    assert ids == ["a", "c", "d"] and out[1]["revealed"] and counts["revealed_replies"] == 1
+    assert counts["skipped_duplicates"] == 1
