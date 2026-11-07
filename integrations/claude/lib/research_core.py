@@ -650,6 +650,22 @@ class Site:
     # Public operations
     # ---------------------------------------------------------------------
 
+    def _window_of(self, full_id: str) -> int | None:
+        try:
+            return self.cdp(full_id, "Browser.getWindowForTarget", {"targetId": full_id}).get("windowId")
+        except Fail:
+            return None
+
+    def _lone_tab(self, candidates: list[dict], tabs: list[dict]) -> str | None:
+        """The first candidate that is the only tab in its window. A tab sharing a window may be a
+        background tab, which Chrome treats as hidden."""
+        windows = {t["full_id"]: self._window_of(t["full_id"]) for t in tabs}
+        for c in candidates:
+            w = windows.get(c["full_id"])
+            if w is not None and sum(1 for v in windows.values() if v == w) == 1:
+                return c["full_id"]
+        return None
+
     def open_window(self, wait_seconds: float = 0) -> dict:
         """Claim a new window. Restores the instance if it is not running.
         With wait_seconds, waits for a free slot."""
@@ -662,9 +678,16 @@ class Site:
                 if busy < self.max_claims:
                     if not tabs:
                         raise Fail(f"{self.instance} has no open tab to issue commands through.")
-                    res = self.cdp(tabs[0]["full_id"], "Target.createTarget",
-                                   {"url": "about:blank", "newWindow": True, "background": True})
-                    full_id = res["targetId"]
+                    # Reuse an unclaimed blank tab (the one kept or created so commands have a page to
+                    # go through) instead of leaving it as an extra empty window next to a new one.
+                    claimed = set(self.claims())
+                    blank = [t for t in tabs if t["full_id"] not in claimed
+                             and (t.get("url") or "") in ("about:blank", "")]
+                    full_id = self._lone_tab(blank, tabs) if blank else None
+                    if not full_id:
+                        res = self.cdp(tabs[0]["full_id"], "Target.createTarget",
+                                       {"url": "about:blank", "newWindow": True, "background": True})
+                        full_id = res["targetId"]
                     now = time.time()
                     self._write_claim(full_id, {"created": now, "last_used": now, "loads": 0})
                     break
