@@ -724,6 +724,7 @@ def search(target: str, query: str, sort: str = "relevance", upload: str | None 
            shorts: bool = False, typed: bool = True) -> dict:
     url = search_url(query, sort, upload)  # validates sort/upload
     full_id = SITE.resolve(target)
+    SITE.ensure_visible(full_id)  # fail fast in a hidden window
     page, via = None, "url"
     if SORTS[sort] or upload:
         via = "url (filters)"  # filters are set through the URL, not the filter menu
@@ -812,6 +813,7 @@ def video(target: str, url: str) -> dict:
     elif not url.startswith("http"):
         url = f"https://www.youtube.com/watch?v={url}"
     full_id = SITE.resolve(target)
+    SITE.ensure_visible(full_id)  # fail fast in a hidden window
     page, opened = (None, "url")
     if vid and "/shorts/" not in url:
         page, opened = _open_by_click(full_id, vid)
@@ -857,6 +859,7 @@ def video(target: str, url: str) -> dict:
 def transcript(target: str, grep: list[str] | None = None, context: int = 0,
                start: str | None = None, end: str | None = None, out_dir: str | None = None) -> dict:
     full_id = SITE.resolve(target)
+    SITE.ensure_visible(full_id)  # fail fast in a hidden window
     SITE.touch(full_id)
     vid = _require_watch(full_id)
     ok, reason = _open_transcript(full_id)
@@ -924,6 +927,7 @@ def transcript(target: str, grep: list[str] | None = None, context: int = 0,
 
 def comments(target: str, max_comments: int = 20) -> dict:
     full_id = SITE.resolve(target)
+    SITE.ensure_visible(full_id)  # fail fast in a hidden window
     vid = _require_watch(full_id)
     SITE.touch(full_id)
     if SITE.scroll_into_view(full_id, "ytd-comments#comments") is None:
@@ -1124,6 +1128,7 @@ def scan(target: str, rng: str, samples: int = 4, keep: int = 3, out_dir: str | 
     if hi <= lo:
         raise Fail("--scan range must end after it starts")
     full_id = SITE.resolve(target)
+    SITE.ensure_visible(full_id)  # fail fast in a hidden window
     vid = _require_watch(full_id)
     SITE.touch(full_id)
     SITE.scroll_to_top(full_id)
@@ -1158,6 +1163,7 @@ def frame(target: str, at, out: str | None = None, out_dir: str | None = None,
     """Jump to `at` (one timestamp, or a list), wait out ads and buffering, capture the player.
     Returns one result, or a list for several timestamps."""
     full_id = SITE.resolve(target)
+    SITE.ensure_visible(full_id)  # fail fast in a hidden window
     vid = _require_watch(full_id)
     SITE.touch(full_id)
     times = at if isinstance(at, (list, tuple)) else [at]
@@ -1210,6 +1216,7 @@ def channel(target: str, url: str) -> dict:
     if "stop" in page:
         return {"page": page, "channel": None}
     full_id = SITE.resolve(target)
+    SITE.ensure_visible(full_id)  # fail fast in a hidden window
     ch = SITE.evaluate(full_id, _js("channel.js"))
     if ch:
         lst, why = S.likely_ai_listicle("", ch.get("name"), ch.get("handle"), ch.get("videos"))

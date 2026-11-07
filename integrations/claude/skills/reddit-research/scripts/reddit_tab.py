@@ -789,6 +789,7 @@ def search(target: str, query: str | None = None, *, url: str | None = None,
     scope (site-wide, or the subreddit you're in). Otherwise the search URL is loaded. `page.via`
     says which: "typed", "url", or "url (<why typing wasn't used>)"."""
     full_id = SITE.resolve(target)
+    SITE.ensure_visible(full_id)  # fail fast in a hidden window
     if typed is None:
         typed = os.environ.get("REDDIT_TAB_TYPE", "1") != "0"
     page, why = None, ""
@@ -833,6 +834,7 @@ def back(target: str) -> dict:
     a page load; if the browser had to fetch the page again it is counted. Returns
     {page: {url, via, restored, loads}, posts?} (posts: the cached results when back on them)."""
     full_id = SITE.resolve(target)
+    SITE.ensure_visible(full_id)  # fail fast in a hidden window
     hist = SITE.cdp(full_id, "Page.getNavigationHistory")
     idx, entries = hist.get("currentIndex", 0), hist.get("entries", [])
     if idx <= 0 or not entries:
@@ -1094,6 +1096,7 @@ def thread(target: str, url: str, max_comments: int = 15, replies: int = 0, expa
     if not url.startswith("http"):
         url = "https://www.reddit.com/" + url.lstrip("/")
     full_id = SITE.resolve(target)
+    SITE.ensure_visible(full_id)  # fail fast in a hidden window
     pid = _post_id(url)
     explicit_sort = "sort=" in url
     if explicit_sort or not pid:

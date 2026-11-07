@@ -52,3 +52,24 @@ def test_pace_delay_is_skewed_and_bounded():
 def test_parse_range():
     assert R._parse_range("10-30", (20.0, 60.0)) == (10.0, 30.0)
     assert R._parse_range("bad", (20.0, 60.0)) == (20.0, 60.0)
+
+
+def test_ensure_visible_fails_fast_when_hidden(monkeypatch):
+    import pytest
+    import research_core as C
+    site = C.Site.__new__(C.Site)
+    states = iter(["hidden", "hidden"])
+    monkeypatch.setattr(C.Site, "evaluate", lambda self, t, e, timeout=30: next(states))
+    monkeypatch.setattr(C, "pause", lambda *a, **k: None)
+    with pytest.raises(C.Fail, match="hidden"):
+        site.ensure_visible("T")
+
+
+def test_ensure_visible_tolerates_brief_hidden(monkeypatch):
+    import pytest
+    import research_core as C
+    site = C.Site.__new__(C.Site)
+    states = iter(["hidden", "visible"])
+    monkeypatch.setattr(C.Site, "evaluate", lambda self, t, e, timeout=30: next(states))
+    monkeypatch.setattr(C, "pause", lambda *a, **k: None)
+    site.ensure_visible("T")  # no raise
