@@ -21,6 +21,8 @@ import random
 import shutil
 import subprocess
 import time
+import threading
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
@@ -122,6 +124,38 @@ def _env(prefix: str, key: str, default):
     if raw is None:
         return default
     return type(default)(raw) if not isinstance(default, Path) else Path(raw)
+
+
+# --- per-step timings (both sites; attached to every CLI/MCP result, errors included) ----------
+_TIMINGS = threading.local()
+
+
+def timings_reset() -> None:
+    _TIMINGS.t0 = time.monotonic()
+    _TIMINGS.steps = {}
+
+
+@contextmanager
+def timed(step: str):
+    """Add the wall time of the block to `step` (summed, with a count, when repeated)."""
+    t = time.monotonic()
+    try:
+        yield
+    finally:
+        steps = getattr(_TIMINGS, "steps", None)
+        if steps is not None:
+            s, n = steps.get(step, (0.0, 0))
+            steps[step] = (s + time.monotonic() - t, n + 1)
+
+
+def attach_timings(obj):
+    """Add {"timings": {"total_s", "steps": {step: {"s", "n"}}}} to a dict result."""
+    t0 = getattr(_TIMINGS, "t0", None)
+    if isinstance(obj, dict) and t0 is not None:
+        obj["timings"] = {"total_s": round(time.monotonic() - t0, 2),
+                          "steps": {k: {"s": round(v[0], 2), "n": v[1]}
+                                    for k, v in _TIMINGS.steps.items()}}
+    return obj
 
 
 @dataclass
@@ -413,7 +447,9 @@ class Site:
                 return self.evaluate(target, "document.visibilityState", timeout=10)
             except Fail:
                 return None
-        if vis() == "hidden":
+        with timed("visibility_check"):
+            hidden = vis() == "hidden"
+        if hidden:
             self.preflight_screen()
             self.place_windows()
             pause(grace)
@@ -735,10 +771,15 @@ class Site:
                 raise Fail(f"all {self.max_claims} research windows are in use. Wait and retry "
                            "(open --wait), or ask the user.")
             pause(min(15, max(1, deadline - time.time())))
-        placed = self.place_windows()
+        with timed("place_windows"):
+            placed = self.place_windows()
         if self.on_open:
             self.on_open(self, full_id)
         try:
+            self.ensure_visible(full_id)
+            # A new window can report visible for a moment before the window manager hides it
+            # (seen 2026-11-06): look again shortly after.
+            pause(1.5)
             self.ensure_visible(full_id)
         except Fail:
             self.close(full_id)  # release the claim; nothing useful can run in a hidden window
@@ -761,10 +802,12 @@ class Site:
         self.check_url(url)
         self.ensure_visible(full_id)  # before counting a load: a hidden window would only stall
         loads = self._count_load(full_id)
-        self._pace()
-        self.cdp(full_id, "Page.navigate", {"url": url})
+        with timed("pace_wait"):
+            self._pace()
         try:
-            self.wait_for(full_id, ready_js or self.ready_js, settle=self.settle)
+            with timed("page_load"):
+                self.cdp(full_id, "Page.navigate", {"url": url})
+                self.wait_for(full_id, ready_js or self.ready_js, settle=self.settle)
         except Fail:
             self.ensure_visible(full_id, grace=0)  # a hidden window explains a stalled load: say so
             raise
@@ -872,12 +915,13 @@ def run_cli(doc: str, dispatch: Callable[[str, list[str]], object], argv: list[s
     if argv[1] in ("-h", "--help", "help"):
         print(doc.strip())
         return 0
+    timings_reset()
     try:
         result = dispatch(argv[1], argv[2:])
         if result is NotImplemented:
             raise Fail(doc.strip())
-        print(json.dumps(result, indent=2, ensure_ascii=False))
+        print(json.dumps(attach_timings(result), indent=2, ensure_ascii=False))
         return 0
     except Fail as e:
-        print(json.dumps({"error": str(e)}, ensure_ascii=False))
+        print(json.dumps(attach_timings({"error": str(e)}), ensure_ascii=False))
         return 1

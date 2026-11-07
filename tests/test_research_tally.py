@@ -168,3 +168,63 @@ def test_group_flags_and_custom_independence():
     # "possible" brand ownership is flagged elsewhere but doesn't exclude.
     seen[0]["brand_owned"] = "possible"
     assert T.tally(seen, ["P2S"], **kw)["tally"][0]["independent_channels"] == 1
+
+
+# --- 2026-11-07 open items --------------------------------------------------------
+
+def test_new_garbles():
+    recs = [{"id": "c1", "via": "comment", "thread": "p1", "author": "a", "text": "My Eccoflow died after a year.",
+             "score": 3},
+            {"id": "c2", "via": "comment", "thread": "p1", "author": "b", "text": "blietti has been solid for me.",
+             "score": 5}]
+    rows = {r["term"]: r for r in T.tally(recs, ["EcoFlow", "Bluetti"])["tally"]}
+    assert rows["EcoFlow"]["users"] == 1 and rows["EcoFlow"]["polarity"]["complain"] == 1
+    assert rows["Bluetti"]["users"] == 1 and rows["Bluetti"]["polarity"]["recommend"] == 1
+
+
+def test_polarity_is_per_clause():
+    text = "Love my Bluetti, but the EcoFlow died after two months."
+    recs = [{"id": "c1", "via": "comment", "thread": "p1", "author": "a", "text": text, "score": 10}]
+    rows = {r["term"]: r for r in T.tally(recs, ["EcoFlow", "Bluetti"])["tally"]}
+    assert rows["Bluetti"]["polarity"]["recommend"] == 1 and rows["Bluetti"]["complain_upvotes"] == 0
+    assert rows["EcoFlow"]["polarity"]["complain"] == 1 and rows["EcoFlow"]["recommend_upvotes"] == 0
+    # No tone in the clause: the whole sentence decides.
+    assert T._clause_around("The Jackery, which I returned, was a problem.", 4, 11)
+
+
+def test_exclude_op_drops_op_from_users():
+    recs = [{"id": "p1", "via": "post", "thread": "p1", "author": "op1", "title": "Hoover Power Scrub vs ProHeat?",
+             "text": "", "is_op": True},
+            {"id": "p2", "via": "post", "thread": "p2", "author": "op2", "title": "x", "text": "I had a Power Scrub before",
+             "is_op": True},
+            {"id": "c1", "via": "comment", "thread": "p2", "author": "u1", "text": "The Power Scrub leaked on me.",
+             "score": 4}]
+    row = T.tally(recs, ["Power Scrub"], exclude_op=True)["tally"][0]
+    assert row["users"] == 1 and row["independent_users"] == 1 and row["threads"] == 1
+    assert row["excluded"]["op"] == 2
+    row = T.tally(recs, ["Power Scrub"])["tally"][0]
+    assert row["users"] == 3
+
+
+def test_implied_title_only_endorsements():
+    recs = [{"id": "p1", "via": "post", "thread": "p1", "author": "op", "title": "Highly recommend the Bissell Big Green",
+             "text": "", "is_op": True, "score": 2700},
+            {"id": "c1", "via": "comment", "thread": "p1", "author": "u1", "depth": 0,
+             "text": "Love mine. Bought it 8 years ago. No regrets.", "score": 100},
+            {"id": "c2", "via": "comment", "thread": "p1", "author": "u2", "depth": 1, "text": "Love mine too!", "score": 5},
+            {"id": "c3", "via": "comment", "thread": "p1", "author": "u3", "depth": 0, "text": "There's always Miele.",
+             "score": 59},
+            {"id": "c4", "via": "comment", "thread": "p1", "author": "op", "depth": 0, "is_op": True,
+             "text": "Great machine", "score": 9},
+            # A two-product title doesn't count.
+            {"id": "p2", "via": "post", "thread": "p2", "author": "op2", "title": "Big Green or Rug Doctor?", "is_op": True},
+            {"id": "c5", "via": "comment", "thread": "p2", "author": "u4", "depth": 0, "text": "Love it, great buy",
+             "score": 3}]
+    row = {r["term"]: r for r in T.tally(recs, ["Big Green", "Rug Doctor"])["tally"]}["Big Green"]
+    imp = row["implied"]
+    assert imp["threads"] == 1 and imp["users"] == 1 and imp["upvotes"] == 100
+    assert imp["examples"][0]["author"] == "u1"
+    # Kept apart: the main counts have the post's own title only, not the replies.
+    assert row["recommend_upvotes"] == 2700 and row["users"] == 2  # the two OPs
+    yt = T.tally(recs, ["Big Green"], group="channel", group_label="channels", separate_search=False)["tally"][0]
+    assert "implied" not in yt

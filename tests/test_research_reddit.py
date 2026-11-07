@@ -270,3 +270,187 @@ def test_stop_reason_block_wins(monkeypatch):
     monkeypatch.setattr(R, "_session_cookie_valid", lambda site: True)
     assert "block" in R._stop_reason({"loggedIn": True, "blocked": True}, R.SITE)
 
+
+
+# --- 2026-11-07 open items --------------------------------------------------------
+
+def test_brand_tokens_keep_multiword_names_and_skip_category_nouns():
+    strong, weak = R.brand_candidates("Highly recommend the Bissell Big Green carpet cleaning machine",
+                                      "Big Green carpet cleaner worth it")
+    assert "biggreen" in strong and "big" not in strong and "green" not in strong
+    assert "carpet" not in strong | weak
+    strong, _ = R.brand_candidates("x", '"Bissell Big Green" broke')
+    assert strong == {"bissell"}
+    strong, _ = R.brand_candidates("x", '"EcoFlow Delta 3" problems')
+    assert strong == {"ecoflow"}
+
+
+def test_category_subreddits_are_not_brand_subreddits():
+    strong, weak = R.brand_candidates("Looking for a Carpet Cleaner – Bissell vs. Hoover vs. Shark?",
+                                      "Bissell Revolution vs Hoover carpet cleaner")
+    assert R.subreddit_brand("CarpetCleaning", strong, weak) is None
+    assert R.subreddit_brand("carpetcleaningporn", strong, weak) is None
+    # A weak (capitalized title word) token still names a subreddit that is exactly that name.
+    assert R.subreddit_brand("Lindhaus", set(), {"lindhaus"}) == "lindhaus"
+    assert R.subreddit_brand("Ecoflow", {"ecoflow"}) == "ecoflow"
+
+
+@pytest.mark.parametrize("flair,sub_brand,is_mod,hit", [
+    ("EcoFlow | Ryan", "ecoflow", False, True),
+    ("CS_Team_EU", "ecoflow", False, True),
+    ("EcoFlow team", None, False, True),
+    ("Prusa", None, True, True),
+    ("everyone forgets about Lindhaus… team", None, True, False),
+    ("Delta 3 owner", "ecoflow", False, False),
+    ("EcoFlow Delta 3 | River 2", "ecoflow", False, False),
+    ("EcoFlow | Delta", "ecoflow", False, True),  # one plain word after the brand reads as a name
+    ("CS_Team_EU", None, False, False),  # support flair needs the brand's own subreddit
+])
+def test_staff_flair(flair, sub_brand, is_mod, hit):
+    brands = {"ecoflow", "prusa"} | ({sub_brand} if sub_brand else set())
+    assert bool(R.staff_flair(flair, brands, set(), sub_brand=sub_brand, is_mod=is_mod)) is hit
+
+
+def test_lindhaus_flair_moderator_is_not_a_brand_moderator():
+    data = {"subreddit": "r/VacuumCleaners", "title": "Hoover Smartwash problem, is this something I can fix?",
+            "url": "https://www.reddit.com/r/VacuumCleaners/comments/1p1mcsl/x/", "body": "", "comments": [],
+            "moderators": [{"name": "vacuumsaregreat", "flair": "everyone forgets about Lindhaus… staff"}]}
+    pb = R.promo_bias(data, '"Hoover SmartWash" problems')
+    assert pb["brand_moderators"] == [] and pb["score"] == 0.1
+
+
+def test_ecoflow_staff_moderators_found():
+    data = {"subreddit": "r/Ecoflow", "title": "Delta 3 problem", "url": "https://www.reddit.com/r/Ecoflow/comments/a/x/",
+            "body": "", "comments": [],
+            "moderators": [{"name": "hiccpetExpert", "flair": "EcoFlow | Ryan"},
+                           {"name": "FondantOk8397", "flair": "CS_Team_EU"}, {"name": "someowner", "flair": "River 2"}]}
+    pb = R.promo_bias(data, '"EcoFlow Delta 3" problems')
+    assert pb["brand_moderators"] == ["FondantOk8397", "hiccpetExpert"]
+
+
+def _cm(**kw):
+    data = {"author": "op", "url": "https://www.reddit.com/r/x/comments/p1/t/", "body": "", "links": []}
+    data.update(kw)
+    return {h["signal"]: h for h in R.content_marketing(data, data.pop("comments", []) if "comments" in data else [])}
+
+
+def test_content_marketing_op_edit_article():
+    hits = _cm(body="Quick update mates, someone suggested this very helpful article that lists down 9 most "
+                    "effective carpet cleaners.\n\nMy carpets are a war zone.",
+               links=["https://wearenthusiast.com/best-carpet-cleaner/"])
+    assert "op_edit_points_to_article" in hits and "wearenthusiast.com" in hits["op_edit_points_to_article"]["text"]
+    # The same wording without an outside link isn't flagged.
+    assert "op_edit_points_to_article" not in _cm(body="Edit: thanks, I read a guide and bought one.")
+
+
+def test_content_marketing_repeated_links_and_listicle():
+    links = ["https://medium.com/@x/top-5-a"] * 5
+    assert _cm(links=links)["repeated_external_links"]["weight"] == 0.2
+    body = "\n".join(f"{i}. Product {i} is great" for i in range(1, 6))
+    assert "repeated_external_links" in _cm(body=body, links=["https://someblog.com/best"])
+    # Image or Reddit links never count.
+    assert "repeated_external_links" not in _cm(links=["https://i.imgur.com/a.jpg"] * 4)
+
+
+def test_content_marketing_partner_short_links():
+    c = [{"author": "u1", "text": "got mine here", "links": ["https://ebay.io/abc123"], "link": "L1"}]
+    assert "partner_short_links" in _cm(comments=c)
+    c = [{"author": "u1", "text": "got mine here", "links": ["https://www.ebay.com/itm/123"], "link": "L1"}]
+    assert "partner_short_links" not in _cm(comments=c)
+
+
+def test_content_marketing_dangling_roundup():
+    c = [{"author": "u1", "link": "L1", "text": "honestly the Bissell big green is easily the best option imo. you can "
+                                                 "find a helpful breakdown of the top carpet cleaners in this thread"},
+         {"author": "u2", "link": "L2", "text": "This carpet cleaner use-case roundup gives a few better options to compare."}]
+    assert "dangling_roundup_reference" in _cm(comments=c)
+    # One neutral mention of "this guide" alone isn't enough.
+    assert "dangling_roundup_reference" not in _cm(comments=[{"author": "u3", "link": "L3",
+                                                              "text": "I followed this guide and it was fine."}])
+
+
+def test_content_marketing_spec_sheet_pitch():
+    c = [{"author": "u1", "link": "L1", "text": "DREAME N20 is perfect for this situation, 212°F steam kills bacteria and "
+                                                 "allergens from pets and kids, auto-mix solution so you don't have to "
+                                                 "think about ratios. used it with pets at home"}]
+    assert "spec_sheet_pitch" in _cm(comments=c)
+    c = [{"author": "u2", "link": "L2", "text": "I have a big green. It did really good getting red wine and pet stains "
+                                                 "out, though it is loud and heavy to carry upstairs."}]
+    assert "spec_sheet_pitch" not in _cm(comments=c)
+
+
+def test_content_marketing_self_declared_bias():
+    c = [{"author": "pro", "link": "L1", "text": "I'm a bit biased, but I only really use products from a website "
+                                                  "called encapstore.com, primarily their Green Dragon."}]
+    assert "self_declared_bias" in _cm(comments=c)
+    assert "self_declared_bias" not in _cm(comments=[{"author": "u", "link": "L", "text": "I'm biased toward Bissell."}])
+
+
+def test_off_scope():
+    posts = [{"sub": "Ecoflow"}, {"sub": "ecoflow"}, {"sub": "SolarDIY"}, {"sub": None}]
+    assert R.off_scope(posts, "r/Ecoflow") == ["SolarDIY"]
+    assert R.off_scope([{"sub": "Ecoflow"}], "Ecoflow") == []
+
+
+def test_read_cap_grows_with_thread(monkeypatch):
+    monkeypatch.delenv("REDDIT_TAB_READ_CAP", raising=False)
+    monkeypatch.delenv("REDDIT_TAB_READ_CAP_MAX", raising=False)
+    short = {"author": "op", "body": "q", "comments": [{"depth": 0, "author": "a", "text": "ok", "top": 1}]}
+    assert R.read_cap(short, 15, 0) == 45
+    long = {"author": "op", "body": "q" * 500,
+            "comments": [{"depth": 0, "author": f"a{i}", "text": "x" * 400, "top": i} for i in range(28)]}
+    assert 90 < R.read_cap(long, 30, 0) <= 150
+    monkeypatch.setenv("REDDIT_TAB_READ_CAP_MAX", "60")
+    assert R.read_cap(long, 30, 0) == 60
+
+
+def test_typed_search_js_scopes_chip_check_to_search_box():
+    assert "document.querySelector('rpl-input-chip')" not in R._SEARCH_JS
+    assert "reddit-search-large" in R._CHIP_NOW
+
+
+def _fake_search_site(monkeypatch, results):
+    navs = []
+    monkeypatch.setattr(R.SITE, "resolve", lambda t: t)
+    monkeypatch.setattr(R.SITE, "ensure_visible", lambda t: None)
+    monkeypatch.setattr(R.SITE, "nav", lambda t, u: navs.append(u) or {"url": u, "loads": len(navs)})
+    seq = iter(results)
+    monkeypatch.setattr(R.SITE, "evaluate", lambda t, js, **k: next(seq))
+    monkeypatch.setattr(R, "_update_claim", lambda *a, **k: None)
+    monkeypatch.setattr(R, "_seen_add", lambda *a, **k: None)
+    monkeypatch.setattr(R, "_time_origin", lambda *a: None)
+    monkeypatch.setattr(R, "_href", lambda *a: "https://www.reddit.com/")
+    return navs
+
+
+def test_empty_search_returns_note(monkeypatch):
+    navs = _fake_search_site(monkeypatch, [[]])
+    res = R.search("T", '"EcoFlow Delta 3" (problem OR issue)', typed=False)
+    assert res["posts"] == [] and "Simplify the query" in res["page"]["note"] and len(navs) == 1
+
+
+def test_typed_sub_search_that_went_site_wide_is_reloaded(monkeypatch):
+    navs = _fake_search_site(monkeypatch, [[{"id": "a", "sub": "SolarDIY", "url": "u"}, {"id": "b", "sub": "Ecoflow", "url": "u"}],
+                                           [{"id": "c", "sub": "Ecoflow", "url": "u"}]])
+    monkeypatch.setattr(R, "_typed_search", lambda *a: ({"loads": 1}, ""))
+    res = R.search("T", '"EcoFlow Delta 3" problems', subreddit="Ecoflow")
+    assert navs and "/r/Ecoflow/search/" in navs[0]
+    assert res["page"]["via"].startswith("url (the typed search wasn't limited")
+    assert [p["id"] for p in res["posts"]] == ["c"] and "note" not in res["page"]
+
+
+def test_affiliate_community_sidebar():
+    side = ("Created Aug 8, 2024 Public COMMUNITY BOOKMARKS Power Station Deals R/PORTABLE_POWERSTATION RULES 1 Genuine "
+            "Deals & Self-Promotion Allowed DISCLAIMER By using our links to make a purchase, you can help support us as we "
+            "may earn a small commission. As an Amazon Associate, we earn from qualifying purchases.")
+    assert "commission" in R.affiliate_community(side)
+    data = {"subreddit": "r/Portable_PowerStation", "title": "The best portable power stations", "url": "u", "body": "",
+            "comments": [], "moderators": [], "sidebar_text": side}
+    pb = R.promo_bias(data, "best portable power station for camping")
+    assert any(e["signal"] == "affiliate_community" for e in pb["evidence"]) and pb["score"] >= 0.35
+    assert R.affiliate_community("Be civil. No spam. Search before posting.") is None
+
+
+def test_chip_js_ignores_hidden_chips():
+    # The chip check only reports a chip with a visible box (a removed chip can linger in the DOM).
+    assert "b.width > 0 && b.height > 0" in R.CHIP_JS and "/r\\//" not in R.CHIP_JS

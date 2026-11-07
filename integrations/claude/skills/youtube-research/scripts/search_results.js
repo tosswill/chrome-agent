@@ -1,9 +1,13 @@
 // Videos (and optionally Shorts) on a YouTube search results page. Ads are skipped.
+// Result order and visibility are read once the list has settled (youtube_tab._settle_results).
 // `t=` is removed from links: on a signed-in account it is the watch-history resume point, not a citation.
 ((opts) => {
   const clean = h => { try { const u = new URL(h, location.origin); u.searchParams.delete("pp"); u.searchParams.delete("t"); return u.href; } catch { return h; } };
   const out = [];
-  for (const v of document.querySelectorAll("ytd-video-renderer")) {
+  // Only the results on screen: YouTube keeps earlier searches' result lists in the DOM, hidden.
+  const shown = el => el.getClientRects().length > 0 && !el.closest("[hidden]");
+  for (const v of document.querySelectorAll("ytd-search ytd-video-renderer")) {
+    if (!shown(v)) continue;
     const a = v.querySelector("a#video-title");
     if (!a) continue;
     const href = clean(a.href);
@@ -23,7 +27,8 @@
     });
   }
   if (opts.shorts) {
-    for (const s of document.querySelectorAll("ytm-shorts-lockup-view-model")) {
+    for (const s of document.querySelectorAll("ytd-search ytm-shorts-lockup-view-model")) {
+      if (!shown(s)) continue;
       const a = s.querySelector("a[href*='/shorts/']");
       if (!a) continue;
       out.push({ type: "short", title: (s.querySelector("h3")?.innerText || a.title || "").trim(),

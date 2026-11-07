@@ -55,6 +55,9 @@ API
 tally() output, per term (sorted by independent groups, then recommend-weighted upvotes):
 
     term, aliases, items, threads, search_only_threads (when separate_search),
+    implied (group="author" only): {threads, users, upvotes, examples} for top-level replies that read
+        as a recommendation without naming the product, in threads whose post title names only this
+        product (title-only endorsements such as "Love mine"); kept apart from the counts below,
     <group_label>, independent_<group_label>, raw_upvotes, recommend_upvotes, complain_upvotes,
     polarity {recommend, complain, question, mention, mixed}, excluded {reason: n},
     by_group [{<group>, items, independent, reasons, polarity, max_sponsor_score}],
@@ -65,6 +68,13 @@ callable you pass) gives a reason. For YouTube, sponsor scores carry over to the
 independent for a term only if none of its records mentioning the term is excluded, and channel-wide
 flags (strong brand ownership, listicle) from any of its records, or from `group_flags`
 ({channel: {"listicle": True, ...}}), exclude it everywhere.
+
+Polarity is read on the clause around each mention (cut at "but", "while", "whereas", ";" ...)
+when that clause has a tone of its own, else on the whole sentence, so "Love my Bluetti, but the
+EcoFlow died" counts as praise for one and a complaint about the other.
+
+exclude_op=True drops the original poster's mentions entirely: they count toward no users, threads
+or polarity (only `excluded.op`).
 
 Upvotes: `raw_upvotes` sums the scores of independent records mentioning the term (each record once),
 `recommend_upvotes`/`complain_upvotes` only those whose mention reads as a recommendation/complaint,
@@ -93,6 +103,10 @@ GARBLES: dict[str, list[str]] = {
     "Sennheiser": ["Senheiser", "Sennhieser"],
     "Insta360": ["Insta 360", "Insta three sixty"],
     "Saramonic": ["Sara Monic"],
+    "EcoFlow": ["Eccoflow", "Eco Flow", "Ecoflo", "Ecoflow"],
+    "Bluetti": ["blietti", "Bluety", "Blueti", "Bluetty"],
+    "Jackery": ["Jackary", "Jakery"],
+    "Bissell": ["Bissel", "Bisell"],
 }
 
 # Tokens that make a longer, different product name when they follow a name ("A1 mini", "Core One L").
@@ -253,7 +267,8 @@ _REC = re.compile(r"\b(recommend(?:ed)?|love (?:it|mine|my|the)|loving|great|exc
 _COMP = re.compile(r"\b(problems?|issues?|broke|broken|fail(?:s|ed|ing|ure)?|clog(?:s|ged|ging)?|jam(?:s|med)?|"
                    r"return(?:ed|ing)?|refund|regret|avoid|terrible|awful|worst|garbage|junk|disappoint(?:ed|ing)?|"
                    r"defect(?:ive)?|doa|hate|limitation|unreliable|poor|sucks?|annoying|warranty|rma|nightmare|"
-                   r"overpriced|flaky|bug(?:s|gy)?|noisy|hiss|dropouts?|cutting out)\b", re.I)
+                   r"overpriced|flaky|bug(?:s|gy)?|noisy|hiss|dropouts?|cutting out|died|dead|leak(?:s|ed|ing|y)?|"
+                   r"crap|crappy|piece of (?:junk|crap|shit))\b", re.I)
 
 
 def polarity(text: str) -> str:
@@ -278,6 +293,27 @@ def _sentence_around(text: str, start: int, end: int) -> str:
     bs = [i for i in (text.find(c, end) for c in ".!?\n") if i != -1]
     b = min(bs) + 1 if bs else len(text)
     return text[a:b]
+
+
+# Contrast breaks inside a sentence: "Love my Bluetti, but the EcoFlow died" is praise for one and a
+# complaint about the other.
+_CONTRAST = re.compile(r"[;]|,?\s+\b(?:but|however|whereas|while|although|though|unlike|compared to|"
+                       r"except|meanwhile)\b|,\s+(?:and\s+)?(?:the|my|our|their)\s+", re.I)
+
+
+def _clause_around(text: str, start: int, end: int) -> str:
+    """The part of the sentence around a mention, cut at contrast words, when that part has a tone of
+    its own; otherwise the whole sentence (so "It broke twice. Avoid the X" still reads as a complaint)."""
+    sent_start = max(text.rfind(c, 0, start) for c in ".!?\n") + 1
+    sent = _sentence_around(text, start, end)
+    s, e = start - sent_start, end - sent_start
+    cuts = [0] + [m.start() for m in _CONTRAST.finditer(sent)] + [len(sent)]
+    a = max(c for c in cuts if c <= s)
+    b = min(c for c in cuts if c >= e)
+    clause = sent[a:b]
+    if len(cuts) > 2 and clause.strip() and polarity(clause) != "mention":
+        return clause
+    return sent
 
 
 # -------------------------------------------------------------------------
@@ -370,6 +406,36 @@ def _parts(rec: dict, include_transcripts: bool) -> list[tuple[str, str, str | N
     return [p for p in parts if p[1]]
 
 
+def _implied(recs: list[dict], term: Term, terms: list[Term], indep_fn, max_examples: int) -> dict:
+    """Endorsements that don't name the product: top-level replies that read as a recommendation
+    ("Love mine. No regrets.") in a thread whose post title names this product and no other tallied
+    product. Kept apart from the main counts; read the examples before using them."""
+    posts = {}
+    for r in recs:
+        if r.get("via") == "post" and r.get("title"):
+            named = {t.name for t in terms if find_mentions(r["title"], [t])}
+            if named == {term.name}:
+                posts[str(r.get("thread") or r.get("id"))] = r
+    users, up, examples = set(), 0, []
+    for r in recs:
+        if r.get("via") != "comment" or str(r.get("thread")) not in posts or r.get("is_op"):
+            continue
+        if (r.get("depth") or 0) != 0 or indep_fn(r):
+            continue
+        txt = r.get("text") or ""
+        if not txt or find_mentions(txt, terms) or polarity(txt) != "recommend":
+            continue
+        a = r.get("author") or "?"
+        if a in users:
+            continue
+        users.add(a)
+        up += max(0, r.get("score") or 0)
+        examples.append({"snippet": snippet(txt, 0, 0, 120).lstrip("…"), "link": r.get("link") or r.get("url"),
+                         "author": a, "score": r.get("score")})
+    examples.sort(key=lambda x: -(x["score"] or 0))
+    return {"threads": len(posts), "users": len(users), "upvotes": up, "examples": examples[:max_examples]}
+
+
 def tally(records: list[dict], names: list[str], *, aliases: dict | str | None = None,
           garbles: dict | None = None, group: str = "author", group_label: str = "users",
           separate_search: bool = True, op_once: bool = True, exclude_op: bool = False,
@@ -414,7 +480,7 @@ def tally(records: list[dict], names: list[str], *, aliases: dict | str | None =
             pols, first = [], None
             for fld, txt, link in _parts(r, include_transcripts):
                 for _, s, e in (m for m in find_mentions(txt, [term])):
-                    pol = polarity(_sentence_around(txt, s, e))
+                    pol = polarity(_clause_around(txt, s, e))
                     pols.append(pol)
                     if first is None or (first[0] == "mention" and pol != "mention"):
                         first = (pol, snippet(txt, s, e), link, fld)
@@ -434,6 +500,7 @@ def tally(records: list[dict], names: list[str], *, aliases: dict | str | None =
         pol_counts = {"recommend": 0, "complain": 0, "question": 0, "mention": 0, "mixed": 0}
         raw = rec_up = comp_up = 0
         examples, ex_keys = [], set()
+        op_dropped: set[int] = set()
         for r, pol, (_, snip, link, fld) in main:
             g = r.get(group) or "?"
             reason = indep_fn(r)
@@ -442,6 +509,11 @@ def tally(records: list[dict], names: list[str], *, aliases: dict | str | None =
             is_op = bool(r.get("is_op") or (group == "author" and r.get("via") == "post"))
             if reason is None and is_op and (exclude_op or pol == "question"):
                 reason = "op" if exclude_op else "op_question"  # an OP's question is not an endorsement
+            if reason == "op":
+                # exclude_op drops the OP's mentions entirely: not a user, not a thread, no polarity.
+                excluded["op"] = excluded.get("op", 0) + 1
+                op_dropped.add(id(r))
+                continue
             pol_counts[pol] += 1
             e = groups.setdefault(g, {group: g, "items": 0, "independent": False, "reasons": [],
                                       "polarity": {}, "max_sponsor_score": None, "_hard": False})
@@ -468,7 +540,7 @@ def tally(records: list[dict], names: list[str], *, aliases: dict | str | None =
                                  "score": r.get("score"), "polarity": pol, "independent": reason is None})
         for e in groups.values():
             e["independent"] = e["independent"] and not e.pop("_hard")
-        threads = {thread_of(r) for r, _, _ in main}
+        threads = {thread_of(r) for r, _, _ in main if id(r) not in op_dropped}
         indep_groups = [g for g, e in groups.items() if e["independent"] and g != "?"]
         row = {"term": term.name, "aliases": term.variants[1:], "items": len(main), "threads": len(threads),
                group_label: len([g for g in groups if g != "?"]), f"independent_{group_label}": len(indep_groups),
@@ -477,6 +549,8 @@ def tally(records: list[dict], names: list[str], *, aliases: dict | str | None =
                "by_group": sorted(groups.values(), key=lambda e: (-e["independent"], -e["items"]))[:12],
                "examples": sorted(examples, key=lambda x: (-(x["independent"]), -(x["score"] or 0),
                                                            x["polarity"] == "mention"))[:max_examples]}
+        if group == "author":
+            row["implied"] = _implied(recs, term, terms, indep_fn, max_examples)
         if separate_search:
             st = {thread_of(r) for r, _, _ in search_only} - threads
             row["search_only_threads"] = len(st)

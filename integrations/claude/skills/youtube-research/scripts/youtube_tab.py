@@ -597,6 +597,67 @@ def _open_transcript(full_id: str) -> tuple[bool, str | None]:
     return False, "timeout: the transcript panel did not load within 15 s."
 
 
+# The transcript list's own scroll box (the panel can render only the rows near its scroll position).
+_TRANSCRIPT_BOX_JS = f"""(() => {{
+  const segs = [...document.querySelectorAll({json.dumps(_SEG)})].filter(s => s.getClientRects().length > 0);
+  if (!segs.length) return null;
+  let el = segs[0].parentElement;
+  while (el && el !== document.body) {{
+    const cs = getComputedStyle(el);
+    if (/(auto|scroll)/.test(cs.overflowY) && el.scrollHeight > el.clientHeight + 4) break;
+    el = el.parentElement;
+  }}
+  if (!el || el === document.body) return null;
+  const r = el.getBoundingClientRect();
+  return {{x: r.x, y: r.y, width: r.width, height: r.height, top: el.scrollTop, max: el.scrollHeight - el.clientHeight}};
+}})()"""
+
+
+def _gap_note(captions: list[str]) -> str:
+    """Why gaps remain after the whole transcript list was read."""
+    manual = [c for c in captions if not c.endswith("(auto)")]
+    auto = [c for c in captions if c.endswith("(auto)")]
+    if manual and auto:
+        return ("gaps remain after reading the whole list. This video has a creator-uploaded caption track "
+                f"({', '.join(manual)}) and an auto-generated one; the panel shows the creator's track, which can "
+                "skip whole sections (seen live: pfoegHxzzm8 has no rows for two narrated chapters), and the "
+                "current panel offers no language switch. Use chapters, frames and the description for those "
+                "stretches, and say the transcript is incomplete there.")
+    return ("gaps remain after reading the whole list: likely silent stretches (music, b-roll) or sections the "
+            "caption track skips. Check the chapters before relying on those stretches.")
+
+
+def _collect_transcript(full_id: str, first: list[dict], length_s: int | None, max_steps: int = 80) -> tuple[list[dict], dict]:
+    """Scroll the transcript list with the wheel (pointer over the list, as a person skimming it) and
+    collect the rows rendered at each position, until the bottom is reached and nothing new appears.
+    Used only when the first read doesn't cover the video. Returns (segments, info)."""
+    segs = list(first)
+    box = SITE.evaluate(full_id, _TRANSCRIPT_BOX_JS)
+    if not box:
+        return segs, {"scrolled": False, "reason": "no scrollable transcript list"}
+    x = box["x"] + box["width"] * random.uniform(0.35, 0.65)
+    y = box["y"] + box["height"] * random.uniform(0.4, 0.6)
+    # Keep going until the bottom of the list (rows in later chapters can render only when their section
+    # scrolls into view, so "nothing new for a while" mid-list is not the end), or until scrolling is stuck.
+    steps, idle_at_bottom, stuck, last_top = 0, 0, 0, box.get("top", 0)
+    while steps < max_steps:
+        SITE.wheel(full_id, box["height"] * random.uniform(0.6, 0.85), x=x, y=y)
+        pause(random.uniform(0.35, 0.8), fuzz=0)
+        steps += 1
+        raw = SITE.evaluate(full_id, _js("transcript.js")) or {}
+        before = len(segs)
+        segs = S.merge_segments(segs, raw.get("segments") or [])
+        box = SITE.evaluate(full_id, _TRANSCRIPT_BOX_JS) or box
+        top = box.get("top", 0)
+        stuck = stuck + 1 if abs(top - last_top) < 2 else 0
+        last_top = top
+        at_bottom = top >= box.get("max", 0) - 2
+        idle_at_bottom = idle_at_bottom + 1 if at_bottom and len(segs) == before else 0
+        if idle_at_bottom >= 2 or stuck >= 3:
+            break
+    return segs, {"scrolled": True, "wheel_steps": steps, "reached_bottom": box.get("top", 0) >= box.get("max", 0) - 2}
+
+
 # -------------------------------------------------------------------------
 # Typing and clicking instead of URL loads (B3)
 # -------------------------------------------------------------------------
@@ -677,6 +738,44 @@ def _typed_search(full_id: str, query: str) -> tuple[dict | None, str]:
     if reason:
         state["stop"] = reason
     return state, "typed"
+
+
+def _results_probe_js(query: str) -> str:
+    q = json.dumps(query.strip().lower())
+    return ("(() => { const vs = [...document.querySelectorAll('ytd-search ytd-video-renderer')]"
+            ".filter(v => v.getClientRects().length > 0 && !v.closest('[hidden]'));"
+            f" const box = (document.querySelector({json.dumps(_SEARCH_BOX)})?.value || '').trim().toLowerCase();"
+            " const u = new URL(location.href);"
+            " const urlq = (u.searchParams.get('search_query') || '').trim().toLowerCase();"
+            " const spin = !!document.querySelector('ytd-search tp-yt-paper-spinner[active], ytd-search #spinner[active]');"
+            " return { n: vs.length, first: vs[0]?.querySelector('a#video-title')?.href || null, spin,"
+            f" echoed: box === {q} || urlq === {q}, on_results: u.pathname === '/results' }}; }})()")
+
+
+def _settle_results(full_id: str, query: str, timeout: float = 10.0) -> dict:
+    """Wait until the result list for `query` has settled: on /results, the query echoed in the search box
+    (or the URL), no spinner, and the same visible count and first result on two reads ~0.8 s apart.
+    A list read too early held 2 of 15 results; a typed search once returned the previous search's list."""
+    probe = _results_probe_js(query)
+    deadline, prev, stable, empty = time.time() + timeout, None, 0, 0
+    p = {}
+    while time.time() < deadline:
+        p = SITE.evaluate(full_id, probe) or {}
+        key = (p.get("n"), p.get("first"))
+        ready = p.get("on_results") and p.get("echoed") and not p.get("spin")
+        if ready and p.get("n"):
+            stable = stable + 1 if key == prev else 0
+            if stable >= 1:
+                return {"settled": True, "results_visible": p.get("n")}
+        empty = empty + 1 if ready and not p.get("n") else 0
+        if empty >= 5:  # ~4 s of a finished page with no regular videos (e.g. only Shorts and ads)
+            return {"settled": True, "results_visible": 0,
+                    "note": "no regular videos for this query (the page may hold only Shorts or ads); "
+                            "simplify the query or drop the filter"}
+        prev = key
+        pause(0.8, fuzz=0)
+    return {"settled": False, "results_visible": p.get("n"),
+            "note": "the result list was still changing after 10 s; results may be partial"}
 
 
 def _link_selector(vid: str) -> str:
@@ -778,7 +877,14 @@ def search(target: str, query: str, sort: str = "relevance", upload: str | None 
     page["via"] = via
     if "stop" in page:
         return {"page": page, "results": []}
+    page.update(_settle_results(full_id, query))
     results = [_flag_result(r) for r in (SITE.evaluate(full_id, _call("search_results.js", {"shorts": shorts})) or [])]
+    farms = S.near_duplicate_clips(results)  # one channel posting several near-identical clips
+    for r in results:
+        why = farms.get(r.get("channel"))
+        if why:
+            r["likely_ai_listicle"] = True
+            r["listicle_reasons"] = list(dict.fromkeys((r.get("listicle_reasons") or []) + why))
     here = SITE.evaluate(full_id, "location.href") or url
     _claim_set(full_id, last_search={"url": here, "ids": [video_id_of(r["url"]) for r in results if video_id_of(r["url"])]})
     recs = []
@@ -880,7 +986,8 @@ def video(target: str, url: str) -> dict:
         if lst:
             data["likely_ai_listicle"], data["listicle_reasons"] = True, why
         amz, why = S.amazon_influencer(data.get("title") or "", data.get("description") or "",
-                                       data.get("description_links") or [], data.get("length_s"), data.get("views"))
+                                       data.get("description_links") or [], data.get("length_s"), data.get("views"),
+                                       data.get("subscribers"))
         if amz:
             data["amazon_influencer"], data["amazon_reasons"] = True, why
         data["sponsor_bias"] = sponsor_bias(data)
@@ -916,8 +1023,16 @@ def transcript(target: str, grep: list[str] | None = None, context: int = 0,
             res["sponsor_bias"] = sponsor_bias(page)  # page-only, flagged low confidence
         return res
     raw = SITE.evaluate(full_id, _js("transcript.js")) or {"available": False, "segments": []}
+    length_s = ((_recall(full_id, vid) or {}).get("length_s"))
+    first, removed = S.dedupe_segments(raw.get("segments") or [])
+    coverage = S.transcript_coverage(first, length_s)
+    collected = {"scrolled": False}
+    if first and not coverage["complete"]:
+        segs_all, collected = _collect_transcript(full_id, first, length_s)
+        first = S.merge_segments(first, segs_all)
+        coverage = S.transcript_coverage(first, length_s)
     SITE.scroll_to_top(full_id)
-    segs, removed = S.dedupe_segments(raw.get("segments") or [])
+    segs = first
     for seg in segs:
         if seg.get("sec") is not None:
             seg["link"] = f"https://www.youtube.com/watch?v={vid}&t={seg['sec']}s"
@@ -927,7 +1042,9 @@ def transcript(target: str, grep: list[str] | None = None, context: int = 0,
     mentions = D.dedupe_hits(D.scan_segments(segs, subject, channel=(page or {}).get("channel"),
                                              own_domains=((page or {}).get("disclosure") or {}).get("own_domains") or ()))
     res = {"available": bool(segs), "total_segments": len(segs), "rendered_segments": raw.get("rendered_segments"),
-           "duplicates_removed": removed,
+           "duplicates_removed": removed, "coverage": {**coverage, **collected,
+           **({"note": _gap_note((page or {}).get("captions") or [])}
+              if collected.get("scrolled") and (coverage.get("gaps") or coverage.get("missing_tail_s")) else {})},
            "language": raw.get("language") or (((page or {}).get("captions") or [None])[0]),
            "disclosure_mentions": mentions}
     sb = None
@@ -937,7 +1054,7 @@ def transcript(target: str, grep: list[str] | None = None, context: int = 0,
     if segs:
         meta = {"video_id": vid, "title": (page or {}).get("title"), "channel": (page or {}).get("channel"),
                 "url": f"https://www.youtube.com/watch?v={vid}", "published": (page or {}).get("published"),
-                "language": res["language"], "sponsor_bias": sb}
+                "language": res["language"], "sponsor_bias": sb, "coverage": res["coverage"]}
         try:
             res["saved"] = S.save_transcript(out_dir or TRANSCRIPTS, meta, segs)
         except OSError as e:

@@ -202,6 +202,8 @@ KNOWN_BRANDS = {b.split()[0].lower() for b in TL.GARBLES} | {
     "blackmagic", "atomos", "deity", "sennheiser", "audiotechnica", "hollyland", "saramonic", "comica", "boya",
     "synco", "ugreen", "framework", "lenovo", "dell", "asus", "acer", "msi", "nvidia", "amd", "intel", "kobra",
     "snapmaker", "bambu", "formlabs", "phrozen", "artillery", "kingroon", "ratrig", "flsun", "peopoly", "raise3d",
+    "bluetti", "goalzero", "bissell", "hoover", "tineco", "karcher", "vax", "kenmore", "miele",
+    "sebo", "dreame", "roomba", "irobot", "eureka", "rugdoctor",
 }
 # Words that look like names in title-case titles but are never a brand.
 COMMON = D.GENERIC | {
@@ -214,6 +216,15 @@ COMMON = D.GENERIC | {
     "official", "discussion", "thread", "weekly", "daily", "megathread", "vs", "versus", "worth", "verdict",
     "parts", "functional", "multi", "color", "colour", "kit", "kits", "pack", "budget", "cheap", "sucks",
     "interference", "buzz", "weddings", "wedding", "noise", "best", "good", "bad", "new", "old", "used",
+    # Category nouns that show up capitalized in titles and queries ("Carpet Cleaner", "Power Station").
+    "carpet", "carpets", "cleaner", "cleaners", "cleaning", "clean", "vacuum", "vacuums", "machine", "machines",
+    "rug", "rugs", "upholstery", "steam", "steamer", "shampoo", "shampooer", "extractor", "mop", "floor",
+    "floors", "power", "station", "stations", "portable", "battery", "batteries", "solar", "generator",
+    "generators", "charger", "inverter", "speaker", "speakers", "keyboard", "mouse", "router", "drone",
+    "drones", "lens", "lenses", "tripod", "light", "lights", "lighting", "tool", "tools", "appliance",
+    "appliances", "deal", "deals", "sale", "review", "reviews", "comparison", "guide", "pet", "pets", "dog",
+    "cat", "kids", "house", "apartment", "stairs", "stain", "stains", "deep", "pro", "professional",
+    "commercial", "rental", "rent", "renting", "upright", "spot", "handheld", "cordless", "corded",
 }
 _ALLCAPS_STOP = {"OP", "PSA", "USB", "TV", "LED", "PLA", "PETG", "ABS", "TPU", "DIY", "FDM", "SLA", "AMS", "AI",
                  "PC", "UK", "US", "USA", "EU", "FPS", "RGB", "HELP", "NEW", "WTF", "IMO", "TIL", "OMG", "ELI5",
@@ -234,18 +245,30 @@ def brand_candidates(title: str = "", query: str = "", flair: str = "", explicit
     capitalized words in a title that isn't written in Title Case. Category words never count."""
     strong, weak = set(), set()
     for e in explicit or ():
-        for w in _WORD.findall(e):
-            if len(_tok(w)) >= 2:
-                strong.add(_tok(w))
+        run = _name_run(_WORD.findall(e))
+        if run:
+            strong.add(run)
     texts = [(title or "", "title"), (flair or "", "flair"), (query or "", "query")]
     for text, kind in texts:
         words = _WORD.findall(text)
         caps = [w for w in words if w[0].isupper()]
         title_case = len(words) >= 3 and len(caps) / len(words) > 0.6
         quoted = " ".join(re.findall(r'"([^"]+)"', text))
+        skip = set()
+        if kind == "query":
+            # A quoted phrase or a run of capitalized words is one name: "Big Green" -> "biggreen", and
+            # "Bissell Big Green" -> "bissell" (a known brand leads; the rest is the model).
+            spans = [(m.start(1), _WORD.findall(m.group(1))) for m in re.finditer(r'"([^"]+)"', text)]
+            for m in re.finditer(r"(?:\b[A-Z][\w&+'-]*\s+)+[A-Z][\w&+'-]*\b", text):
+                spans.append((m.start(), _WORD.findall(m.group(0))))
+            for _, ws in spans:
+                run = _name_run(ws)
+                if run:
+                    strong.add(run)
+                    skip |= {_tok(w) for w in ws}
         for i, w in enumerate(words):
             t = _tok(w)
-            if len(t) < 2 or t in COMMON or t.isdigit():
+            if len(t) < 2 or t in COMMON or t.isdigit() or t in skip:
                 continue
             nxt = words[i + 1] if i + 1 < len(words) else ""
             if t in KNOWN_BRANDS:
@@ -261,6 +284,26 @@ def brand_candidates(title: str = "", query: str = "", flair: str = "", explicit
             elif kind == "title" and len(t) >= 4 and w[0].isupper() and i > 0 and not title_case:
                 weak.add(t)
     return strong, weak - strong
+
+
+def _name_run(words: list[str]) -> str | None:
+    """One brand token for a multi-word name: the known brand that leads it ("Bissell Big Green" ->
+    "bissell"), else the whole name joined ("Big Green" -> "biggreen"). Category words and model
+    numbers are dropped first; None when nothing name-like is left."""
+    toks = [_tok(w) for w in words]
+    toks = [t for t in toks if t and t not in COMMON and not t.isdigit()]
+    if not toks:
+        return None
+    if toks[0] in KNOWN_BRANDS:
+        return toks[0]
+    for t in toks:
+        if t in KNOWN_BRANDS:
+            return t
+    # Drop trailing model-ish tokens ("Delta 3", "P2S"): keep the name part.
+    while len(toks) > 1 and re.search(r"\d", toks[-1]):
+        toks.pop()
+    joined = "".join(toks)
+    return joined if len(joined) >= 2 else None
 
 
 def _name_has(name: str, token: str, strong: bool) -> bool:
@@ -308,8 +351,10 @@ def subreddit_brand(sub: str, strong: set, weak: set = frozenset()) -> str | Non
         nxt = raw[len(t):len(t) + 1]  # 3-letter brands need a word break: r/DJIMic, not r/djing
         if nxt and (nxt.isupper() or nxt.isdigit() or nxt in "_-"):
             return t
+    # Weak tokens (capitalized title words) only when the subreddit is exactly that name: r/Lindhaus
+    # for a "... Lindhaus ..." title, never r/CarpetCleaning for "Carpet Cleaner" (R12).
     for t in sorted(weak, key=lambda x: (-len(x), x)):
-        if len(t) >= 4 and s.startswith(t):
+        if len(t) >= 4 and s == t:
             return t
     return None
 
@@ -355,6 +400,45 @@ def _shares_core(name: str, domain: str) -> bool:
     return k >= 3
 
 
+# "EcoFlow | Ryan", "Anker - Mike", "Bambu Lab: Support": the brand, a separator, then a short name or role.
+_BRAND_NAME_FLAIR = re.compile(r"^\s*(?P<b>[\w&.+'’ -]{2,30}?)\s*[|:–—/-]\s*(?P<n>[A-Za-z][\w.'’ -]{0,24})\s*$")
+# Support-team flair in a brand's own subreddit: "CS_Team_EU", "Customer Service", "Support Team".
+_SUPPORT_FLAIR = re.compile(r"\b(cs|customer (?:service|support|care|success)|support|after[- ]?sales|service) ?"
+                            r"(team|staff|rep|agent|dept|department)?\b", re.I)
+
+
+def staff_flair(flair: str, brands: set, weak: set = frozenset(), *, sub_brand: str | None = None,
+                is_mod: bool = False) -> tuple[str, str | None] | None:
+    """(reason, brand) when user flair marks a brand's staff, else None. Staff flair is short and
+    built around the brand or a team/support role ("EcoFlow team", "EcoFlow | Ryan", "CS_Team_EU" in
+    r/Ecoflow, "Prusa" for a moderator); flair that just mentions a brand in passing ("everyone
+    forgets about Lindhaus…", "Bluetti AC180 owner") is not."""
+    fl = (flair or "").strip()
+    norm = re.sub(r"[_]+", " ", fl)
+    words = _WORD.findall(norm)
+    if not words or len(words) > 6:
+        return None
+    fb = name_brand(norm, brands, weak) or (sub_brand if sub_brand and sub_brand in _tok(norm) else None)
+    team = _TEAM_FLAIR.search(norm)
+    if fb and team:
+        # The role word must be about the brand, close to it: "EcoFlow team", "Team Xreal", "Bambu Lab staff".
+        if len(words) <= 4:
+            return f"flair '{fl}'", fb
+    m = _BRAND_NAME_FLAIR.match(norm)
+    if m and fb and name_brand(m.group("b"), brands | ({sub_brand} if sub_brand else set()), weak) and \
+            len(_WORD.findall(m.group("n"))) == 1 and not re.search(r"\d", m.group("n")) and \
+            _tok(m.group("n")) not in COMMON and not D.GENERIC & {_tok(m.group("n"))}:
+        # One plain name after the brand ("EcoFlow | Ryan"); owner flair lists models instead.
+        return f"flair '{fl}' (brand | name)", fb
+    if sub_brand and _SUPPORT_FLAIR.search(norm) and len(words) <= 4:
+        return f"support-team flair '{fl}' in the brand's subreddit", sub_brand
+    if is_mod and team and sub_brand and len(words) <= 3:
+        return f"moderator with team flair '{fl}' in the brand's subreddit", sub_brand
+    if is_mod and fb and len(_tok(norm)) <= len(fb) + 3:
+        return f"moderator with brand flair '{fl}'", fb
+    return None
+
+
 def brand_account(author: str | None, flair: str | None = None, text: str = "", *, strong: set = frozenset(),
                   weak: set = frozenset(), sub_brand: str | None = None, mod_names=()) -> dict | None:
     """Why `author` looks like a brand account, or None (R5). Returns {author, reason, brand, confidence}.
@@ -380,11 +464,9 @@ def brand_account(author: str | None, flair: str | None = None, text: str = "", 
             return {"author": author, "reason": f"username ends in '{m.group('k')}'", "brand": b, "confidence": "possible"}
     fl = (flair or "").strip()
     if fl:
-        fb = name_brand(fl, brands, weak) or (sub_brand if sub_brand and sub_brand in _tok(fl) else None)
-        if _TEAM_FLAIR.search(fl) and (fb or is_mod):
-            return {"author": author, "reason": f"flair '{fl}'", "brand": fb, "confidence": "likely"}
-        if is_mod and fb and len(_tok(fl)) <= len(fb) + 3:
-            return {"author": author, "reason": f"moderator with brand flair '{fl}'", "brand": fb, "confidence": "likely"}
+        why = staff_flair(fl, brands, weak, sub_brand=sub_brand, is_mod=is_mod)
+        if why:
+            return {"author": author, "reason": why[0], "brand": why[1], "confidence": "likely"}
     for d in emails:
         if _shares_core(author, d):
             return {"author": author, "reason": f"posts a company email (@{d}) matching the username",
@@ -464,6 +546,146 @@ def select_comments(comments: list[dict], host: str | None, max_comments: int = 
 
 # Promotion score ----------------------------------------------------------------
 
+# Content marketing (patterns seen in buying-advice threads) ---------------------
+
+# Hosts that are never content marketing on their own (media, Reddit, image hosts, reference).
+_NEUTRAL_HOSTS = re.compile(r"(^|\.)(reddit\.com|redd\.it|redditmedia\.com|imgur\.com|youtube\.com|youtu\.be|"
+                            r"wikipedia\.org|github\.com|google\.com|archive\.org|giphy\.com|tenor\.com)$", re.I)
+# Marketplace and retailer short links that usually carry an affiliate or partner id.
+_PARTNER_SHORT = re.compile(r"//(?:www\.)?(ebay\.(?:io|us|to)|rover\.ebay\.[a-z.]+|a\.co|amzn\.(?:eu|asia|com)|"
+                            r"walmrt\.us|bit\.ly|tinyurl\.com|shorturl\.at|s\.click\.aliexpress\.com|"
+                            r"click\.aliexpress\.com|temu\.to|shop-links\.co|go\.skimresources\.com)/", re.I)
+_EDIT_ARTICLE = re.compile(r"\b(?:edit|update|upd)\b[^\n]{0,120}?\b(?:article|list|listicle|guide|blog|roundup|"
+                           r"round-up|write-?up|breakdown|comparison)\b|\b(?:someone|a friend|a commenter) "
+                           r"(?:suggested|recommended|shared|sent me) (?:this|a|an) (?:very )?(?:helpful |useful |great )?"
+                           r"(?:article|list|guide|blog|roundup|breakdown)", re.I)
+_DANGLING = re.compile(r"\b(?:this|that|the following)\s+(?:\w+\s+){0,4}?(?:roundup|round-up|breakdown|guide|article|"
+                       r"listicle|comparison|write-?up|buying guide)\b|\b(?:breakdown|roundup|round-up|comparison) of "
+                       r"(?:the )?(?:top|best)\b[^.]{0,60}\b(?:in this thread|here)\b", re.I)
+_BIASED = re.compile(r"\b(?:i'?m|i am|i'?ll admit i'?m)\s+(?:a (?:bit|little)|slightly|kinda|somewhat|admittedly|"
+                     r"probably|totally)?\s*biased\b|\bfull disclosure\b|\bi work (?:for|at|with)\b", re.I)
+_DOMAIN_TEXT = re.compile(r"\b(?:[a-z0-9-]+\.)+(?:com|net|org|io|co|shop|store|us|uk|ca|de)\b", re.I)
+_PITCH = [re.compile(p, re.I) for p in (
+    r"\b\d{2,3}\s?°\s?[FC]\b", r"\b\d{3,6}\s?pa\b", r"\b\d{2,4}\s?w\b(?! ?ago)", r"\bkills? (?:99|bacteria|germs)",
+    r"\ballergens?\b", r"\bauto[- ]?mix", r"\b(?:such a |a )?great value\b", r"\bfor only (?:about |around )?\$",
+    r"\bincludes? (?:multiple|several|a (?:bunch|set) of) (?:accessories|attachments|tools)", r"\bsuction power\b",
+    r"\bperfect for (?:this|your|pet|pets|kids)", r"\bgame[- ]?changer\b", r"\bhot steam\b", r"\bself[- ]cleaning\b",
+    r"\bhighly recommend (?:it|this|the)\b", r"\bdon'?t have to (?:think|worry) about\b", r"\b(?:\d+-in-1|all-in-one)\b")]
+
+
+def _hosts(links) -> list[str]:
+    out = []
+    for u in links or []:
+        h = (urlparse(u).hostname or "").lower().removeprefix("www.")
+        if h and not _NEUTRAL_HOSTS.search(h):
+            out.append(h)
+    return out
+
+
+def content_marketing(data: dict, comments: list[dict]) -> list[dict]:
+    """Hits for content-marketing patterns in a thread (kept conservative: each needs a specific shape):
+
+    - repeated_external_links: one outside site linked 3+ times in the post or a comment, or by 3+
+      different comments; a post shaped like a listicle (4+ numbered or emoji bullets) with outside links
+    - partner_short_links: ebay.io / a.co / amzn.eu / bit.ly style links (usually carry a partner id)
+    - op_edit_points_to_article: the post was edited to point readers to an outside article or list
+    - dangling_roundup_reference: comments pointing to "this roundup / this breakdown" with no link
+      left (Reddit strips some links), from 2+ users, or 1 that also recommends a product
+    - spec_sheet_pitch: a non-OP comment written like ad copy (3+ spec or marketing phrases)
+    - self_declared_bias: "I'm a bit biased" / "I work for" plus a store link or domain"""
+    hits = []
+    host = data.get("author")
+    url = data.get("url")
+    body = data.get("body") or ""
+    post_hosts = _hosts((data.get("links") or []) + ([data["linked_url"]] if data.get("linked_url") else []))
+    counts: dict[str, int] = {}
+    for h in post_hosts:
+        counts[h] = counts.get(h, 0) + 1
+    rep = [h for h, n in counts.items() if n >= 3]
+    bullets = len(re.findall(r"(?m)^\s*(?:\d{1,2}[.)]|[\U0001F300-\U0001FAFF\u2600-\u27BF]|[-*•])\s+\S", body))
+    if rep:
+        hits.append({"signal": "repeated_external_links", "weight": 0.2, "source": "post", "link": url,
+                     "text": f"The post links to {rep[0]} {counts[rep[0]]} times"})
+    elif bullets >= 4 and post_hosts:
+        hits.append({"signal": "repeated_external_links", "weight": 0.15, "source": "post", "link": url,
+                     "text": f"Listicle-shaped post ({bullets} bullet items) with outside links ({post_hosts[0]})"})
+    by_comment: dict[str, set] = {}
+    for c in comments:
+        hs = _hosts(c.get("links"))
+        for h in set(hs):
+            by_comment.setdefault(h, set()).add(c.get("author"))
+        ch = {}
+        for h in hs:
+            ch[h] = ch.get(h, 0) + 1
+        top = max(ch.items(), key=lambda kv: kv[1], default=(None, 0))
+        if top[1] >= 3 and not any(x["signal"] == "repeated_external_links" for x in hits):
+            hits.append({"signal": "repeated_external_links", "weight": 0.15, "source": f"comment by u/{c.get('author')}",
+                         "link": c.get("link"), "text": f"One comment links to {top[0]} {top[1]} times"})
+    multi = sorted((h for h, a in by_comment.items() if len(a - {host}) >= 3), key=lambda h: -len(by_comment[h]))
+    if multi and not any(x["signal"] == "repeated_external_links" for x in hits):
+        hits.append({"signal": "repeated_external_links", "weight": 0.15, "source": "comments",
+                     "text": f"{len(by_comment[multi[0]])} different users link to {multi[0]}"})
+    shorts = [(src, link, u) for src, link, us in [("post", url, (data.get("links") or []))] +
+              [(f"comment by u/{c.get('author')}", c.get("link"), c.get("links") or []) for c in comments]
+              for u in us if _PARTNER_SHORT.search(u)]
+    if shorts:
+        src, link, u = shorts[0]
+        hits.append({"signal": "partner_short_links", "weight": 0.15, "source": src, "link": link,
+                     "text": f"Partner/short link: {u}" + (f" (+{len(shorts) - 1} more)" if len(shorts) > 1 else "")})
+    m = _EDIT_ARTICLE.search(body)
+    if m and post_hosts:
+        hits.append({"signal": "op_edit_points_to_article", "weight": 0.2, "source": "post", "link": url,
+                     "text": f"{body[max(0, m.start() - 20):m.end() + 60].strip()} ({post_hosts[0]})"})
+    dangling = []
+    for c in comments:
+        t = c.get("text") or ""
+        if c.get("author") == host or _hosts(c.get("links")):
+            continue
+        mm = _DANGLING.search(t)
+        if mm:
+            dangling.append((c, t[max(0, mm.start() - 40):mm.end() + 40].strip()))
+    if len({c.get("author") for c, _ in dangling}) >= 2 or (dangling and TL.polarity(dangling[0][0].get("text", "")) == "recommend"):
+        c, snip = dangling[0]
+        hits.append({"signal": "dangling_roundup_reference", "weight": 0.1, "source": f"comment by u/{c.get('author')}",
+                     "link": c.get("link"), "text": snip + (f" (+{len(dangling) - 1} similar)" if len(dangling) > 1 else "")})
+    for c in comments:
+        t = c.get("text") or ""
+        if c.get("author") == host or len(t) < 80:
+            continue
+        found = [p.search(t).group(0) for p in _PITCH if p.search(t)]
+        if len(found) >= 3:
+            hits.append({"signal": "spec_sheet_pitch", "weight": 0.1, "source": f"comment by u/{c.get('author')}",
+                         "link": c.get("link"), "text": "Reads like ad copy: " + ", ".join(found[:4])})
+            break
+    for c in comments + [{"author": host, "text": body, "links": data.get("links") or [], "link": url}]:
+        t = c.get("text") or ""
+        mm = _BIASED.search(t)
+        if mm and (_hosts(c.get("links")) or _DOMAIN_TEXT.search(t)):
+            where = (_hosts(c.get("links")) or [_DOMAIN_TEXT.search(t).group(0)])[0]
+            hits.append({"signal": "self_declared_bias", "weight": 0.15,
+                         "source": "post" if c.get("link") == url else f"comment by u/{c.get('author')}",
+                         "link": c.get("link"), "text": f"{t[max(0, mm.start() - 30):mm.end() + 50].strip()} ({where})"})
+            break
+    return hits
+
+
+# Strongest first: a commission disclaimer beats a "deals" rule.
+_SIDEBAR_AFFILIATE = [re.compile(p, re.I) for p in (
+    r"as an amazon associate", r"earn(?:s)? (?:a )?(?:small )?commission", r"\baffiliate links?\b", r"\bwe may earn\b",
+    r"self-promotion (?:is )?allowed", r"\bgenuine deals\b")]
+
+
+def affiliate_community(sidebar_text: str) -> str | None:
+    """Sidebar text showing the community itself earns from affiliate links or is run for deals and
+    self-promotion (e.g. "As an Amazon Associate, we earn from qualifying purchases"), or None."""
+    t = sidebar_text or ""
+    for rx in _SIDEBAR_AFFILIATE:
+        m = rx.search(t)
+        if m:
+            return TL.snippet(t, m.start(), m.end(), 70)
+    return None
+
+
 def promo_bias(data: dict, query: str = "", brands=()) -> dict:
     """0.0-1.0 likelihood that a thread is brand promotion or astroturf, with evidence. Page-only:
     account age and karma aren't checked (that would cost a profile load per user).
@@ -527,6 +749,11 @@ def promo_bias(data: dict, query: str = "", brands=()) -> dict:
         for h in D.link_hits(D.classify_links(c.get("links") or [])):
             if h["signal"] == "affiliate_links":
                 extra.append({**h, "source": f"comment by u/{a}", "link": c.get("link")})
+    extra += content_marketing(data, data.get("comments", []))
+    side = affiliate_community(data.get("sidebar_text") or "")
+    if side:
+        extra.append({"signal": "affiliate_community", "weight": 0.25, "source": "sidebar",
+                      "text": f"r/{sub}'s sidebar: {side}"})
     if brand_comments:
         names = sorted({b["author"] for b in brand_comments}, key=str.lower)
         extra.insert(0, {"signal": "brand_accounts_in_thread", "weight": 0.15, "source": "comments",
@@ -584,7 +811,8 @@ def thread_records(data: dict, comments: list[dict], brand_authors: set) -> list
     for c in comments:
         recs.append({"id": "t1_" + (c.get("id") or c.get("link") or ""), "thread": pid, "via": "comment",
                      "url": c.get("link"), "link": c.get("link"), "title": "", "text": c.get("text", ""),
-                     "author": c.get("author"), "score": c.get("score"), "is_op": bool(host) and c.get("author") == host,
+                     "author": c.get("author"), "score": c.get("score"), "depth": c.get("depth") or 0,
+                     "is_op": bool(host) and c.get("author") == host,
                      "brand": c.get("author") in brand_authors, "links": c.get("links") or []})
     return recs
 
@@ -720,12 +948,29 @@ def search_url(query: str, subreddit: str | None = None, sort: str | None = "rel
     return base + "?" + urlencode(params, quote_via=quote)
 
 
+# The "r/<sub>" scope chip inside the search box only (never chips elsewhere on the page, such as
+# flair or filter chips on a thread): the component's light DOM, its shadow root, and the input's.
+CHIP_JS = r"""(h) => { if (!h) return null; const sel = 'rpl-input-chip, faceplate-chip, [data-testid*=chip], [slot*=chip]';
+  const inp = h.shadowRoot && h.shadowRoot.querySelector('faceplate-search-input');
+  const roots = [h, h.shadowRoot, inp, inp && inp.shadowRoot].filter(Boolean);
+  for (const r of roots) { for (const c of r.querySelectorAll(sel)) {
+    const t = (c.textContent || c.getAttribute('label') || '').trim(), b = c.getBoundingClientRect();
+    if (b.width > 0 && b.height > 0 && !c.hidden) return t.slice(0, 60) || 'chip'; } }
+  return null; }"""
+# Where the scope chip's close (x) icon is, for a mouse click (viewport px), or null.
+_CHIP_CLOSE_JS = r"""(() => { const h = document.querySelector('reddit-search-large');
+  const c = h && h.shadowRoot && h.shadowRoot.querySelector("faceplate-search-input rpl-input-chip, rpl-input-chip#search-input-remove-filter");
+  if (!c) return null; const x = c.querySelector("[slot=trailing] [icon-name=close], [icon-name=close]") || c.querySelector("[slot=trailing]");
+  const r = (x || c).getBoundingClientRect(); if (!r.width) return null;
+  return {x: r.x, y: r.y, width: r.width, height: r.height, icon: !!x}; })()"""
+
 _SEARCH_JS = """(() => { const h = document.querySelector('reddit-search-large');
   if (!h) return null; let scope = null; try { scope = JSON.parse(h.getAttribute('scope') || 'null'); } catch (e) {}
   const f = h.shadowRoot && h.shadowRoot.querySelector('faceplate-search-input');
   const r = h.getBoundingClientRect();
-  return {scope, value: f ? (f.value || '') : null, chip: !!(h.shadowRoot && h.shadowRoot.querySelector('rpl-input-chip, faceplate-chip, [data-testid*=chip]')) || !!document.querySelector('rpl-input-chip'),
+  return {scope, value: f ? (f.value || '') : null, chip: (""" + CHIP_JS + """)(h),
           rect: {x: r.x, y: r.y, width: r.width, height: r.height}, vw: innerWidth}; })()"""
+_CHIP_NOW = "(" + CHIP_JS + ")(document.querySelector('reddit-search-large'))"
 
 _RESULTS_READY = ("document.readyState === 'complete' && (!!document.querySelector(\"a[data-testid='post-title-text'], "
                   "a[data-testid='post-title'], shreddit-post\") || /no results|hm\\.\\.\\. we couldn/i.test(document.body.innerText.slice(0, 3000)))")
@@ -747,20 +992,42 @@ def _typed_search(full_id: str, query: str, subreddit: str | None) -> tuple[dict
         if path != "/r/" + subreddit.lower().removeprefix("r/"):
             return None, f"the search box isn't scoped to r/{subreddit.removeprefix('r/')}"
     r = info["rect"]
-    SITE.click(full_id, r["x"] + r["width"] * random.uniform(0.3, 0.7), r["y"] + r["height"] * random.uniform(0.4, 0.6))
-    pause(random.uniform(0.3, 0.7))
+    unscope = not subreddit and ((scope.get("type") or "global") != "global" or info.get("chip"))
+    if unscope and info.get("chip"):
+        # A site-wide search from inside a subreddit: click the scope chip's (x), like a person.
+        x = SITE.evaluate(full_id, _CHIP_CLOSE_JS)
+        if x:
+            SITE.click(full_id, x["x"] + x["width"] * random.uniform(0.35, 0.65),
+                       x["y"] + x["height"] * random.uniform(0.35, 0.65))
+            pause(random.uniform(0.4, 0.8))
+            info = {**info, "chip": SITE.evaluate(full_id, _CHIP_NOW)}
+    # Removing the chip focuses the box and opens its dropdown (the element grows to the dropdown's
+    # height), so only click when the box doesn't have focus yet, using the box's closed size and a
+    # point to the right of any chip (clicking the chip itself toggles it).
+    if not SITE.evaluate(full_id, _SEARCH_FOCUSED):
+        left = r["x"] + r["width"] * 0.3
+        chip_box = SITE.evaluate(full_id, _CHIP_CLOSE_JS) if info.get("chip") else None
+        if chip_box:
+            left = max(left, chip_box["x"] + chip_box["width"] + 24)
+        right = max(left + 10, r["x"] + r["width"] * 0.75)
+        h = min(r["height"], 48)
+        SITE.click(full_id, random.uniform(left, right), r["y"] + h * random.uniform(0.4, 0.6))
+        pause(random.uniform(0.3, 0.7))
     if not SITE.evaluate(full_id, _SEARCH_FOCUSED):
         return None, "the search box didn't take focus"  # never type into the page
     _select_all(full_id)
     pause(random.uniform(0.15, 0.35))
-    if not subreddit and (scope.get("type") or "global") != "global":
-        # Clear the field, then one more Backspace removes the "r/<sub>" scope chip.
+    if unscope and SITE.evaluate(full_id, _CHIP_NOW):
+        # Fallback: clear the field, then Backspace in the empty field. The scope attribute doesn't
+        # always follow the chip, so check the chip itself (inside the search box only).
         _key(full_id, "Backspace", "Backspace", 8, commands=["deleteBackward"])
         pause(random.uniform(0.2, 0.4))
-        _key(full_id, "Backspace", "Backspace", 8, commands=["deleteBackward"])
-        pause(random.uniform(0.2, 0.4))
-        # The scope attribute doesn't always follow the chip, so check the chip itself.
-        if SITE.evaluate(full_id, "!!document.querySelector('rpl-input-chip')"):
+        for _ in range(3):
+            _key(full_id, "Backspace", "Backspace", 8, commands=["deleteBackward"])
+            pause(random.uniform(0.25, 0.5))
+            if not SITE.evaluate(full_id, _CHIP_NOW):
+                break
+        else:
             _key(full_id, "Escape", "Escape", 27)
             return None, "couldn't remove the subreddit scope from the search box"
     _type_text(full_id, query)
@@ -785,6 +1052,14 @@ def _typed_search(full_id: str, query: str, subreddit: str | None) -> tuple[dict
                 return {"loads": loads, "_failed": True, "_loaded": True}, f"the typed search ran in {u.path}"
             return _state(full_id, loads=loads), ""
     return {"loads": loads, "_failed": True}, "the results page didn't open after Enter"
+
+
+def off_scope(posts: list[dict], subreddit: str) -> list[str]:
+    """Subreddits of results that aren't from `subreddit` (a subreddit search that came back
+    site-wide). Empty when the results carry no subreddit names."""
+    want = subreddit.removeprefix("r/").lower()
+    subs = [(p.get("sub") or "").removeprefix("r/") for p in posts]
+    return [s for s in subs if s and s.lower() != want]
 
 
 def search(target: str, query: str | None = None, *, url: str | None = None,
@@ -823,6 +1098,23 @@ def search(target: str, query: str | None = None, *, url: str | None = None,
     if "stop" in page:
         return {"page": page, "posts": []}
     posts = SITE.evaluate(full_id, _js("search_results.js")) or []
+    if subreddit and posts and not url:
+        off = off_scope(posts, subreddit)
+        if off and page.get("via") == "typed":
+            # The URL said r/<sub>, but the results came from elsewhere: load the scoped URL (one load).
+            page = SITE.nav(full_id, search_url(query or "", subreddit, sort, time_filter))
+            page["via"] = f"url (the typed search wasn't limited to r/{subreddit.removeprefix('r/')})"
+            if "stop" in page:
+                return {"page": page, "posts": []}
+            posts = SITE.evaluate(full_id, _js("search_results.js")) or []
+            off = off_scope(posts, subreddit)
+        if off:
+            page["note"] = (f"{len(off)} of {len(posts)} results aren't from r/{subreddit.removeprefix('r/')} "
+                            f"(e.g. r/{off[0]}); Reddit may have widened the search.")
+    if not posts:
+        scope = f"r/{subreddit.removeprefix('r/')}" if subreddit else "all of Reddit"
+        page["note"] = (f"No results for {query!r} in {scope}. Simplify the query (fewer words, drop the quotes), "
+                        "check the subreddit name, or search site-wide; don't add more terms.")
     _update_claim(full_id, last_search={"url": page.get("url") or _href(full_id), "query": query or "",
                                         "ids": [p["id"] for p in posts], "time_origin": _time_origin(full_id)},
                   from_search=None)
@@ -1095,6 +1387,19 @@ def _target_bottom(data: dict, max_comments: int, replies: int) -> float:
     return (last.get("top") or 0) + min(600, max(0, (last.get("bottom") or 0) - (last.get("top") or 0)))
 
 
+def read_cap(data: dict, max_comments: int, replies: int) -> float:
+    """Longest reading time for a thread, in seconds: REDDIT_TAB_READ_CAP (default 45) for short
+    threads, growing with the text that would be returned (about 1 s per 90 characters, the slow end
+    of the skim speed) up to REDDIT_TAB_READ_CAP_MAX (default 150), so long threads don't stop half
+    way (28 comments with 14 never scrolled into view)."""
+    base = float(os.environ.get("REDDIT_TAB_READ_CAP", "45"))
+    top = max(base, float(os.environ.get("REDDIT_TAB_READ_CAP_MAX", "150")))
+    sel, _ = select_comments(data.get("comments") or [], data.get("author"), max_comments, replies)
+    chars = len(data.get("body") or "") + sum(len(c.get("text") or "") for c in sel)
+    want = 8 + chars / 90 + 1.5 * len(sel)
+    return round(min(top, max(base, want)), 1)
+
+
 def thread(target: str, url: str, max_comments: int = 15, replies: int = 0, expand: int | None = None,
            brands: list[str] | None = None) -> dict:
     """Open a thread (clicking it in the results when possible), read down it, and return the post
@@ -1122,7 +1427,7 @@ def thread(target: str, url: str, max_comments: int = 15, replies: int = 0, expa
                 f"no post on this page ({(data or {}).get('url') or _href(full_id)}); the URL may not be a thread, "
                 "or the page didn't finish loading. Nothing indicates it was removed.")
         return {"page": page, "thread": None, "note": note}
-    cap = float(os.environ.get("REDDIT_TAB_READ_CAP", "45"))
+    cap = read_cap(data, max_comments, replies)
     reading = _read_thread(full_id, _target_bottom(data, max_comments, replies), cap)
 
     # Collapsed chains (R13b): sometimes open one, like a curious reader; always when asked.
@@ -1150,6 +1455,23 @@ def thread(target: str, url: str, max_comments: int = 15, replies: int = 0, expa
     data["moderators"] = mods
     if skipped:
         data["moderators_skipped"] = skipped
+    if not mods and data.get("sidebar", True):
+        data["moderators_note"] = (
+            "The sidebar was rendered but no moderator list was found"
+            + (" (the community's sidebar widgets hadn't loaded)" if data.get("moderators_pending") else
+               " (the community may hide it, or list only bots)" if skipped or data.get("moderators_heading") else
+               " (this community's sidebar may not show one)")
+            + ", so brand moderation couldn't be checked.")
+        data["promo_bias"]["confidence"] = "low"
+    for k in ("moderators_heading", "moderators_pending", "sidebar_text"):
+        data.pop(k, None)
+    if data.get("locked") or data.get("archived"):
+        data["thread_status"] = "locked" if data.get("locked") else "archived"
+        data["thread_status_note"] = ("The thread is " + data["thread_status"] + ": no new comments can be "
+                                      "posted, so the discussion is frozen as of its last comment date.")
+    for k in ("locked", "archived"):
+        if not data.get(k):
+            data.pop(k, None)
     brand_authors = {b["author"] for b in data["promo_bias"]["brand_accounts"]} | \
         set(data["promo_bias"]["brand_moderators"])
     for c in chosen:
@@ -1186,7 +1508,9 @@ def tally(target: str, terms: list[str], aliases: str | dict | None = None, excl
                    "count loaded posts and comments; search titles and snippets are in `search_only_threads`. "
                    "Brand accounts don't count as independent. recommend_upvotes counts only mentions that read as "
                    "recommendations; raw_upvotes are the comments' scores whatever they say. Polarity is a "
-                   "heuristic; read the examples.")
+                   "heuristic read on the clause around each mention; read the examples. `implied` counts "
+                   "recommendation-style top-level replies that don't name the product, in threads whose title "
+                   "names only that product (\"Love mine\"); it's kept apart from the counts. The name field is `term`.")
     return res
 
 

@@ -194,3 +194,45 @@ def test_score_reports_brand_owned_and_counts_once():
             {"signal": "affiliate_links", "weight": 0.15, "source": "description", "text": "y"}]
     res = D.score(page, [])
     assert res["score"] == 0.55 and res["brand_owned"] == "possible"
+
+
+# --- 2026-11-07 false positives -------------------------------------------------------
+
+def test_tip_jar_is_not_a_review_unit():
+    t = "If this was helpful and you would like to send me a tip as a thank you: venmo @someone"
+    assert "review_unit" not in signals(t, "Bissell Big Green")
+
+
+def test_rental_advice_is_not_a_disclosure():
+    assert "rented_or_borrowed" not in signals("or just rented one from a kiosk.", "Bissell Big Green")
+    assert "rented_or_borrowed" not in signals("You can rent one at the grocery store.", "Rug Doctor")
+    assert "rented_or_borrowed" in signals("I rented a Rug Doctor Pro Deep over the weekend.", "Rug Doctor")
+
+
+def test_giveaway_as_telltale_is_not_a_giveaway():
+    t = "the chocolate syrup is the biggest I'd say giveaway to the performance difference"
+    assert "giveaway" not in signals(t, "Bissell Big Green Rug Doctor")
+    assert "giveaway" not in signals("That's a dead giveaway that it leaks.", "Hoover")
+    assert "giveaway" in signals("This week's free giveaway is a Big Green.", "Bissell Big Green")
+
+
+# --- 2026-11-06 link classification -------------------------------------------------------
+
+def test_retailer_ref_links_are_affiliate_not_self_promotion():
+    links = ["https://shopsolarkits.com/products/x?ref=TheSolarLab", "https://signaturesolar.com/item?ref=TheSolarLab",
+             "https://thesolarlab.com/guide"]
+    c = D.classify_links(links, channel="The Solar Lab",
+                         description="Shop my favorite products:\nhttps://shopsolarkits.com/products/x?ref=TheSolarLab")
+    assert c["affiliate_links"] == links[:2]
+    assert c["self_promotion_links"] == ["https://thesolarlab.com/guide"]
+
+
+def test_brand_short_link_is_affiliate():
+    c = D.classify_links(["https://ankerfast.club/anker.solix_tsl"], channel="The Solar Lab")
+    assert c["affiliate_links"] == ["https://ankerfast.club/anker.solix_tsl"]
+    assert c["short_links"] == ["https://ankerfast.club/anker.solix_tsl"]
+
+
+def test_own_site_by_channel_name_still_self_promotion():
+    c = D.classify_links(["https://vacuumwars.com/best/", "https://www.patreon.com/x"], channel="Vacuum Wars")
+    assert c["self_promotion_links"] == ["https://vacuumwars.com/best/", "https://www.patreon.com/x"]

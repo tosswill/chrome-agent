@@ -152,3 +152,28 @@ def test_preflight_screen_blocks_open_and_hidden_message(monkeypatch):
     monkeypatch.setattr(C.Site, "evaluate", lambda self, t, e, timeout=30: "hidden")
     with pytest.raises(C.Fail, match="unlock"):
         site.ensure_visible("T")
+
+
+def test_timings_attach_to_results_and_errors():
+    import research_core as C
+    C.timings_reset()
+    with C.timed("page_load"):
+        pass
+    with C.timed("page_load"):
+        pass
+    out = C.attach_timings({"error": "x"})
+    assert out["timings"]["steps"]["page_load"]["n"] == 2
+    assert out["timings"]["total_s"] >= 0
+    assert C.attach_timings([1]) == [1]  # non-dict results pass through
+
+
+def test_run_cli_adds_timings_on_failure(capsys):
+    import json
+    import research_core as C
+
+    def dispatch(cmd, args):
+        with C.timed("visibility_check"):
+            raise C.Fail("hidden")
+    assert C.run_cli("doc", dispatch, ["x", "open"]) == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["error"] == "hidden" and "visibility_check" in out["timings"]["steps"]

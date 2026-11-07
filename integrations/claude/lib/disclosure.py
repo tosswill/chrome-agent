@@ -168,11 +168,12 @@ _REVIEW_UNIT = [
 _REVIEW_UNIT_RE = [re.compile(p, re.I) for p in _REVIEW_UNIT]
 # A free replacement, a file, or a rental is not a review unit.
 _REVIEW_EXCLUDE = re.compile(r"\b(support|warranty|replacement|replaced|rma|refund|customer service|defective|doa|"
-                             r"rental|rented|renting|rent|files?|stls?|3mfs?|g-?code)\b", re.I)
+                             r"rental|rented|renting|rent|files?|stls?|3mfs?|g-?code|tips?|tip jar|donations?|"
+                             r"donate|venmo|paypal|cash ?app|zelle|ko-?fi|buy me a coffee|super ?thanks)\b", re.I)
 _SENT_ME_OBJECT_EXCLUDE = re.compile(
     r"\b(?:sent|send)\s+(?:me|us)\s+(?:this|these|the|a|an|their|its|one)\s+(?:\w+\s+)?(e-?mails?|messages?|links?|dms?|"
     r"texts?|notes?|invoices?|quotes?|photos?|pictures?|pics?|videos?|codes?|repl(?:y|ies)|updates?|new one|spares?|"
-    r"parts?|surveys?)\b", re.I)
+    r"parts?|surveys?|tips?|donations?|money|coffee)\b", re.I)
 
 _CODE_RE = re.compile(
     r"\b(use my (?:link|code)|use (?:the )?code \S+|(?:with|using) (?:the )?code \S+|code \S+ (?:at checkout|for \d+ ?%)|"
@@ -183,8 +184,21 @@ _AFFILIATE_DISCLOSURE = re.compile(
     r"(?:any|qualifying) purchases|as an amazon associate)", re.I)
 _GIVEAWAY = re.compile(r"\b(giveaway|give-?away|giving\s+(?:\w+\s+){0,4}?away|chance to win|enter to win|"
                        r"win (?:one|this|these|a|an|your own|it)\b|raffle|sweepstakes?)", re.I)
-_RENTAL = re.compile(r"\b(rental (?:equipment|gear|unit)s?|(?:rented|borrowed) (?:\w+ ){0,3}?from|"
-                     r"(?:rented|borrowed) (?:it|this|them|these|one|a|the)\b|rental from)", re.I)
+# "the biggest giveaway", "a dead giveaway that ...": a telltale sign, not a prize.
+_GIVEAWAY_TELLTALE = re.compile(r"\b(?:dead|biggest|big|real|obvious|clear|easy|main|only|other|first)\s+giveaway\b|"
+                                r"\bgiveaway\s+(?:to|of|that|is that|was that|here)\s+(?:the|this|it|how|which|what)\b",
+                                re.I)
+_GIVEAWAY_CONTEXT = re.compile(r"\b(win|winners?|enter|entry|entries|comment|subscribe|free|chance|contest|announce|"
+                               r"link|rules|chosen|picked?|ends?|participate|hosting|running|doing|my|this week'?s|"
+                               r"giving|prize|ship)\b", re.I)
+# Only the speaker's own rental or loan counts: "I rented it", "we borrowed one from", "this is a rental
+# unit". Advice ("or just rented one from a kiosk", "you can rent one") is not a disclosure.
+_RENTAL = re.compile(
+    r"\b(?:i|we|i'?ve|we'?ve|i'?d|we'?d|i had|we had|i just|we just)\s+(?:\w+\s+){0,2}?(?:rented|borrowed)\b|"
+    r"\b(?:this|it|the (?:unit|one|machine|camera|printer|car))\s+(?:is|was)\s+(?:a\s+|actually\s+a\s+)?"
+    r"(?:rental|borrowed|on loan)\b|\b(?:my|our) rental\b|\brental (?:equipment|gear|unit)s? (?:i|we)\b|"
+    r"\brental (?:equipment|gear|units?)\s+(?:was\s+|were\s+)?(?:provided|supplied|courtesy|from|thanks)\b|"
+    r"\b(?:rented|borrowed) from (?:the|a|my|our)\s+[A-Z]", re.I)
 _BOUGHT_STRONG = re.compile(
     r"\b((?:bought|purchased|paid for) (?:it|this|them|these|this one|mine|my own|one) (?:myself|with my own money|"
     r"out of (?:my own )?pocket)|with my own money|bought (?:it|them|this|these|one) myself|i paid (?:full )?(?:retail|"
@@ -358,7 +372,8 @@ def scan_text(text: str, source: str, link: str | None = None, subject: str = ""
         if _AFFILIATE_DISCLOSURE.search(sent):
             add("affiliate_disclosure", sent)
         m = _GIVEAWAY.search(sent)
-        if m and not negated(sent, m.start(), m.end()):
+        if m and not negated(sent, m.start(), m.end()) and not _GIVEAWAY_TELLTALE.search(sent) \
+                and (not re.fullmatch(r"give-?away", m.group(1), re.I) or _GIVEAWAY_CONTEXT.search(sent)):
             add("giveaway", sent)
 
         # "I bought it myself" must be about the product: a pronoun object, or a brand/product token nearby.
@@ -414,7 +429,16 @@ _AFF_LINK = re.compile(
     r"amzn\.to|link\.amazon/|amazon\.[a-z.]+/.*[?&](tag|linkCode)=|geni\.us|sjv\.io|\.pxf\.io|impact\.com|howl\.me|"
     r"shareasale|skimresources|go\.magik\.ly|7tiv\.net|avantlink|rstyle\.me|linksynergy|awin1\.com|tidd\.ly|prf\.hn|"
     r"anrdoezrs|dpbolvw|tkqlhce|jdoqocy|kqzyfj|bestbuy\.7tiv|bhpho\.to|/(affiliates?|aff|partners?/ref)/|"
-    r"[?&](aff|affiliate|aff_id|affid|ref_id|associate|sca_ref|rfsn|referral|refer|irclickid)=", re.I)
+    r"[?&](aff|affiliate|aff_id|affid|ref_id|associate|sca_ref|rfsn|referral|refer|irclickid|ref|rf|"
+    r"partner|partner_id|ranMID|ranEAID|clickid|subid|discount)=", re.I)
+# A retailer or brand link carrying a referral/code parameter is a third-party affiliate link even on a
+# "my favorite products:" line: the creator earns from it, but it isn't their own store.
+_REF_PARAM = re.compile(r"[?&](ref|rf|aff|affiliate|aff_id|affid|ref_id|sca_ref|rfsn|referral|refer|partner|code|"
+                        r"discount|coupon|irclickid|clickid)=", re.I)
+# Brand short-link domains ("ankerfast.club", "go.ecoflow.com", "bluetti.link/x"): a vanity host on a
+# short-link style TLD or subdomain, with a path.
+_VANITY_SHORT = re.compile(r"//(?:(?:go|get|try|link|links|click|shop|buy)\.[a-z0-9-]+\.[a-z.]+|"
+                           r"[a-z0-9-]+\.(?:club|link|links|page|to|ly|gg|me|deals|promo|codes?|store))/[^\s]+", re.I)
 _SHORT_LINK = re.compile(r"//(bit\.ly|tinyurl\.com|t\.co|ow\.ly|rebrand\.ly|lnk\.to|linktr\.ee|da\.gd|is\.gd|cutt\.ly|"
                          r"shorturl\.at|buff\.ly|tiny\.cc)/", re.I)
 _UTM = re.compile(r"[?&]utm_(campaign|source|medium)=([^&#]*)", re.I)
@@ -431,14 +455,29 @@ def classify_links(links: list[str], *, channel: str | None = None, description:
     Links to the channel's own site or store (by host name, creator platforms, or a "my store:" line)
     are self-promotion, never sponsorship, even with utm tags."""
     ch_toks = _channel_tokens(channel) | ({_alnum(handle)} if handle and len(_alnum(handle)) >= 4 else set())
+    full = _alnum(_CHANNEL_FILLER.sub(" ", channel or ""))
+    if len(full) >= 4:
+        ch_toks.add(full)
     my_lines = [ln for ln in (description or "").splitlines() if _MY_LINE.search(ln)]
     out = {"affiliate_links": [], "campaign_links": [], "short_links": [], "self_promotion_links": [],
            "own_domains": []}
     for url in links or []:
         host = _host(url)
         stem = _alnum(host.rsplit(".", 1)[0]) if host else ""
-        own = bool(host) and (any(t in stem for t in ch_toks) or bool(_CREATOR_HOSTS.search(host))
-                              or any(url in ln for ln in my_lines))
+        # The channel's own site: its host starts with a channel-name token ("vacuumwars.com" for Vacuum
+        # Wars), not merely contains one ("shopsolarkits.com" isn't a "Solar ..." channel's store). On a
+        # "my favorite products:" line, a link with a referral/code parameter is someone else's store paying
+        # the creator: affiliate, not own.
+        bare = re.sub(r"^(?:shop|store|get|go|the|my|try|buy)(?=[a-z0-9]{4})", "", stem)
+        whole = {t for t in (full, _alnum(handle or "")) if len(t) >= 4}
+        by_name = (stem in ch_toks or bare in ch_toks or any(stem.startswith(w) or bare.startswith(w) for w in whole)
+                   or any(stem.startswith(t) for t in ch_toks if len(t) >= 6) or bool(_CREATOR_HOSTS.search(host)))
+        # "?ref=TheSolarLab": the creator is the referrer, so the store is someone else's.
+        refs = {_alnum(v) for k, vs in parse_qs(urlparse(url).query).items() if _REF_PARAM.search("?" + k + "=")
+                for v in vs}
+        referrer = bool(refs & (whole | ch_toks))
+        own = bool(host) and not referrer and (
+            by_name or (any(url in ln for ln in my_lines) and not _REF_PARAM.search(url)))
         if own:
             out["self_promotion_links"].append(url)
             if host and host not in out["own_domains"] and not _CREATOR_HOSTS.search(host):
@@ -448,8 +487,11 @@ def classify_links(links: list[str], *, channel: str | None = None, description:
             out["affiliate_links"].append(url)
         if _UTM.search(url):
             out["campaign_links"].append(url)
-        if _SHORT_LINK.search(url):
+        if _SHORT_LINK.search(url) or (_VANITY_SHORT.search(url) and not _AFF_LINK.search(url)):
             out["short_links"].append(url)
+            if _VANITY_SHORT.search(url) and (_REF_PARAM.search(url) or re.search(r"/[\w.-]{2,}$", url)) \
+                    and url not in out["affiliate_links"]:
+                out["affiliate_links"].append(url)  # brand short link with a code/ref path
     return out
 
 
