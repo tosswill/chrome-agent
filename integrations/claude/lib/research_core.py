@@ -752,6 +752,15 @@ class Site:
             except Fail:
                 pass
             (self._claims_dir / f"{full_id}.json").unlink(missing_ok=True)
+            # Don't leave empty windows on screen: close unclaimed blank tabs too. On macOS Chrome
+            # keeps running without windows, and open creates a fresh tab when there is none.
+            try:
+                claimed = set(self.claims())
+                for t in self.targets():
+                    if t["full_id"] not in claimed and (t.get("url") or "") == "about:blank":
+                        self.ca("stop", self.instance, "--target-id", t["full_id"])
+            except Fail:
+                pass
         return {"closed": full_id}
 
     def list_claims(self) -> list[dict]:
