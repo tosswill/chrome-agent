@@ -580,3 +580,31 @@ def test_refresh_label_after_preroll(monkeypatch):
     monkeypatch.setattr(Y.SITE, "evaluate", lambda fid, js, **k: "Includes paid promotion")
     assert Y._refresh_label("T", "WtVT6gLdgoI")
     assert remembered["disclosure"]["paid_promotion_label"] and not Y._refresh_label("T", "WtVT6gLdgoI")
+
+
+# --- password-manager run (2026-11-07) ------------------------------------------------------------
+
+def test_software_brands_and_no_person_or_word_hosts():
+    b = S.detect_brands("Best Password Manager 2026 tier list", "1Password, Bitwarden, NordPass\nJane's site",
+                        ["https://janecreator.co", "https://tiermaker.com/x"])
+    assert b == ["1Password", "Bitwarden", "NordPass"]
+    assert S.detect_brands("Sony A7 IV review", "Sponsored by NordVPN") == ["Sony"]
+
+
+def test_brand_channel_and_listicle_farms():
+    assert S.brand_channel("Bitwarden", "@bitwarden", ["bitwarden.com"]) == "Bitwarden"
+    assert S.brand_channel("Jane Creator", "@janecreator") is None
+    assert S.likely_ai_listicle("Bitwarden vs 1Password - Which is Better?", "Wise Explainer", length_s=95)[0]
+    assert not S.likely_ai_listicle("Bitwarden vs 1Password", "Techlore", "@techlore", length_s=95)[0]
+
+
+def test_amazon_storefront_on_long_walkthrough_is_not_influencer():
+    links = ["https://www.amazon.com/shop/someone"]
+    assert not S.amazon_influencer("1Password tutorial", "", links, 900, 2500)[0]
+    assert S.amazon_influencer("Gadget", "", links, 60, 2500)[0]
+
+
+def test_brand_owned_channel_from_name(monkeypatch):
+    data = {"title": "Secrets Manager demo", "channel": "Bitwarden", "handle": "@bitwarden", "description": "",
+            "disclosure": {"own_domains": ["bitwarden.com"]}}
+    assert Y.sponsor_bias(data).get("brand_owned") == "strong"

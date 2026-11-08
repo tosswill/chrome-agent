@@ -146,6 +146,44 @@ class Term:
     name: str
     variants: list[str] = field(default_factory=list)
     patterns: list[re.Pattern] = field(default_factory=list)
+    near: list[str] = field(default_factory=list)  # context words required near a mention (--near)
+    exact_case: set = field(default_factory=set)    # folded variants that must match the written case
+
+
+# Product names that are also everyday words: their counts need a context check ("pass" the CLI vs.
+# "pass the test", "OP" the poster vs. 1Password's `op`).
+COMMON_WORDS = {"pass", "op", "keeper", "one", "core", "go", "air", "edge", "echo", "nest", "ring", "arc", "bolt",
+                "note", "sense", "plus", "rest", "dot", "home", "mini", "max", "pro", "live", "surface", "spark",
+                "ghost", "signal", "bear", "things", "notes", "box", "drive", "keys", "vault", "safe", "gate"}
+
+
+def ambiguous_variants(term: "Term") -> list[str]:
+    """The term's name/aliases that are everyday words (and not written case-exact)."""
+    return [v for v in term.variants if _fold(v)[0].strip() in COMMON_WORDS and _fold(v)[0] not in term.exact_case]
+
+
+def _near_ok(text: str, start: int, end: int, words: list[str], window: int = 160) -> bool:
+    """Whether one of `words` appears within `window` characters of text[start:end]."""
+    ctx = _fold(text[max(0, start - window):start] + " " + text[end:end + window])[0]
+    return any(re.search(rf"(?<![a-z0-9]){re.escape(_fold(w)[0].strip())}(?![a-z0-9])", ctx) for w in words if w.strip())
+
+
+def parse_near(spec: str | dict | None) -> dict[str, list[str]]:
+    """'pass=password-store,gopass,cli; op=cli,1password' -> {'pass': [...], 'op': [...]}."""
+    return parse_aliases(spec)
+
+
+def _repeat_promoters(main: list, thread_of, indep_fn, min_threads: int = 3) -> list[dict]:
+    """Users who recommend the term in `min_threads`+ different threads: one enthusiast (or a seeded
+    account) repeated across threads, not several independent owners. Reported, not excluded."""
+    by: dict[str, set] = {}
+    for r, pol, _ in main:
+        a = r.get("author")
+        if not a or r.get("via") == "search" or pol not in ("recommend", "mixed") or indep_fn(r):
+            continue
+        by.setdefault(a, set()).add(thread_of(r))
+    return [{"author": a, "threads": len(t)} for a, t in sorted(by.items(), key=lambda kv: -len(kv[1]))
+            if len(t) >= min_threads]
 
 
 def parse_aliases(spec: str | dict | None) -> dict[str, list[str]]:
@@ -181,9 +219,12 @@ def _garble_variants(name: str, garbles: dict[str, list[str]]) -> list[str]:
 
 
 def build_terms(names: list[str], aliases: dict | str | None = None,
-                garbles: dict[str, list[str]] | None = None) -> list[Term]:
-    """Terms for `names`, each with its aliases and garble variants (see GARBLES)."""
+                garbles: dict[str, list[str]] | None = None, near: dict | str | None = None) -> list[Term]:
+    """Terms for `names`, each with its aliases and garble variants (see GARBLES). `near` maps a name to
+    context words, one of which must appear near each mention. Names or aliases of 1-3 letters written in
+    lowercase match lowercase only ("op" is not "OP"); written in capitals they match any case."""
     amap = parse_aliases(aliases)
+    nmap = parse_near(near)
     gmap = GARBLES if garbles is None else garbles
     terms = []
     for name in names:
@@ -196,7 +237,9 @@ def build_terms(names: list[str], aliases: dict | str | None = None,
             if k and k not in seen:
                 seen.add(k)
                 uniq.append(v)
-        terms.append(Term(name=name, variants=uniq, patterns=[re.compile(_name_regex(v)) for v in uniq]))
+        exact = {_fold(v)[0].strip() for v in uniq if re.fullmatch(r"[a-z]{1,3}", v.strip())}
+        terms.append(Term(name=name, variants=uniq, patterns=[re.compile(_name_regex(v)) for v in uniq],
+                          near=[w.strip() for w in nmap.get(name, []) if w.strip()], exact_case=exact))
     return terms
 
 
@@ -240,8 +283,11 @@ def find_mentions(text: str, terms: list[Term]) -> list[tuple[str, int, int]]:
     folded, idx = _fold(text or "")
     cands = []
     for t in terms:
-        for p in t.patterns:
+        for v, p in zip(t.variants, t.patterns):
+            exact = _fold(v)[0].strip() in t.exact_case
             for m in p.finditer(folded):
+                if exact and text[idx[m.start()]:idx[m.end() - 1] + 1] != v.strip():
+                    continue  # "op" written lowercase: "OP" is the original poster, not the CLI
                 if _right_boundary_ok(folded, m.end()) and not _other_brand_before(folded, m.start(), t):
                     cands.append((m.start(), m.end(), t.name))
     chosen: list[tuple[int, int, str]] = []
@@ -286,7 +332,9 @@ _REC = re.compile(r"\b(recommend(?:ed)?|love (?:it|mine|my|the)|loving|great|exc
                   r"perfectly)|perfect|favou?rite|my pick|top pick|highly|impressed|winner|no brainer|beast|"
                   r"is the answer|gold standard|swear by|hands down|going strong|still going|life ?saver|"
                   r"game ?changer|can'?t live without|worth every penny|must[- ]have|holy grail|saved our|"
-                  r"(?:we|i) use (?:the|a|our|my)|we have (?:the|a|two|three))\b", re.I)
+                  r"(?:we|i) use (?:the|a|our|my)|we have (?:the|a|two|three)|treating (?:me|us) (?:well|great|good|"
+                  r"right)|been (?:great|fantastic|flawless|rock solid|solid)|never let (?:me|us) down|"
+                  r"(?:i|we)(?:'ve| have) been using (?:it|them|\w+) (?:for|since) (?:years|ages|a decade|\d+))\b", re.I)
 _COMP = re.compile(r"\b(problems?|issues?|broke|broken|fail(?:s|ed|ing|ure)?|clog(?:s|ged|ging)?|jam(?:s|med)?|"
                    r"return(?:ed|ing)?|refund|regret|avoid|terrible|awful|worst|garbage|junk|disappoint(?:ed|ing)?|"
                    r"defect(?:ive)?|doa|hate|limitation|unreliable|poor|sucks?|annoying|warranty|rma|nightmare|"
@@ -337,6 +385,24 @@ def _clause_around(text: str, start: int, end: int) -> str:
     if len(cuts) > 2 and clause.strip() and polarity(clause) != "mention":
         return clause
     return sent
+
+
+_ANSWER = re.compile(r"^\W*(?:for me,?\s*(?:it'?s|it is)?|(?:i|we) (?:use|went with|chose|picked|switched to|moved to)|"
+                     r"(?:it'?s|go with|try|get)|(?:\+1|this|same)\W*(?:for)?)?\s*$", re.I)
+
+
+def _short_answer_polarity(text: str, start: int, end: int) -> str | None:
+    """A short answer naming the product ("For me, it's RoboForm." / "RoboForm.") followed by praise or
+    a complaint in the next sentence: the next sentence carries the tone."""
+    s0 = max(text.rfind(c, 0, start) for c in ".!?\n") + 1
+    ends = [i for i in (text.find(c, end) for c in ".!?\n") if i != -1]
+    s1 = min(ends) if ends else len(text)
+    before, after = text[s0:start], text[end:s1]
+    if not _ANSWER.match(before) or re.search(r"\w{3,}", after) or s1 >= len(text):
+        return None
+    nxt = _sentence_around(text, s1 + 1, s1 + 1)
+    p = polarity(nxt)
+    return p if p in ("recommend", "complain") else None
 
 
 # -------------------------------------------------------------------------
@@ -465,9 +531,14 @@ def tally(records: list[dict], names: list[str], *, aliases: dict | str | None =
           garbles: dict | None = None, group: str = "author", group_label: str = "users",
           separate_search: bool = True, op_once: bool = True, exclude_op: bool = False,
           include_transcripts: bool = True, sponsor_threshold: float = 0.6, independence=None,
-          group_flags: dict | None = None, max_examples: int = 5) -> dict:
-    """Count mentions of `names` in `records` (see the module docstring for fields and output)."""
-    terms = build_terms(names, aliases, garbles)
+          group_flags: dict | None = None, max_examples: int = 5, near: dict | str | None = None,
+          compete: list[str] | None = None) -> dict:
+    """Count mentions of `names` in `records` (see the module docstring for fields and output).
+    `compete`: other names that take part in longest-match ("Proton Pass" claims its "Pass") but get
+    no row of their own (used when the caller tallies one name at a time)."""
+    others = [c for c in (compete or []) if c not in names]
+    all_terms = build_terms(list(names) + others, aliases, garbles, near)
+    terms = all_terms[:len(names)]
     recs = merge_records(records)
     indep_fn = independence or (lambda r: default_independence(r, sponsor_threshold))
 
@@ -499,13 +570,23 @@ def tally(records: list[dict], names: list[str], *, aliases: dict | str | None =
                 wide.setdefault(g, set()).add(reason)
 
     rows = []
+    mention_cache: dict = {}
     for term in terms:
         hits = []  # (record, polarity, snippet, link)
+        near_dropped = 0
         for r in recs:
             pols, first = [], None
             for fld, txt, link in _parts(r, include_transcripts):
-                for _, s, e in (m for m in find_mentions(txt, [term])):
+                key = (id(r), fld, txt)
+                if key not in mention_cache:
+                    mention_cache[key] = find_mentions(txt, all_terms)
+                for _, s, e in (m for m in mention_cache[key] if m[0] == term.name):
+                    if term.near and not _near_ok(txt, s, e, term.near):
+                        near_dropped += 1
+                        continue
                     pol = polarity(_clause_around(txt, s, e))
+                    if pol == "mention":
+                        pol = _short_answer_polarity(txt, s, e) or pol
                     pols.append(pol)
                     if first is None or (first[0] == "mention" and pol != "mention"):
                         first = (pol, snippet(txt, s, e), link, fld)
@@ -574,8 +655,18 @@ def tally(records: list[dict], names: list[str], *, aliases: dict | str | None =
                "by_group": sorted(groups.values(), key=lambda e: (-e["independent"], -e["items"]))[:12],
                "examples": sorted(examples, key=lambda x: (-(x["independent"]), -(x["score"] or 0),
                                                            x["polarity"] == "mention"))[:max_examples]}
+        if term.near:
+            row["near"] = term.near
+            row["dropped_not_near"] = near_dropped
+        amb = ambiguous_variants(term)
+        if amb and not term.near:
+            row["warning"] = (f"{', '.join(amb)} is also a common word; counts may include unrelated uses. Read "
+                              f"the examples, or pass --near \"{term.name}=word,word\" to require context words.")
         if group == "author":
             row["implied"] = _implied(recs, term, terms, indep_fn, max_examples)
+            rep_users = _repeat_promoters(main, thread_of, indep_fn)
+            if rep_users:
+                row["repeat_promoters"] = rep_users
         if separate_search:
             st = {thread_of(r) for r, _, _ in search_only} - threads
             row["search_only_threads"] = len(st)

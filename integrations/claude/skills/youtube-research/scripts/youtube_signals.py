@@ -101,10 +101,21 @@ _LISTICLE_TITLE = re.compile(r"\b(top|best)\s*\d+\b", re.I)
 _YEAR = re.compile(r"(?<!\d)(20\d\d)(?!\d)")
 
 
+# How-to farm channel names ("Wise Explainer", "HelperMan", "InstantHowTo", "Hard Reset", "Ask Simon"):
+# a weak signal alone, since some real tutorial channels use these words.
+_FARM_NAME = re.compile(r"(explain(?:er|ed|s)?|helper|how\s*to|howto|tutorials?|hard[\s-]*reset|instant|"
+                        r"\bask\s+[a-z]+|tips\s*(?:and|&)\s*tricks|simplified|tech\s*(?:tips|help|fix)|\bwiz\b|twiz|"
+                        r"\bfix(?:es|ed)?\b|answers?|solutions?)", re.I)
+_VS_TITLE = re.compile(r"\bvs\.?\b|\bversus\b|which (?:is|one is|should you|to choose)|is (?:it|\w+) (?:worth|better)",
+                       re.I)
+
+
 def likely_ai_listicle(title: str = "", channel: str | None = None, handle: str | None = None,
-                       uploads: int | None = None, year: int | None = None) -> tuple[bool, list[str]]:
+                       uploads: int | None = None, year: int | None = None,
+                       length_s: int | None = None) -> tuple[bool, list[str]]:
     """Heuristic: future-year channel names/handles or titles, generic "Picks / Reviews Club / Top5Lab"
-    channel names, "Top 10" titles, and very high upload counts. One strong reason, or two weak ones."""
+    channel names, "Top 10" titles, very high upload counts, how-to farm names ("Wise Explainer",
+    "HelperMan") and 1-3 minute "X vs Y" clips. One strong reason, or two weak ones."""
     year = year or date.today().year
     strong, weak = [], []
     name = f"{channel or ''} {handle or ''}"
@@ -120,6 +131,10 @@ def likely_ai_listicle(title: str = "", channel: str | None = None, handle: str 
         weak.append(f"very high upload count ({uploads})")
     if re.search(r"\bdeals?\b", name, re.I):
         weak.append("deals channel name")
+    if _FARM_NAME.search(name.replace("@", " ")) and not detect_brands(name):
+        weak.append("how-to farm channel name")
+    if length_s is not None and 0 < length_s < 200 and _VS_TITLE.search(title or ""):
+        weak.append("under-3-minute 'X vs Y' clip")
     flagged = bool(strong) or len(weak) >= 2
     return flagged, (strong + weak) if flagged else []
 
@@ -186,8 +201,26 @@ def amazon_influencer(title: str = "", description: str = "", links=(), length_s
         reasons.append("clip under 90 s with Amazon links")
     if amazon and ((views is not None and views < 10_000) or (subscribers is not None and subscribers < 5_000)):
         reasons.append("little reach")
-    flagged = len(reasons) >= 2
+    content = [r for r in reasons if r not in ("Amazon storefront link", "little reach")]
+    # A storefront link on a small channel is common for ordinary creators: on a video of 5+ minutes it
+    # needs an Amazon-finds hashtag (or a short-clip signal) too (a 15-minute software walkthrough was flagged).
+    flagged = len(reasons) >= 2 and (bool(content) or length_s is None or length_s < 300)
     return flagged, reasons if flagged else []
+
+
+def brand_channel(channel: str | None, handle: str | None = None, own_domains=()) -> str | None:
+    """The brand a channel IS: its name or handle is a known brand ("Bitwarden", "@1Password",
+    "Bitwarden Official") and, when given, its own site matches. Returns the brand or None."""
+    import disclosure as D  # noqa: WPS433
+    name = _alnum(D._CHANNEL_FILLER.sub(" ", channel or ""))
+    h = _alnum((handle or "").lstrip("@")).removesuffix("official").removeprefix("official")
+    stems = {_alnum(re.sub(r"^www\.", "", d).rsplit(".", 1)[0]) for d in own_domains or ()}
+    for b in KNOWN_BRANDS:
+        a = _alnum(b)
+        if len(a) >= 4 and (name == a or h == a or (name == a + "hq")):
+            if not stems or a in stems or any(s.startswith(a) for s in stems) or h == a:
+                return b
+    return None
 
 
 # -------------------------------------------------------------------------
@@ -208,16 +241,30 @@ KNOWN_BRANDS = [
     "Hatch", "Yogasleep", "Marpac", "LectroFan", "Adaptive Sound Technologies", "Snooz", "Momcozy", "Dreamegg",
     "Nanit", "Owlet", "Loftie", "HoMedics", "Letsfit", "Frida", "Munchkin", "Skip Hop", "Baby Brezza", "Tommee Tippee",
     "Graco", "Ergobaby", "Elvie", "Philips Avent", "VTech", "Infant Optics", "Cubo Ai", "Miku",
+    # software and services (password managers, VPNs)
+    "1Password", "Bitwarden", "Vaultwarden", "Proton", "Dashlane", "NordPass", "NordVPN", "Keeper Security",
+    "RoboForm", "LastPass", "Enpass", "KeePassXC", "KeePass", "Strongbox", "Bitdefender", "Norton", "Surfshark",
+    "ExpressVPN",
 ]
+# Software/service brands that are also common sponsors (a NordVPN read in a camera review): they count as a
+# video's brands only when the title names them or the title is about their category.
+SERVICE_BRANDS = {"1Password", "Bitwarden", "Vaultwarden", "Proton", "Dashlane", "NordPass", "NordVPN",
+                  "Keeper Security", "RoboForm", "LastPass", "Enpass", "KeePassXC", "KeePass", "Strongbox",
+                  "Bitdefender", "Norton", "Surfshark", "ExpressVPN"}
+_SERVICE_TOPIC = re.compile(r"password|passkey|vpn|antivirus|security|privacy|encrypt|vault|credential", re.I)
 BRAND_ALIASES = {"Bambu Lab": ["Bambu", "BambuLab", "Bambu Labs"], "Rode": ["RØDE"], "Prusa": ["Prusa Research"],
                  "Kärcher": ["Karcher"], "EcoFlow": ["Eco Flow"], "Rug Doctor": ["RugDoctor"],
-                 "Qidi": ["Qidi Tech", "QIDI"], "Insta360": ["Insta 360"], "Even Realities": ["Even G1", "Even G2"]}
+                 "Qidi": ["Qidi Tech", "QIDI"], "Insta360": ["Insta 360"], "Even Realities": ["Even G1", "Even G2"],
+                 "NordPass": ["Nord Pass", "Nord Security"], "1Password": ["1 Password", "One Password"],
+                 "Keeper Security": ["Keeper Password Manager"], "RoboForm": ["Robo Form"]}
 # Hosts that never name a reviewed brand.
 _PLATFORM = re.compile(r"(^|\.)(youtube|youtu|google|goo|amazon|amzn|instagram|facebook|fb|twitter|x|tiktok|"
                        r"threads|discord|patreon|ko-fi|buymeacoffee|linktr|bit|tinyurl|geni|da|is|cutt|t|ow|"
                        r"reddit|github|twitch|spotify|apple|bhphotovideo|bhpho|bestbuy|walmart|ebay|aliexpress|"
                        r"temu|etsy|kickstarter|indiegogo|wikipedia|imgur|gumroad|shopify|myshopify|linkin|"
-                       r"linkedin|pinterest|snapchat|telegram|whatsapp|paypal|sjv|pxf|howl|impact|skimresources|"
+                       r"linkedin|pinterest|snapchat|telegram|whatsapp|paypal|sjv|pxf|howl|impact|skimresources|udemy|coursera|"
+                       r"teachable|kajabi|skool|substack|medium|beehiiv|convertkit|mailchi|tiermaker|partnerlinks|"
+                       r"partnerstack|grsm|"
                        r"shareasale|awin1|tidd|prf|avantlink|rstyle|linksynergy|lnk|rebrand|shorturl|buff|tiny)\.",
                        re.I)
 _URL = re.compile(r"https?://\S+")
@@ -272,12 +319,22 @@ def _mentions(text: str, brand: str) -> bool:
     return any(_word_re(n).search(t) for n in [brand] + BRAND_ALIASES.get(brand, []))
 
 
+# What a brand adds to its name in a site name ("bluettipower.com", "ankerfast.club"). A person's or a
+# word's name plus anything else ("janecreator.co", "tiermaker.com") is not a brand site.
+_BRAND_HOST_SUFFIX = {"power", "fast", "tech", "official", "store", "shop", "usa", "us", "global", "direct", "home",
+                      "lab", "labs", "hq", "inc", "app", "hub", "online", "world", "audio", "mobile", "camera", "3d",
+                      "energy", "solar", "electric", "outdoor", "outdoors", "gear", "sound", "baby", "security",
+                      "software", "vpn", "pass", "co", "uk", "eu", "au", "ca"}
+
+
 def detect_brands(title: str = "", description: str = "", links=(), own_domains=()) -> list[str]:
     """Brands named in the title or description: a built-in brand list, plus link hosts (not platforms,
     networks, or the channel's own sites) whose name also appears in the text."""
     kept = strip_gear_blocks(description)
     text = _URL.sub(" ", f"{title}\n{kept}")
-    found = [b for b in KNOWN_BRANDS if _mentions(text, b)]
+    service_ok = bool(_SERVICE_TOPIC.search(title or ""))
+    found = [b for b in KNOWN_BRANDS if _mentions(text, b)
+             and (b not in SERVICE_BRANDS or service_ok or _mentions(title or "", b))]
     gear_links = set(re.findall(r"https?://\S+", description or "")) - set(re.findall(r"https?://\S+", kept))
     own = {_alnum(d) for d in own_domains or ()}
     words = _alnum(text)
@@ -301,7 +358,7 @@ def detect_brands(title: str = "", description: str = "", links=(), own_domains=
         # A brand site whose name is the brand plus a word ("bluettipower.com", "ankerfast.club"): a
         # capitalized word of 4+ letters in the text that the host name starts with.
         for w in dict.fromkeys(re.findall(r"\b[A-Z][A-Za-z]{3,}\b", text)):
-            if _alnum(stem).startswith(_alnum(w)) and len(_alnum(stem)) > len(_alnum(w)) \
+            if _alnum(stem).startswith(_alnum(w)) and _alnum(stem)[len(_alnum(w)):] in _BRAND_HOST_SUFFIX \
                     and _alnum(w) not in {"https", "http", "shop", "store", "check", "link", "free", "best"}:
                 if not any(_alnum(w) == _alnum(b) for b in found):
                     found.append(w)
@@ -323,7 +380,7 @@ def _link_brands(url: str, description: str, brands: list[str]) -> list[str]:
 
 
 _PER_BRAND_SIGNALS = {"sponsor_read", "third_party_sponsor", "review_unit", "use_my_link_or_code", "brand_code_or_link",
-                      "giveaway", "brand_giveaway", "bought_it_myself", "bought_something_myself"}
+                      "giveaway", "brand_giveaway", "bought_it_myself", "bought_something_myself", "ownership_tie"}
 
 
 def per_brand(hits: list[dict], brands: list[str], description: str = "", links_by_kind: dict | None = None,

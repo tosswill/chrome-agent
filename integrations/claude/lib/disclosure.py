@@ -44,7 +44,10 @@ sponsor_read (0.5), ad_tag (#ad / #sponsored / paid partnership, 0.4), third_par
 use_my_link_or_code (0.15), affiliate_disclosure (0.1), giveaway (0.05;
 brand_giveaway 0.2 when it gives away the reviewed brand), self_promotion
 (0.05), rented_or_borrowed (-0.05), bought_it_myself (-0.15),
-claims_not_sponsored (-0.1), editorial_independence (-0.05). Link signals:
+claims_not_sponsored (-0.1; also "we don't have affiliate links"), editorial_independence (-0.05),
+ownership_tie (0.3: "owned by X, whose investors founded Y"). A sponsor read by a service in the video's
+own category (a password manager sponsoring a password-manager review) is a sponsor_read with
+in_category, not a third-party sponsor. Link signals:
 affiliate_links (0.15), campaign_tracking (0.2 influencer-tagged, else 0.1),
 self_promotion (0.05). brand_adjust adds brand_affiliate_links (0.25),
 brand_code_or_link (0.2), bought_something_myself (-0.05) and
@@ -91,6 +94,26 @@ KNOWN_SERVICES = (
     "canva", "pcbway", "jlcpcb", "voxel", "keeps", "magic spoon", "liquid iv", "mint mobile",
 )
 _SERVICE_RE = re.compile(r"\b(" + "|".join(re.escape(s) for s in KNOWN_SERVICES) + r")\b", re.I)
+# What each service sells: when the video is about that category (a password-manager review sponsored by
+# 1Password), the read is brand money in the reviewed field, not an unrelated third-party sponsor.
+SERVICE_CATEGORIES = {
+    "password": ("1password", "dashlane", "bitwarden", "proton", "nordpass", "keeper", "roboform", "lastpass",
+                 "enpass"),
+    "vpn": ("nordvpn", "expressvpn", "surfshark", "private internet access", "proton"),
+    "privacy": ("incogni", "aura", "proton"),
+    "website": ("squarespace", "wix", "hostinger", "shopify"),
+}
+_CATEGORY_WORDS = {"password": r"password|passkey|credential|vault", "vpn": r"\bvpns?\b",
+                   "privacy": r"data broker|identity theft|privacy", "website": r"website builder|web ?hosting"}
+
+
+def in_category_service(name: str | None, subject: str) -> bool:
+    """Whether service `name` sells what the video (`subject`) is about."""
+    low = (name or "").lower()
+    for cat, names in SERVICE_CATEGORIES.items():
+        if any(n in low for n in names) and re.search(_CATEGORY_WORDS[cat], subject or "", re.I):
+            return True
+    return False
 _SERVICE_WORDS = re.compile(
     r"\b(music|songs?|soundtracks?|royalty[- ]free|stock (?:footage|music|video|photos?)|vpn|website builder|"
     r"web ?hosting|software|plugins?|plug-ins?|subscription|password manager|meal kits?|insurance|antivirus|"
@@ -176,19 +199,29 @@ _REVIEW_EXCLUDE = re.compile(r"\b(support|warranty|replacement|replaced|rma|refu
                              r"(?:baby )?shower|registry|birthday|christmas|grand(?:ma|pa|mother|father|parents?)|"
                              r"in-?laws?|(?:my|our) (?:mom|dad|mum|mother|father|parents|sister|brother|aunt|uncle|"
                              r"friends?|cousin|neighbou?r)s?)\b", re.I)
+# Channel memberships and Patreon perks ("members get early access to videos") are not review units.
+_MEMBER_PERK = re.compile(r"\b(members?(?:hip)?|patreon|patrons?|join (?:the|our|this) channel|supporters?|"
+                          r"subscribers? get|tiers?|perks?)\b|\bearly access (?:to|for) (?:(?:new|our|my|the|all|"
+                          r"every|ad-free)\s+)*(?:videos?|episodes?|content|uploads?|podcasts?)\b", re.I)
 _SENT_ME_OBJECT_EXCLUDE = re.compile(
     r"\b(?:sent|send)\s+(?:me|us)\s+(?:this|these|the|a|an|their|its|one)\s+(?:\w+\s+)?(e-?mails?|messages?|links?|dms?|"
     r"texts?|notes?|invoices?|quotes?|photos?|pictures?|pics?|videos?|codes?|repl(?:y|ies)|updates?|new one|spares?|"
     r"parts?|surveys?|tips?|donations?|money|coffee)\b", re.I)
 
 _CODE_RE = re.compile(
-    r"\b(use my (?:link|code)|use (?:the )?code \S+|(?:with|using) (?:the )?code \S+|code \S+ (?:at checkout|for \d+ ?%)|"
+    r"\b(use (?:my|our) (?:link|code)|(?:using|through|with|via) (?:my|our) (?:links?|code)|use (?:the )?code \S+|(?:with|using) (?:the )?code \S+|code \S+ (?:at checkout|for \d+ ?%)|"
     r"discount code|promo code|coupon code|\d+ ?% off (?:with|using)|(?:buy|get|order|grab|pick up) (?:one|yours|it|them|"
     r"a pair)? ?(?:through|using|with|from|via) (?:my|the) (?:link|affiliate))", re.I)
 _AFFILIATE_DISCLOSURE = re.compile(
-    r"(\baffiliate links?\b|\(affiliate\)|\b(?:i|we) (?:may |might |do |will )?(?:earn|receive|get|make) (?:a )?"
+    r"(\b(?:we|i)(?:'re|'m| are| am)\s+(?:an?\s+)?affiliate(?:d|s)?\b|\baffiliate links?\b|\(affiliate\)|\b(?:i|we) (?:may |might |do |will )?(?:earn|receive|get|make) (?:a )?"
     r"(?:small )?(?:commission|cut)|commission (?:from|on|if|when) |as an amazon associate|"
     r"\b(?:at|for) no (?:extra|additional) cost to you)", re.I)
+# An ownership tie to a company in the field: "owned by Mediatech, whose investors are the founders of Nord
+# Security", "our parent company", "we are part of X".
+_OWNERSHIP = re.compile(
+    r"\b(?:(?:is|are|we'?re|we are|site|channel|website)\s+(?:(?:now|also|fully|partly)\s+)?(?:owned|backed|funded|operated)\s+by|"
+    r"whose (?:investors|owners|founders|shareholders)|(?:our|its|the) parent company|"
+    r"(?:we|this channel|vpnpro) (?:is|are) (?:a )?part of (?:the )?[A-Z])", re.I)
 # "#ad" / "#sponsored" / "paid partnership": a written sponsorship tag (disclosed brand money).
 _AD_TAG = re.compile(r"(?<![\w#])#(?:ad|ads|sponsored|paidpartnership|partner)\b|\bpaid partnership with\b", re.I)
 _GIVEAWAY = re.compile(r"\b(giveaway|give-?away|giving\s+(?:\w+\s+){0,4}?away|chance to win|enter to win|"
@@ -228,6 +261,7 @@ WEIGHTS = {
     "rented_or_borrowed": -0.05, "bought_it_myself": -0.15, "claims_not_sponsored": -0.1,
     "editorial_independence": -0.05, "affiliate_links": 0.15, "campaign_tracking": 0.2,
     "brand_affiliate_links": 0.25, "brand_code_or_link": 0.2, "bought_something_myself": -0.05,
+    "ownership_tie": 0.3,
 }
 # Kept for callers that iterate the old table.
 SIGNALS = [(k, v, None) for k, v in WEIGHTS.items()]
@@ -353,6 +387,8 @@ def scan_text(text: str, source: str, link: str | None = None, subject: str = ""
             name = _sponsor_name(sent)
             if name and _is_own(name, channel, own_domains):
                 add("self_promotion", sent, sponsor=name)
+            elif name and in_category_service(name, subject):
+                add("sponsor_read", sent, sponsor=name, in_category=True)
             elif name and (_is_third_party(name, subject) or _SERVICE_RE.fullmatch(name)):
                 add("third_party_sponsor", sent, sponsor=name)
             else:
@@ -364,6 +400,8 @@ def scan_text(text: str, source: str, link: str | None = None, subject: str = ""
         if not _REVIEW_EXCLUDE.search(near) and not _SENT_ME_OBJECT_EXCLUDE.search(sent):
             for rx in _REVIEW_UNIT_RE:
                 m = rx.search(sent)
+                if m and "early access" in m.group(0).lower() and _MEMBER_PERK.search(sent):
+                    continue
                 if m and not negated(sent, m.start(), m.end()):
                     add("review_unit", sent)
                     break
@@ -379,12 +417,23 @@ def scan_text(text: str, source: str, link: str | None = None, subject: str = ""
             m = None  # "I earn a commission if you buy through my links" is the disclosure, not a pitch
         if m:
             service = _service_in(sent) or (None if _about(sent, toks) else _service_in(near))
-            if service and not _about(service, toks):
+            if service and not _about(service, toks) and not in_category_service(service, subject):
                 add("third_party_sponsor", sent, sponsor=service, via="code")
             else:
                 add("use_my_link_or_code", sent)
-        if _AFFILIATE_DISCLOSURE.search(sent):
+        m = _AFFILIATE_DISCLOSURE.search(sent)
+        if m and negated(sent, m.start(), m.end()) and not re.search(r"\b(?:earn|commission|cut)\b", m.group(0), re.I):
+            # "We don't have any affiliate links": a no-money claim, not a disclosure.
+            if not denied:
+                add("claims_not_sponsored", sent)
+                denied = True
+        elif m:
             add("affiliate_disclosure", sent)
+            if re.search(r"affiliate(?:d|s)?\b", m.group(0), re.I) and re.search(r"\b(?:we|i)", m.group(0), re.I):
+                # "We are affiliated but not sponsored": the not-sponsored claim doesn't lower the score.
+                hits[:] = [h for h in hits if not (h["signal"] == "claims_not_sponsored" and h["text"] == sent.strip()[:220])]
+        if _OWNERSHIP.search(sent):
+            add("ownership_tie", sent)
         m = _GIVEAWAY.search(sent)
         if m and not negated(sent, m.start(), m.end()) and not _GIVEAWAY_TELLTALE.search(sent) \
                 and (not re.fullmatch(r"give-?away", m.group(1), re.I) or _GIVEAWAY_CONTEXT.search(sent)):
@@ -443,6 +492,8 @@ _AFF_LINK = re.compile(
     r"amzn\.to|link\.amazon/|amazon\.[a-z.]+/.*[?&](tag|linkCode)=|geni\.us|sjv\.io|\.pxf\.io|impact\.com|howl\.me|"
     r"shareasale|skimresources|go\.magik\.ly|7tiv\.net|avantlink|rstyle\.me|linksynergy|awin1\.com|tidd\.ly|prf\.hn|"
     r"anrdoezrs|dpbolvw|tkqlhce|jdoqocy|kqzyfj|bestbuy\.7tiv|bhpho\.to|/(affiliates?|aff|partners?/ref)/|"
+    r"partnerlinks\.io|partnerstack|\.grsm\.io|go\.nordpass\.io|go\.nordvpn\.net|refer\.[a-z0-9-]+\.[a-z]+/|"
+    r"\.sjv\.io|fpr\.(?:link|to)|\.trackable\.|/(?:ref|referral|invite)/[\w-]+|"
     r"[?&](aff|affiliate|aff_id|affid|ref_id|associate|sca_ref|rfsn|referral|refer|irclickid|ref|rf|"
     r"partner|partner_id|ranMID|ranEAID|clickid|subid|discount)=", re.I)
 def _AMAZON_PLAIN(url: str) -> bool:
@@ -459,29 +510,51 @@ _REF_PARAM = re.compile(r"[?&](ref|rf|aff|affiliate|aff_id|affid|ref_id|sca_ref|
 # Brand short-link domains ("ankerfast.club", "go.ecoflow.com", "bluetti.link/x"): a vanity host on a
 # short-link style TLD or subdomain, with a path.
 _VANITY_SHORT = re.compile(r"//(?:(?:go|get|try|link|links|click|shop|buy)\.[a-z0-9-]+\.[a-z.]+|"
-                           r"[a-z0-9-]+\.(?:club|link|links|page|to|ly|gg|me|deals|promo|codes?|store))/[^\s]+", re.I)
+                           r"[a-z0-9-]+\.(?:club|link|links|page|to|ly|gg|deals|promo|codes?|store))/[^\s]+", re.I)  # not .me: proton.me
 _SHORT_LINK = re.compile(r"//(bit\.ly|tinyurl\.com|t\.co|ow\.ly|rebrand\.ly|lnk\.to|linktr\.ee|da\.gd|is\.gd|cutt\.ly|"
                          r"shorturl\.at|buff\.ly|tiny\.cc)/", re.I)
 _UTM = re.compile(r"[?&]utm_(campaign|source|medium)=([^&#]*)", re.I)
 _UTM_STRICT = re.compile(r"kol|influencer|creator|sponsor|partner|launch|ambassador|paid|affiliate", re.I)
 _CREATOR_HOSTS = re.compile(r"(^|\.)(patreon\.com|ko-fi\.com|buymeacoffee\.com|gumroad\.com|teespring\.com|"
                             r"fourthwall\.com|spreadshirt\.[a-z.]+|spring\.com|bonfire\.com|merchbar\.com)$", re.I)
+# The creator's own redirect domain or path sending viewers to a vendor: "vpnpro.sale/NordPass-Discount/...",
+# "cyberlabgo.com/roboform-v2", "site.com/go/nordpass". These pay the creator: affiliate links, not self-promotion.
+_REDIRECT_PATH = re.compile(r"/(?:go|out|visit|recommends?|refer|deal|deals|get|try|link|links|discount|coupon|offer)"
+                            r"(?:/|$)|(?:discount|coupon|deal|offer|promo|-v\d+)(?:/|$|[-_])", re.I)
+_REDIRECT_TLD = re.compile(r"\.(?:sale|deals|promo|coupons?|discount|offer|link|click|go)$", re.I)
+_REDIRECT_SUFFIX = {"go", "links", "link", "deals", "deal", "sale", "offers", "recommends", "out", "get", "visit", "try"}
+
+
+def _own_redirect(url: str, host: str, stem: str, ch_toks: set[str], brands=()) -> bool:
+    path = urlparse(url if "//" in url else "//" + url).path or ""
+    if len(path.strip("/")) < 2:
+        return False
+    if _REDIRECT_TLD.search(host) or _REDIRECT_PATH.search(path):
+        return True
+    if any(stem.startswith(t) and stem[len(t):] in _REDIRECT_SUFFIX for t in ch_toks if t):
+        return True
+    slug = _alnum(path)
+    return any(len(_alnum(b)) >= 4 and _alnum(b) in slug for b in brands or ())
+
+
 _MY_LINE = re.compile(r"\b(my|our) (own )?(store|shop|site|website|merch|kits?|course|courses|patreon|presets|luts|"
                       r"book|newsletter|podcast|blog|products?|designs?|models|files|discord)\b", re.I)
 
 
 def classify_links(links: list[str], *, channel: str | None = None, description: str = "",
-                   handle: str | None = None) -> dict:
+                   handle: str | None = None, brands=()) -> dict:
     """Sort description links into affiliate, campaign (utm), short and self-promotion links.
     Links to the channel's own site or store (by host name, creator platforms, or a "my store:" line)
-    are self-promotion, never sponsorship, even with utm tags."""
+    are self-promotion, never sponsorship, even with utm tags, except redirects through the creator's own
+    domain to a vendor ("vpnpro.sale/NordPass-Discount/", "/go/<brand>", a path naming one of `brands`):
+    those are affiliate links (listed in `own_redirect_links` too)."""
     ch_toks = _channel_tokens(channel) | ({_alnum(handle)} if handle and len(_alnum(handle)) >= 4 else set())
     full = _alnum(_CHANNEL_FILLER.sub(" ", channel or ""))
     if len(full) >= 4:
         ch_toks.add(full)
     my_lines = [ln for ln in (description or "").splitlines() if _MY_LINE.search(ln)]
     out = {"affiliate_links": [], "campaign_links": [], "short_links": [], "self_promotion_links": [],
-           "own_domains": []}
+           "own_domains": [], "own_redirect_links": []}
     for url in links or []:
         host = _host(url)
         stem = _alnum(host.rsplit(".", 1)[0]) if host else ""
@@ -499,6 +572,10 @@ def classify_links(links: list[str], *, channel: str | None = None, description:
         referrer = bool(refs & (whole | ch_toks))
         own = bool(host) and not referrer and (
             by_name or (any(url in ln for ln in my_lines) and not _REF_PARAM.search(url)))
+        if own and _own_redirect(url, host, stem, ch_toks | whole, brands):
+            out["affiliate_links"].append(url)
+            out["own_redirect_links"].append(url)
+            continue
         if own:
             out["self_promotion_links"].append(url)
             if host and host not in out["own_domains"] and not _CREATOR_HOSTS.search(host):

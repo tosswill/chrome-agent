@@ -249,3 +249,42 @@ def test_bare_alias_after_another_brand_is_not_this_product():
     terms = T.build_terms(["Hoover SmartWash"], "Hoover SmartWash=SmartWash")
     assert T.find_mentions("I love my Vax SmartWash.", terms) == []
     assert T.find_mentions("Our SmartWash leaks.", terms)
+
+
+# --- password-manager run (2026-11-07) ------------------------------------------------------------
+
+def test_longer_name_claims_its_words_across_terms():
+    recs = [{"id": "c1", "via": "comment", "author": "a", "thread": "t", "text": "I moved from Proton Pass to KeePassXC."}]
+    rows = {r["term"]: r for r in T.tally(recs, ["Proton Pass", "pass"])["tally"]}
+    assert rows["Proton Pass"]["users"] == 1 and rows["pass"]["users"] == 0
+
+
+def test_near_requires_context_and_common_words_warn():
+    recs = [{"id": "c1", "via": "comment", "author": "a", "thread": "t", "text": "You need to pass the test."},
+            {"id": "c2", "via": "comment", "author": "b", "thread": "t", "text": "I use pass with gpg and git."}]
+    plain = T.tally(recs, ["pass"])["tally"][0]
+    assert plain["users"] == 2 and "common word" in plain["warning"]
+    near = T.tally(recs, ["pass"], near="pass=gpg,gopass,password-store")["tally"][0]
+    assert near["users"] == 1 and near["dropped_not_near"] == 1 and "warning" not in near
+
+
+def test_short_lowercase_alias_is_case_exact():
+    recs = [{"id": "c1", "via": "comment", "author": "a", "thread": "t", "text": "OP should just switch."},
+            {"id": "c2", "via": "comment", "author": "b", "thread": "t", "text": "Run op inject in your shell."}]
+    row = T.tally(recs, ["1Password"], aliases="1Password=op")["tally"][0]
+    assert row["users"] == 1
+
+
+def test_short_answer_takes_tone_from_next_sentence():
+    assert T.tally([{"id": "c", "via": "comment", "author": "a", "thread": "t",
+                     "text": "For me, it's Roboform. It's fast, reliable and cheap."}],
+                   ["RoboForm"])["tally"][0]["polarity"]["recommend"] == 1
+    assert T.polarity("Roboform has been treating me well.") == "recommend"
+
+
+def test_repeat_promoters_across_threads():
+    recs = [{"id": f"c{i}", "via": "comment", "author": "fan", "thread": f"t{i}", "text": "RoboForm is great."}
+            for i in range(3)] + [{"id": "x", "via": "comment", "author": "other", "thread": "t9",
+                                   "text": "RoboForm is great."}]
+    row = T.tally(recs, ["RoboForm"])["tally"][0]
+    assert row["repeat_promoters"] == [{"author": "fan", "threads": 3}]
