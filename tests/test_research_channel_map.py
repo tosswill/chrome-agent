@@ -9,6 +9,7 @@ sys.path.insert(0, str(ROOT / "skills" / "youtube-research" / "scripts"))
 import channel_map as CM  # noqa: E402
 import youtube_tab as Y  # noqa: E402
 
+AFF2 = {"signal": "affiliate_links", "text": "https://amzn.to/a, https://amzn.to/b"}  # several affiliate links
 TESTER = ("We tested each machine side by side on the same stain. The stain test: we measured 220 ml "
           "recovered in 45 seconds, and a sound meter read 78 dB. Test number 2 repeated the test; on average "
           "it dried in 3 hours. ") * 6
@@ -105,12 +106,12 @@ def test_cli_parses_cited_and_registry_pin(monkeypatch):
 
 
 def test_affiliate_roundup_quadrant():
-    recs = [rec(f"v{i}", ["affiliate_links", "affiliate_disclosure"], "Number one on our list is great. " * 40,
+    recs = [rec(f"v{i}", [AFF2, "affiliate_disclosure"], "Number one on our list is great. " * 40,
                 title=f"Best Carpet Cleaners 202{i}") for i in range(2)]
     r = CM.rate_channel("Roundups", recs, {}, "carpet cleaners")
     assert r["context"]["affiliate_share"] == 1.0
     assert CM.quadrant(r) == "affiliate roundup (light testing)"
-    single = CM.rate_channel("Single", [rec("s", ["affiliate_links", "affiliate_disclosure"], "It is nice. " * 40,
+    single = CM.rate_channel("Single", [rec("s", [AFF2, "affiliate_disclosure"], "It is nice. " * 40,
                                             title="Hatch Rest 2 review")], {}, "x")
     assert CM.quadrant(single) == "affiliate-led review (light testing)"
     ad = CM.rate_channel("Ad", [rec("a", ["ad_tag", "review_unit", "use_my_link_or_code", "affiliate_links"],
@@ -242,6 +243,51 @@ def test_rank_discounts_thin_samples_and_tiny_channels():
 
 
 def test_head_to_head_is_not_a_roundup():
-    r = CM.rate_channel("H2H", [rec("h", ["affiliate_links", "affiliate_disclosure"], "It is nice. " * 40,
+    r = CM.rate_channel("H2H", [rec("h", [AFF2, "affiliate_disclosure"], "It is nice. " * 40,
                                     title="Bissell Big Green vs Rug Doctor")], {}, "x")
     assert CM.quadrant(r) == "affiliate-led review (light testing)"
+
+
+# --- password-manager run (2026-11-07) ------------------------------------------------------------
+
+ANALYSIS = ("Our criteria are open source code, a third-party security audit and the incident history. "
+            "It is zero-knowledge and end-to-end encrypted, the key derivation uses Argon2, and you can self-host "
+            "the server. Let me show you the autofill: I'll click the extension and as you can see here it "
+            "fills. The free plan is limited to 2 devices and premium is $19.80 a year. ") * 4
+SCORECARD = "I tested 6 password managers and scored them. RoboForm ranked first. " * 20
+
+
+def test_software_analysis_outranks_scorecard_claims():
+    a, ad = CM.video_rigor(rec("a", [], ANALYSIS))
+    s, _ = CM.video_rigor(rec("s", [], SCORECARD))
+    assert a > s and ad.get("kind", "").startswith("analysis")
+    r = CM.rate_channel("PG", [rec("a", ["claims_not_sponsored"], ANALYSIS)], {}, "password managers")
+    assert r["kind"] == "analysis review" and CM.quadrant(r).startswith("independent analysis")
+
+
+def test_single_optin_link_is_not_a_coupon_farm():
+    one = CM.rate_channel("T", [rec("t", [{"signal": "affiliate_links", "text": "https://proton.me/x?ref=t"}],
+                                    ANALYSIS)], {}, "x")
+    assert one["context"]["affiliate_share"] == 0.5 and "affiliate" not in CM.quadrant(one)
+
+
+def test_brand_channel_quadrant():
+    r = CM.rate_channel("Bitwarden", [rec("b", [], ANALYSIS, brand_owned="strong")], {}, "x")
+    assert CM.quadrant(r).startswith("brand's own channel")
+
+
+def test_sponsored_light_testing_is_not_called_brand_supplied():
+    r = CM.rate_channel("S", [rec("s", ["sponsor_read", "bought_it_myself", "claims_not_sponsored"],
+                                  "It is nice. " * 40)], {}, "x")
+    q = CM.quadrant(r)
+    assert "brand-supplied" not in q
+
+
+def test_multi_vendor_affiliate_tier_list():
+    links = {"signal": "affiliate_links", "text": "https://vpnpro.sale/NordPass-Discount/x/, "
+                                                  "https://vpnpro.sale/RoboForm-Discount/x/"}
+    r = CM.rate_channel("V", [rec("v", [links, "affiliate_disclosure"], ANALYSIS,
+                                  title="Best password manager TIER LIST 2026")], {}, "x")
+    assert r["context"]["multi_vendor_affiliate_share"] == 1.0 and CM.quadrant(r).startswith("affiliate roundup")
+    one = {"signal": "affiliate_links", "text": "https://go.getproton.me/x, https://proton.me/pass"}
+    assert CM._affiliate_weight(rec("t", [one])) == 0.5

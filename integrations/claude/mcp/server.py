@@ -245,7 +245,8 @@ def reddit_close(target: str) -> str:
 
 
 @mcp.tool()
-def reddit_tally(target: str, names: list[str], alias: str | None = None, exclude_op: bool = False) -> str:
+def reddit_tally(target: str, names: list[str], alias: str | None = None, exclude_op: bool = False,
+                 near: str | None = None) -> str:
     """For each product name, among everything this window has seen (no page load): items, threads,
     users and independent_users (brand accounts excluded), polarity counts (recommend / complain /
     question / mention / mixed), raw_upvotes, recommend_upvotes and complain_upvotes, and linked
@@ -256,8 +257,11 @@ def reddit_tally(target: str, names: list[str], alias: str | None = None, exclud
     endorsement, and exclude_op drops the OP's own mentions entirely (OPs then count toward no users
     or threads). Each row's name is in `term`; polarity is read on the clause around each mention;
     `implied` lists recommendation-style replies that don't name the product, in threads whose
-    title names only it (kept apart from the counts). Use it in a landscape pass."""
-    return _reddit(reddit_tab.tally, target, names, aliases=alias, exclude_op=exclude_op)
+    title names only it (kept apart from the counts). Names that are everyday words ("pass", "Keeper")
+    get a `warning`; near="pass=gpg,gopass,password-store" counts a mention only with one of those words
+    close by. 1-3 letter names written lowercase match lowercase only ("op" is not "OP").
+    `repeat_promoters`: users recommending it in 3+ threads. Use it in a landscape pass."""
+    return _reddit(reddit_tab.tally, target, names, aliases=alias, exclude_op=exclude_op, near=near)
 
 
 @mcp.tool()
@@ -377,7 +381,7 @@ def youtube_channel(target: str, url: str) -> str:
 
 @mcp.tool()
 def youtube_tally(target: str, names: list[str], aliases: str | None = None,
-                  include_transcripts: bool = True) -> str:
+                  include_transcripts: bool = True, near: str | None = None) -> str:
     """For each candidate product name: channels and independent channels mentioning it among everything
     this window has seen. Search results are merged with loaded videos (title, description, links) and,
     when read, their transcripts. Whole names only (the longest name wins: "Core One" doesn't count
@@ -385,8 +389,9 @@ def youtube_tally(target: str, names: list[str], aliases: str | None = None,
     ("Bamboo" = Bambu). A channel isn't independent for a name if a video of it mentioning the name scores
     >= 0.6 sponsor bias (in a roundup, that brand's by_brand score), it is strongly brand-owned, or it is
     an AI-listicle / Amazon-influencer channel. Each row has examples with snippets and links.
+    near="pass=gpg,gopass" requires one of those words near each mention (for names that are everyday words).
     No page load. Use it to pick the top products in a landscape pass."""
-    return _reddit(youtube_tab.tally, target, names, aliases, include_transcripts)
+    return _reddit(youtube_tab.tally, target, names, aliases, include_transcripts, near)
 
 
 @mcp.tool()

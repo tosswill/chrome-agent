@@ -18,7 +18,7 @@ CLI (each command prints JSON):
                                                     results, going back to them first), read it, return
                                                     post + comments with permalinks and a promo_bias score
     reddit_tab.py back ID                           browser back (mouse back button), e.g. to the results
-    reddit_tab.py tally ID NAME [NAME ...] [--alias "Name=Alias1,Alias2; ..."] [--exclude-op]
+    reddit_tab.py tally ID NAME [NAME ...] [--alias "Name=Alias1,Alias2; ..."] [--near "Name=word,..."] [--exclude-op]
                                                     distinct users, polarity and upvotes behind each name,
                                                     among everything this window has seen (no page load)
     reddit_tab.py shot ID [--at post | --comment ID | --selector CSS] [--full] [--out-dir DIR | --out PATH]
@@ -205,9 +205,18 @@ KNOWN_BRANDS = {b.split()[0].lower() for b in TL.GARBLES} | {
     "bluetti", "goalzero", "bissell", "hoover", "tineco", "karcher", "vax", "kenmore", "miele",
     "sebo", "dreame", "roomba", "irobot", "eureka", "rugdoctor", "shark", "ninja", "vax", "tineco",
     "hatch", "yogasleep", "lectrofan", "snooz", "dreamegg", "momcozy", "nanit", "owlet",
+    "1password", "bitwarden", "vaultwarden", "proton", "protonpass", "dashlane", "nordpass", "roboform",
+    "lastpass", "enpass", "keepassxc", "keepass", "keepassium", "keepassdx", "strongbox", "gopass", "nordvpn",
 }
 # Words that look like names in title-case titles but are never a brand.
 COMMON = D.GENERIC | {
+    # Software category words ("Password Manager", "Self Hosted", "Family Sharing").
+    "password", "passwords", "manager", "managers", "passkey", "passkeys", "vault", "vaults", "sharing", "share",
+    "family", "families", "plan", "plans", "software", "service", "services", "agent", "agents", "cli", "ssh",
+    "secret", "secrets", "key", "keys", "browser", "extension", "extensions", "autofill", "linux", "macos", "mac",
+    "windows", "ios", "android", "iphone", "desktop", "mobile", "selfhosted", "self", "hosted", "hosting",
+    "open", "source", "opensource", "free", "subscription", "price", "pricing", "security", "privacy", "sync",
+    "alternative", "alternatives", "switch", "switching", "migrate", "migration", "import", "export", "managers",
     "printer", "printers", "printing", "print", "prints", "mic", "mics", "microphone", "camera", "cameras",
     "wireless", "system", "systems", "work", "help", "question", "advice", "recommendation", "recommendations",
     "need", "looking", "first", "beginner", "beginners", "home", "office", "studio", "doc", "show", "talk",
@@ -233,7 +242,7 @@ _ALLCAPS_STOP = {"OP", "PSA", "USB", "TV", "LED", "PLA", "PETG", "ABS", "TPU", "
                  "UPDATE", "RF", "UHF", "VHF", "XLR", "TRS", "BT", "HDMI", "VR", "AR", "XR", "MR", "OLED", "LCD",
                  "NFC", "GPS", "APP", "WIFI", "ISO", "RAW", "LOG", "MP", "MM", "IS", "IT", "OK", "NOT", "AND",
                  "THE", "FOR", "VS", "BUY", "WHY", "HOW", "WHAT", "BEST", "WORST", "HELP!", "ANY", "NO", "YES"}
-_WORD = re.compile(r"[A-Za-z][A-Za-z0-9+&'-]*")
+_WORD = re.compile(r"(?:\d+(?=[A-Za-z]{2}))?[A-Za-z][A-Za-z0-9+&'-]*")  # "1Password" is one word
 
 
 def _tok(w: str) -> str:
@@ -283,7 +292,14 @@ def brand_candidates(title: str = "", query: str = "", flair: str = "", explicit
             # "Bissell Big Green" -> "bissell" (a known brand leads; the rest is the model).
             spans = [(m.start(1), _WORD.findall(m.group(1))) for m in re.finditer(r'"([^"]+)"', text)]
             for m in re.finditer(r"(?:\b[A-Z][\w&+'-]*\s+)+[A-Z][\w&+'-]*\b", text):
-                spans.append((m.start(), _WORD.findall(m.group(0))))
+                ws = _WORD.findall(m.group(0))
+                if sum(1 for w in ws if re.search(r"[a-z][A-Z]|^\d", w) or _tok(w) in KNOWN_BRANDS) >= 1 and len(ws) >= 2 \
+                        and not any(m.start() >= q.start() and m.end() <= q.end() for q in re.finditer(r'"[^"]+"', text)):
+                    # "KeePassXC Strongbox", "Bitwarden Vaultwarden": separate products, not one name.
+                    for w in ws:
+                        spans.append((m.start(), [w]))
+                    continue
+                spans.append((m.start(), ws))
             for _, ws in spans:
                 run = _name_run(ws)
                 if run:
@@ -395,7 +411,47 @@ def subreddit_brand(sub: str, strong: set, weak: set = frozenset()) -> str | Non
 _ROLE_SUFFIX = re.compile(r"^(?P<b>[A-Za-z0-9][A-Za-z0-9_-]*?)(?:[_-]?(?P<k>support|official|team|staff|helpdesk|"
                           r"cares)|[_-](?P<k2>help|care|cs|rep|hq))$", re.I)
 _ROLE_PREFIX = re.compile(r"^(?P<k>official|team)[_-](?P<b>[A-Za-z0-9][A-Za-z0-9_-]{2,})$", re.I)
-_TEAM_FLAIR = re.compile(r"\b(team|staff|employee|official|support|rep|representative|community manager|"
+# "1PasswordCS-Casey", "Bitwarden_Support_Ana": brand + role + a person's name.
+_ROLE_MID = re.compile(r"^(?P<b>[A-Za-z0-9]{3,}?)[_-]?(?P<k>cs|support|team|staff|official|rep|care)[_-][A-Za-z]{2,15}$",
+                       re.I)
+_AFFIX_PRE = re.compile(r"^([A-Za-z0-9]{2,3})[_-][A-Za-z][\w-]{1,20}$")
+_AFFIX_SUF = re.compile(r"^[A-Za-z][\w-]{1,20}?[_-]([A-Za-z0-9]{2,3})$")
+
+
+def brand_abbrevs(brand: str | None) -> set[str]:
+    """Short forms staff put in usernames: "1password" -> {"1p"}; "bitwarden" -> {"bw"} via known splits."""
+    b = _tok(brand or "")
+    if not b:
+        return set()
+    out = set()
+    if b[0].isdigit() and len(b) > 1:
+        out.add(b[:2])  # 1Password -> 1P
+    for brand_k, parts in _BRAND_PARTS.items():
+        if b == brand_k:
+            out.add("".join(p[0] for p in parts))
+    return out
+
+
+# Brands written as one word but made of two ("Bit|warden" -> BW, "Eco|Flow" -> EF): staff use the initials.
+_BRAND_PARTS = {"bitwarden": ("bit", "warden"), "ecoflow": ("eco", "flow"), "lastpass": ("last", "pass"),
+                "nordpass": ("nord", "pass"), "roboform": ("robo", "form"), "protonpass": ("proton", "pass"),
+                "bambulab": ("bambu", "lab"), "keepassxc": ("kee", "pass"), "dashlane": ("dash", "lane")}
+
+
+def affixes_of(name: str) -> set[str]:
+    """The 2-3 character tags a username may carry before or after a separator ("Sam_BW" -> {"sam", "bw"},
+    "1P-Riley" -> {"1p"})."""
+    return {_tok(m.group(1)) for rx in (_AFFIX_PRE, _AFFIX_SUF) for m in [rx.match(name or "")] if m} - {""}
+
+
+def affix_of(name: str) -> str | None:
+    """A username's tag: the suffix when there is one ("Sam_BW" -> "bw"), else the prefix ("1P-Riley" -> "1p")."""
+    m = _AFFIX_SUF.match(name or "") or _AFFIX_PRE.match(name or "")
+    return (_tok(m.group(1)) or None) if m else None
+
+
+_TEAM_FLAIR = re.compile(r"\b(team|staff|employee|official|support|rep|representative|community (?:manager|moderator|"
+                         r"team|lead)|"
                          r"cm|engineer|developer|dev|founder|ceo|pr|marketing)\b", re.I)
 _EMAIL = re.compile(r"\b[\w.+-]+@((?:[a-z0-9-]+\.)+[a-z]{2,})\b", re.I)
 FREE_MAIL = {"gmail.com", "googlemail.com", "yahoo.com", "outlook.com", "hotmail.com", "live.com", "msn.com",
@@ -473,7 +529,8 @@ def staff_flair(flair: str, brands: set, weak: set = frozenset(), *, sub_brand: 
 
 
 def brand_account(author: str | None, flair: str | None = None, text: str = "", *, strong: set = frozenset(),
-                  weak: set = frozenset(), sub_brand: str | None = None, mod_names=()) -> dict | None:
+                  weak: set = frozenset(), sub_brand: str | None = None, mod_names=(),
+                  staff_affixes=frozenset()) -> dict | None:
     """Why `author` looks like a brand account, or None (R5). Returns {author, reason, brand, confidence}.
 
     - username = brand + support/official/team/staff/help (e3dsupport, BambuLab_Support, team-xreal)
@@ -485,8 +542,20 @@ def brand_account(author: str | None, flair: str | None = None, text: str = "", 
         return None
     brands = set(strong) | ({sub_brand} if sub_brand else set())
     is_mod = author.lower() in {m.lower() for m in mod_names}
-    m = _ROLE_SUFFIX.match(author) or _ROLE_PREFIX.match(author)
+    m = _ROLE_SUFFIX.match(author) or _ROLE_PREFIX.match(author) or _ROLE_MID.match(author)
     emails = company_emails(text)
+    tags = affixes_of(author) & (brand_abbrevs(sub_brand) | set(staff_affixes)) if sub_brand else set()
+    aff = sorted(tags)[0] if tags else None
+    if aff:
+        # "Sam_BW", "pat-bw", "1P_Jordan" in the brand's own subreddit: the brand's staff tag.
+        return {"author": author, "reason": f"username carries the brand's staff tag '{aff}'", "brand": sub_brand,
+                "confidence": "likely" if is_mod or aff in staff_affixes else "possible"}
+    if is_mod and sub_brand and len(sub_brand) >= 6:
+        n = _tok(author)
+        stem = sub_brand[:max(4, len(sub_brand) // 2)]
+        if n.endswith(stem) or n.startswith(stem):  # "xybitw" moderating r/Bitwarden
+            return {"author": author, "reason": f"moderator whose name carries '{stem}' (from {sub_brand})",
+                    "brand": sub_brand, "confidence": "likely"}
     if m:
         b = _tok(m.group("b"))
         if b and (b in brands or name_brand(b, brands, weak) or any(_shares_core(b, d) for d in emails)
@@ -633,6 +702,15 @@ _NAMED_GUIDE = re.compile(r"(?-i:\b(?:[A-Z][\w'&-]+\s+){1,5}(?:Guide|Roundup|Rou
                           r"Breakdown|Report|Checklist|Cheat Sheet))\b")
 _BIASED = re.compile(r"\b(?:i'?m|i am|i'?ll admit i'?m)\s+(?:a (?:bit|little)|slightly|kinda|somewhat|admittedly|"
                      r"probably|totally)?\s*biased\b|\bfull disclosure\b|\bi work (?:for|at|with)\b", re.I)
+# A product's own author or builder recommending it: "I'm the author of Bramble", "Full disclosure: I'm
+# building this into Decoy", "I made an app for this". Counted without needing a link.
+_BUILDER = re.compile(r"\b(?:i'?m|i am|we'?re|we are)\s+(?:the |one of the |a )?(?:author|creator|developer|dev|maker|"
+                      r"founder|co-?founder|builder|maintainer)s?\s+(?:of|behind)\b|\((?:i'?m|i am) the (?:author|dev|"
+                      r"developer|creator|maker)\)|\b(?:i'?m|i am|we'?re|we are) (?:building|developing|working on|making) "
+                      r"(?:this|it|an?|my own|our own|\w+ into)|\b(?:i|we) (?:built|made|created|wrote|developed|launched) "
+                      r"(?:an?|my own|our own|this|a little|a small|a free|an open[- ]source)\s+(?:\w+\s+){0,2}?"
+                      r"(?:app|tool|cli|extension|service|product|project|manager|vault|thing)\b|\bfull disclosure\b"
+                      r"[^.\n]{0,40}\b(?:i|we|my|our)\b|\bshameless (?:self[- ])?plug\b", re.I)
 _DOMAIN_TEXT = re.compile(r"\b(?:[a-z0-9-]+\.)+(?:com|net|org|io|co|shop|store|us|uk|ca|de)\b", re.I)
 _PITCH = [re.compile(p, re.I) for p in (
     r"\b\d{2,3}\s?°\s?[FC]\b", r"\b\d{3,6}\s?pa\b", r"\b\d{2,4}\s?w\b(?! ?ago)", r"\bkills? (?:99|bacteria|germs)",
@@ -661,7 +739,11 @@ def content_marketing(data: dict, comments: list[dict]) -> list[dict]:
     - dangling_roundup_reference: comments pointing to "this roundup / this breakdown" with no link
       left (Reddit strips some links), from 2+ users, or 1 that also recommends a product
     - spec_sheet_pitch: a non-OP comment written like ad copy (3+ spec or marketing phrases)
-    - self_declared_bias: "I'm a bit biased" / "I work for" plus a store link or domain"""
+    - self_declared_bias: "I'm a bit biased" / "I work for" plus a store link or domain
+    - builder_self_promotion: the product's author/builder pitching it ("I'm the author of X", "Full
+      disclosure: I'm building this into Y", "I made an app for this"), with or without a link
+    Utility accounts (AutoModerator, bots) never count."""
+    comments = [c for c in comments if not is_utility_account(c.get("author") or "", c.get("flair"))]
     hits = []
     host = data.get("author")
     url = data.get("url")
@@ -731,6 +813,19 @@ def content_marketing(data: dict, comments: list[dict]) -> list[dict]:
             hits.append({"signal": "spec_sheet_pitch", "weight": 0.1, "source": f"comment by u/{c.get('author')}",
                          "link": c.get("link"), "text": "Reads like ad copy: " + ", ".join(found[:4])})
             break
+    builders = []
+    for c in [{"author": host, "text": body, "links": data.get("links") or [], "link": url}] + comments:
+        mm = _BUILDER.search(c.get("text") or "")
+        if mm and not is_utility_account(c.get("author") or ""):
+            builders.append((c, mm))
+    if builders:
+        c, mm = builders[0]
+        t = c.get("text") or ""
+        n = len({b.get("author") for b, _ in builders})
+        hits.append({"signal": "builder_self_promotion", "weight": 0.25 if c.get("link") == url else 0.2,
+                     "source": "post" if c.get("link") == url else f"comment by u/{c.get('author')}",
+                     "link": c.get("link"),
+                     "text": t[max(0, mm.start() - 30):mm.end() + 60].strip() + (f" (+{n - 1} more users)" if n > 1 else "")})
     for c in comments + [{"author": host, "text": body, "links": data.get("links") or [], "link": url}]:
         t = c.get("text") or ""
         mm = _BIASED.search(t)
@@ -789,6 +884,13 @@ def promo_bias(data: dict, query: str = "", brands=()) -> dict:
     title = data.get("title") or ""
     body_brands = {t for t in (_tok(w) for w in _WORD.findall(data.get("body") or "")) if t in KNOWN_BRANDS}
     strong, weak = brand_candidates(title, query, data.get("flair") or "", set(brands) | body_brands)
+    if query:
+        # Query words name brands only when this thread mentions them: the last search may be about a
+        # different product ("apple" from an earlier search on an r/1Password thread).
+        own_strong = brand_candidates(title, "", data.get("flair") or "", set(brands) | body_brands)[0]
+        here = _tok(" ".join([title, data.get("body") or "", sub, data.get("flair") or ""] +
+                             [c.get("text") or "" for c in data.get("comments", [])[:60]]))
+        strong = {t for t in strong if t in own_strong or t in here}
     reviewers = _reviewer_names()
     strong, weak = strong - reviewers, weak - reviewers
     sub_brand = subreddit_brand(sub, strong, weak)
@@ -804,6 +906,15 @@ def promo_bias(data: dict, query: str = "", brands=()) -> dict:
                             mod_names=mod_names)
         if why and why["confidence"] == "likely":
             brand_mods.append({"name": m["name"], "flair": m.get("flair"), "reason": why["reason"]})
+    # Staff tags learned from confirmed brand moderators ("XY12-BW" -> "bw"), applied to everyone else.
+    affixes = {a for a in (affix_of(m["name"]) for m in brand_mods) if a}
+    if affixes:
+        for m in mods:
+            if m["name"] not in {b["name"] for b in brand_mods}:
+                why = brand_account(m["name"], m.get("flair"), "", strong=strong, weak=weak, sub_brand=sub_brand,
+                                    mod_names=mod_names, staff_affixes=affixes)
+                if why and why["confidence"] == "likely":
+                    brand_mods.append({"name": m["name"], "flair": m.get("flair"), "reason": why["reason"]})
     brand_mods.sort(key=lambda m: m["name"].lower())
     brand_mod_set = {m["name"].lower() for m in brand_mods}
 
@@ -829,7 +940,7 @@ def promo_bias(data: dict, query: str = "", brands=()) -> dict:
     for c in data.get("comments", []):
         a = c.get("author")
         why = brand_account(a, c.get("flair"), c.get("text", ""), strong=strong, weak=weak, sub_brand=sub_brand,
-                            mod_names=mod_names)
+                            mod_names=mod_names, staff_affixes=affixes)
         if a and a.lower() in brand_mod_set and not why:
             why = {"reason": "brand moderator", "confidence": "likely", "brand": None}
         if why and a not in seen_authors:
@@ -841,7 +952,7 @@ def promo_bias(data: dict, query: str = "", brands=()) -> dict:
             if h["signal"] in ("use_my_link_or_code", "affiliate_disclosure", "sponsor_read", "third_party_sponsor",
                                "review_unit"):
                 extra.append(h)
-        for h in D.link_hits(D.classify_links(c.get("links") or [])):
+        for h in ([] if is_utility_account(a or "", c.get("flair")) else D.link_hits(D.classify_links(c.get("links") or []))):
             if h["signal"] == "affiliate_links":
                 extra.append({**h, "source": f"comment by u/{a}", "link": c.get("link")})
     extra += content_marketing(data, data.get("comments", []))
@@ -1223,6 +1334,14 @@ def search(target: str, query: str | None = None, *, url: str | None = None,
         if off:
             page["note"] = (f"{len(off)} of {len(posts)} results aren't from r/{subreddit.removeprefix('r/')} "
                             f"(e.g. r/{off[0]}); Reddit may have widened the search.")
+    phrases = [p.lower() for p in re.findall(r'"([^"]+)"', query or "")]
+    if phrases and posts and len(posts) >= 4:
+        held = sum(1 for p in posts if any(ph in f"{p.get('title') or ''} {p.get('snippet') or ''}".lower()
+                                             for ph in phrases))
+        if held < len(posts) / 3:
+            page["note"] = ((page.get("note") + " ") if page.get("note") else "") + (
+                f"Only {held} of {len(posts)} results contain the quoted phrase: Reddit didn't keep it exact. "
+                "Skim titles before opening threads; a shorter query (brand + model, 1-2 words) works better.")
     stale = time_outside(posts, time_filter)
     if stale:
         page["note"] = ((page.get("note") + " ") if page.get("note") else "") + (
@@ -1627,21 +1746,24 @@ def thread(target: str, url: str, max_comments: int = 15, replies: int = 0, expa
 
 # Tally ----------------------------------------------------------------------------
 
-def tally(target: str, terms: list[str], aliases: str | dict | None = None, exclude_op: bool = False) -> dict:
+def tally(target: str, terms: list[str], aliases: str | dict | None = None, exclude_op: bool = False,
+          near: str | dict | None = None) -> dict:
     """Per name: threads, distinct users (independent = not brand accounts), polarity, and upvotes
     (raw, recommend-weighted, complaint-weighted) behind the mentions, among everything this window
     has seen, with linked snippets. Search-title-only hits are kept apart (search_only_threads); the
     OP counts once per thread (cross-posts collapse), and an OP's question isn't an endorsement."""
     full_id = SITE.resolve(target)
     seen = _claim(full_id).get("seen", [])
-    res = TL.tally(seen, terms, aliases=aliases, exclude_op=exclude_op)
+    res = TL.tally(seen, terms, aliases=aliases, exclude_op=exclude_op, near=near)
     res["note"] = ("Counts come only from what this window has seen. `users`/`independent_users` and the upvotes "
                    "count loaded posts and comments; search titles and snippets are in `search_only_threads`. "
                    "Brand accounts don't count as independent. recommend_upvotes counts only mentions that read as "
                    "recommendations; raw_upvotes are the comments' scores whatever they say. Polarity is a "
                    "heuristic read on the clause around each mention; read the examples. `implied` counts "
                    "recommendation-style top-level replies that don't name the product, in threads whose title "
-                   "names only that product (\"Love mine\"); it's kept apart from the counts. The name field is `term`.")
+                   "names only that product (\"Love mine\"); it's kept apart from the counts. The name field is `term`. "
+                   "`warning` marks names that are everyday words (\"pass\", \"Keeper\"): check the examples or use "
+                   "--near. `repeat_promoters` lists users recommending it in 3+ threads (one voice, not several).")
     return res
 
 
@@ -1761,10 +1883,12 @@ def _dispatch(cmd: str, args: list[str]):
         return back(args[0])
     if cmd == "tally":
         alias = "; ".join(_multi(args, "--alias")) or None
+        near = "; ".join(_multi(args, "--near")) or None
         exclude_op = bool(opt(args, "--exclude-op", False))
         if len(args) < 2:
-            raise Fail('usage: tally ID NAME [NAME ...] [--alias "Name=A,B; Other=C"] [--exclude-op]')
-        return tally(args[0], args[1:], aliases=alias, exclude_op=exclude_op)
+            raise Fail('usage: tally ID NAME [NAME ...] [--alias "Name=A,B; Other=C"] [--near "Name=word,word"] '
+                       '[--exclude-op]')
+        return tally(args[0], args[1:], aliases=alias, exclude_op=exclude_op, near=near)
     if cmd == "shot":
         out, out_dir, full = opt(args, "--out"), opt(args, "--out-dir"), bool(opt(args, "--full", False))
         at, comment, selector = opt(args, "--at"), opt(args, "--comment"), opt(args, "--selector")

@@ -221,8 +221,8 @@ def test_tally_wiring():
 
 def test_cli_alias_and_exclude_op(monkeypatch):
     got = {}
-    monkeypatch.setattr(R, "tally", lambda t, names, aliases=None, exclude_op=False: got.update(
-        t=t, names=names, aliases=aliases, exclude_op=exclude_op) or {})
+    monkeypatch.setattr(R, "tally", lambda t, names, aliases=None, exclude_op=False, near=None: got.update(
+        t=t, names=names, aliases=aliases, exclude_op=exclude_op, **({"near": near} if near else {})) or {})
     R._dispatch("tally", ["ID", "Core One", "MK4S", "--alias", "Core One=C1,Core 1", "--alias", "MK4S=MK 4S",
                           "--exclude-op"])
     assert got == {"t": "ID", "names": ["Core One", "MK4S"], "aliases": "Core One=C1,Core 1; MK4S=MK 4S",
@@ -527,3 +527,40 @@ def test_revealed_replies_and_duplicates():
     ids = [c["id"] for c in out]
     assert ids == ["a", "c", "d"] and out[1]["revealed"] and counts["revealed_replies"] == 1
     assert counts["skipped_duplicates"] == 1
+
+
+# --- password-manager run (2026-11-07) ------------------------------------------------------------
+
+def test_digit_brands_category_words_and_split_queries():
+    strong, _ = R.brand_candidates("Is 1Password worth it over Bitwarden?", "KeePassXC Strongbox sync", "")
+    assert {"1password", "bitwarden", "keepassxc", "strongbox"} <= strong and "keepassxcstrongbox" not in strong
+    assert R.brand_candidates("Password manager for family", "Password Manager family", "")[0] == set()
+    assert R.subreddit_brand("PasswordManagers", set()) is None
+
+
+def test_staff_tags_and_flair():
+    kw = dict(strong={"bitwarden"}, sub_brand="bitwarden")
+    assert R.brand_account("Sam_BW", None, "", mod_names=["Sam_BW"], **kw)["confidence"] == "likely"
+    assert R.brand_account("xybitw", None, "", mod_names=["xybitw"], **kw)["confidence"] == "likely"
+    assert R.brand_account("bob-uk", None, "", **kw) is None
+    kw = dict(strong={"1password"}, sub_brand="1password")
+    assert R.brand_account("1P_Jordan", None, "", mod_names=["1P_Jordan"], **kw)["confidence"] == "likely"
+    assert R.brand_account("1PasswordCS-Casey", None, "", **kw)["confidence"] == "likely"
+    assert R.brand_account("someone", "1Password Community Manager", "", **kw)["confidence"] == "likely"
+
+
+def test_builder_self_promotion_and_bots():
+    data = {"author": "op", "url": "u", "body": "Which manager?", "links": []}
+    comments = [{"author": "dev1", "text": "Hi, I'm the author of Bramble, it does this.", "link": "c1", "links": []},
+                {"author": "AutoModerator", "text": "Join our Discord", "link": "c2",
+                 "links": ["https://discord.gg/abc?ref=x"]}]
+    hits = R.content_marketing(data, comments)
+    assert [h["signal"] for h in hits] == ["builder_self_promotion"]
+    res = R.promo_bias({**data, "title": "Which manager?", "subreddit": "r/ClaudeCode", "comments": comments})
+    assert "affiliate_links" not in [e["signal"] for e in res["evidence"]]
+
+
+def test_stale_query_tokens_dropped():
+    res = R.promo_bias({"title": "1Password price increase", "subreddit": "r/1Password", "body": "", "comments": []},
+                       query="Apple Passwords family")
+    assert "apple" not in res["brand_tokens"] and "1password" in res["brand_tokens"]

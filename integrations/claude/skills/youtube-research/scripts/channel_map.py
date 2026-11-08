@@ -67,7 +67,7 @@ _PATTERNS = {
         r"(?:test|trial|run) (?:number|#)\s*\d|averaged|on average|repeat(?:ed)? (?:the|this) test|"
         r"to keep (?:it|things) fair|head[- ]to[- ]head)\b", re.I),
     "testing_language": re.compile(r"\b(?:we|i) (?:tested|measured|weighed|timed|compared|ran (?:each|the|a) test)\b"
-                                   r"|\b(?:test results?|(?:our|my) results|winner of this test|scored|ranked)\b", re.I),
+                                   r"|\b(?:test results?|(?:our|my) results|winner of this test)\b", re.I),
     "study_citation": re.compile(r"\b(?:a|one|this|the|that|another) (?:\d{4} )?(?:study|studies|paper|"
                                  r"clinical trial|meta-analysis)\b|\bresearch(?:ers)? (?:shows?|showed|found|suggests?)\b|"
                                  r"\bpublished in\b|\bpeer[- ]reviewed\b|\bamerican academy of pediatrics\b|"
@@ -96,6 +96,25 @@ _PATTERNS = {
                              r"\b(?:in|see) the (?:table|chart|graph) (?:below|above|here|on screen)\b", re.I),
     "long_term": re.compile(r"\b(?:\d+|six|several|a few) (?:months?|years?) (?:later|of use|in|of owning)\b"
                             r"|\blong[- ]term (?:test|review|update)\b|\bafter (?:a|one|two|\d+) years?\b", re.I),
+    # Software and services are judged by analysis, not measurement: audits and incident history, the
+    # security design, a stated set of criteria, features shown working on screen, plan limits checked.
+    "audit_or_incident": re.compile(r"\b(?:(?:security|third[- ]party|independent|code) audits?|audited by|"
+                                    r"pen(?:etration)?[- ]?test(?:s|ed|ing)?|cve-?\d*|bug bount(?:y|ies)|"
+                                    r"(?:data )?breach(?:es|ed)?|vulnerabilit(?:y|ies)|incident|soc ?2|iso ?27001|"
+                                    r"compromised|disclosed (?:a|the) (?:bug|flaw|vulnerability))\b", re.I),
+    "design_analysis": re.compile(r"\b(?:zero[- ]knowledge|end[- ]to[- ]end encrypt\w*|key derivation|argon2|"
+                                  r"pbkdf2|kdf|secret key|master (?:password|key)|threat model\w*|attack surface|"
+                                  r"open[- ]source(?:d)? (?:code|client|server)|source code|source[- ]available|"
+                                  r"self[- ]host\w*|encrypt\w* (?:locally|on (?:your|the) device)|client[- ]side)\b",
+                                  re.I),
+    "criteria": re.compile(r"\b(?:(?:our|my|the) criteria|criteria (?:we|i) (?:use|used|look)|what (?:we|i) look(?:ed)? "
+                           r"for|(?:we|i) (?:judged|graded|evaluated) (?:them|each|every)|threat model)\b", re.I),
+    "demo": re.compile(r"\b(?:let me show you|i'?ll show you|i'?m going to show you|as you can see (?:here|on)|"
+                       r"(?:i'?ll|let'?s|i'?m going to) (?:open|click|install|create|set up|log ?in|autofill|import|export)"
+                       r"|i (?:just )?(?:clicked|opened|installed|created|imported|exported|logged in))\b", re.I),
+    "plan_check": re.compile(r"\$\s?\d+(?:\.\d\d)?(?:\s*(?:a|per|/)\s*(?:year|month|yr|mo))|\bfree (?:plan|tier|"
+                             r"version) (?:only|limits?|includes?|lets|doesn'?t)\b|\b(?:limited|up) to \d+ (?:devices?|users?|"
+                             r"people|members?|passwords?)\b", re.I),
     "spec_sheet": re.compile(r"\b(?:according to the (?:manufacturer|brand|company)|features include|"
                              r"comes with (?:a|an) \d|boasts|the (?:manufacturer|brand) claims|on paper)\b", re.I),
 }
@@ -117,6 +136,12 @@ def video_independence(rec: dict) -> tuple[float, list[str]]:
     score, why = 5.0, []
     if rec.get("brand_owned"):
         sig.add("brand_owned_channel")
+    vendors, _ = _vendors(rec)
+    if len(vendors) >= 2:
+        # Paid links to several of the reviewed vendors ("NordPass-Discount", "roboform-v2"): the ranking
+        # earns from the vendors it ranks.
+        score -= 1.2
+        why.append(f"affiliate links to {len(vendors)} reviewed vendors")
     for s in sorted(sig):
         p = _INDEP_PENALTY.get(s, 0.0)
         if p:
@@ -189,8 +214,13 @@ def video_rigor(rec: dict) -> tuple[float | None, dict]:
     hits = rigor_hits(text)
     minutes = (rec.get("length_s") or 0) / 60 or max(1.0, len(text.split()) / 150)  # ~150 spoken words/min
     per10 = {k: v * 10 / minutes for k, v in hits.items()}
+    measured = hits["measurement"] + hits["named_test"] + hits["controlled_test"] + hits["instrument"]
+    # "I tested 6" with nothing measured or shown is a claim: it counts only a little.
+    tl_cap = 1.2 if measured >= 3 or hits["demo"] >= 2 else 0.3
+    analysis = (min(0.8, hits["audit_or_incident"] * 0.15) + min(0.8, per10["design_analysis"] * 0.1)
+                + min(0.4, hits["criteria"] * 0.2) + min(0.6, hits["demo"] * 0.1) + min(0.3, hits["plan_check"] * 0.1))
     score = (min(2.5, per10["measurement"] * 0.08) + min(1.2, per10["controlled_test"] * 0.4)
-             + min(1.2, per10["testing_language"] * 0.15)
+             + min(tl_cap, per10["testing_language"] * 0.15) + analysis
              + min(1.0, per10["named_test"] * 0.25)
              + min(1.0, hits["claim_check"] * 0.5) + min(1.0, per10["comparative"] * 0.3)
              + (0.6 if hits["data_table"] else 0) + min(0.6, hits["method"] * 0.3) + (0.6 if hits["instrument"] else 0)
@@ -203,10 +233,13 @@ def video_rigor(rec: dict) -> tuple[float | None, dict]:
     hands_on = (hits["testing_language"] + hits["named_test"] + hits["claim_check"] + hits["controlled_test"]
                 + hits["instrument"] + hits["method"] + hits["on_screen_table"] * 2)
     kind = None
+    if analysis >= 1.0 and measured < 3:
+        kind = "analysis review (design, audits, demos; nothing measured)"
     if hits["study_citation"] >= 2 and hands_on <= 1:
         # Numbers quoted from studies or guidelines: an evidence explainer, not product testing.
         score, kind = min(score, 1.5), "evidence explainer (cites research; no hands-on testing)"
-    return _clamp(score), {"hits": hits, "minutes": round(minutes, 1), **({"kind": kind} if kind else {})}
+    return _clamp(score), {"hits": hits, "minutes": round(minutes, 1), "analysis": round(analysis, 2),
+                           **({"kind": kind} if kind else {})}
 
 
 def topic_terms(topic: str) -> list[str]:
@@ -226,7 +259,12 @@ _TITLE_STOP = _STOP | {"this", "that", "these", "you", "your", "are", "is", "it"
                        "never", "ever", "ever", "all", "every", "one", "can", "will", "should", "get", "does", "did",
                        "not", "don", "dont", "after", "before", "from", "into", "about", "than", "they", "them",
                        "here", "there", "which", "who", "most", "more", "less", "good", "bad", "better", "buy",
-                       "2023", "2024", "2025", "2026", "2027", "shorts", "part", "episode", "video", "review"}
+                       "2023", "2024", "2025", "2026", "2027", "shorts", "part", "episode", "video", "review",
+                       "until", "mins", "min", "only", "just", "now", "still", "also", "even", "much", "many", "way",
+                       "ways", "use", "using", "need", "know", "thing", "things", "make", "want", "like", "everything",
+                       "nothing", "people", "time", "first", "last", "next", "real", "big", "way", "without", "over",
+                       "under", "out", "off", "back", "could", "would", "our", "my", "we", "i", "me", "here's",
+                       "what's", "it's", "you're", "don't", "stop", "start", "finally", "today", "years", "year"}
 
 
 def draft_covers(info: dict, n: int = 8) -> dict:
@@ -259,12 +297,15 @@ def _cited(cited: dict[str, int] | None, name: str | None, handle: str | None) -
     return 0
 
 
-def _rank(auth: float | None, conf: str, subs: int | None) -> float:
-    """Sort key for the map: authority discounted for a thin sample (one video) and tiny reach, so a
-    72-subscriber channel's one good video doesn't top channels known from several."""
+def _rank(auth: float | None, conf: str, subs: int | None, ind: float | None = None) -> float:
+    """Sort key for the map: authority discounted for a thin sample (one video), tiny reach and money
+    ties (independence), so a 72-subscriber channel's one good video, or a coupon-link tier list, doesn't
+    top independent channels known from several videos."""
     if auth is None:
         return 0.0
     k = {"high": 1.0, "medium": 0.9, "low": 0.75}[conf]
+    if ind is not None:
+        k *= 0.7 + 0.06 * ind
     if subs is not None and subs < 1000:
         k *= 0.8
     return round(auth * k, 2)
@@ -278,6 +319,49 @@ def authority(rigor: float | None, trust: int | None, fcs: float | None) -> floa
         return None
     t = min(1.0, (trust or 0) / 3) * 5
     return _clamp(0.7 * (rigor if rigor is not None else 1.5) + 0.3 * t + 0.4 * (fcs or 0))
+
+
+_RETAIL = re.compile(r"amzn\.|amazon\.|geni\.us|bestbuy|walmart|target\.com|homedepot|lowes|ebay|bhpho|"
+                     r"aliexpress|howl\.me|skimresources|sjv\.io|7tiv|avantlink|awin1|linksynergy", re.I)
+
+
+def _vendors(rec: dict) -> tuple[set[str], int]:
+    """(vendors, retailer link count) behind a video's affiliate links: a vendor is a reviewed brand's own
+    program ("vpnpro.sale/NordPass-Discount", "1password.partnerlinks.io"), named by a known brand in the URL,
+    else by its site name. Retailer links (Amazon, Best Buy) are counted apart."""
+    try:
+        import youtube_signals as S  # noqa: WPS433 (same folder)
+        brands = [(b, re.sub(r"[^a-z0-9]", "", b.lower())) for b in S.KNOWN_BRANDS]
+    except Exception:  # pragma: no cover
+        brands = []
+    vendors, retail = set(), 0
+    for x in _signals(rec):
+        if x.get("signal") not in ("affiliate_links", "brand_affiliate_links"):
+            continue
+        for u in re.findall(r"https?://[^\s,]+", str(x.get("text") or "")):
+            if _RETAIL.search(u):
+                retail += 1
+                continue
+            flat = re.sub(r"[^a-z0-9]", "", u.lower())
+            named = [b for b, a in brands if len(a) >= 4 and a in flat]
+            host = re.sub(r"^https?://(?:www\.)?", "", u.lower()).split("/")[0]
+            vendors.add(named[0] if named else ".".join(host.split(".")[-2:]))
+    return vendors, retail
+
+
+def _affiliate_weight(rec: dict) -> float:
+    """How affiliate-driven one video is: 1.0 for brand codes or commission shelves, affiliate links to
+    two or more vendors (a coupon-link tier list), or several retailer links; 0.5 for links to a single
+    vendor or "use my link" (an opt-in link to one service is not a coupon farm); 0 otherwise."""
+    sig = {x.get("signal"): x for x in _signals(rec)}
+    if sig.keys() & {"brand_code_or_link", "shopping_commission"}:
+        return 1.0
+    vendors, retail = _vendors(rec)
+    if len(vendors) >= 2 or retail >= 2:
+        return 1.0
+    if vendors or retail or sig.keys() & {"affiliate_links", "brand_affiliate_links", "use_my_link_or_code"}:
+        return 0.5
+    return 0.0
 
 
 def rate_channel(name: str, recs: list[dict], info: dict | None = None, topic: str = "",
@@ -301,8 +385,8 @@ def rate_channel(name: str, recs: list[dict], info: dict | None = None, topic: s
                           "rigor": g, **({"rigor_hits": gd["hits"]} if gd else {}),
                           "sponsor_score": r.get("sponsor_score")})
     with_tx = sum(1 for g in rig if g is not None)
-    aff = {"affiliate_links", "shopping_commission", "use_my_link_or_code", "brand_affiliate_links"}
-    aff_share = round(sum(1 for r in recs if aff & {x.get("signal") for x in _signals(r)}) / len(recs), 2) if recs else None
+    aff_share = round(sum(_affiliate_weight(r) for r in recs) / len(recs), 2) if recs else None
+    vendor_share = round(sum(1 for r in recs if len(_vendors(r)[0]) >= 2) / len(recs), 2) if recs else None
     fcs = focus(info.get("recent_titles") or [], topic)
     trust = _cited(cited, name, info.get("handle"))
     axes = {"independence": _mean(ind), "transparency": _mean(tra), "rigor": _mean(rig)}
@@ -313,19 +397,23 @@ def rate_channel(name: str, recs: list[dict], info: dict | None = None, topic: s
     if with_tx == 0:
         notes.append("rigor unknown: no transcript read for this channel")
     notes += sorted(set(notes_kind))
-    explainer = bool(recs) and len(notes_kind) >= max(1, len(recs) / 2)
+    explainer = bool(recs) and sum(1 for k in notes_kind if k.startswith("evidence")) >= max(1, len(recs) / 2)
+    analysis_kind = bool(recs) and sum(1 for k in notes_kind if k.startswith("analysis")) >= max(1, len(recs) / 2)
+    brand_own = any(r.get("brand_owned") in (True, "strong", "yes") for r in recs)
     if any(r.get("likely_ai_listicle") or r.get("amazon_influencer") for r in recs):
         notes.append("listicle or Amazon-influencer signals")
     return {
         "channel": name, "handle": info.get("handle"), "topic": topic, "date": date.today().isoformat(),
         "axes": axes, "authority": authority(axes["rigor"], trust, fcs),
-        "rank_score": _rank(authority(axes["rigor"], trust, fcs), conf, info.get("subscribers")),
+        "rank_score": _rank(authority(axes["rigor"], trust, fcs), conf, info.get("subscribers"), axes["independence"]),
         "context": {"subscribers": info.get("subscribers"), "focus": fcs, "trust_citations": trust,
-                    "affiliate_share": aff_share,
+                    "affiliate_share": aff_share, "multi_vendor_affiliate_share": vendor_share,
                     "recent_uploads_seen": len(info.get("recent_titles") or [])},
         "sample": {"videos": len(recs), "with_transcript": with_tx}, "confidence": conf,
         "reasons": {"independence": why_i[:6], "transparency": why_t[:6]},
-        "notes": notes, "videos": per_video, **({"kind": "evidence explainer"} if explainer else {}),
+        "notes": notes, "videos": per_video,
+        **({"kind": "brand channel"} if brand_own else {"kind": "evidence explainer"} if explainer else
+           {"kind": "analysis review"} if analysis_kind else {}),
         **({"covers_draft": draft_covers(info)} if info.get("recent_titles") else {}),
     }
 
@@ -337,6 +425,8 @@ _ROUNDUP = re.compile(r"\b(?:best|top \d+|top (?:five|ten)|\d+ best|tested \d+|e
 def quadrant(r: dict) -> str:
     a = r.get("axes") or {}
     rig, ind = a.get("rigor"), a.get("independence")
+    if r.get("kind") == "brand channel":
+        return "brand's own channel (vendor material, not a review)"
     if r.get("kind") == "evidence explainer":
         return "evidence explainer (cites research, doesn't test products)"
     if rig is None or ind is None:
@@ -344,12 +434,20 @@ def quadrant(r: dict) -> str:
     hi_r, hi_i = rig >= 3, ind >= 3.5
     if not hi_r and ind < 2.5:
         return "promotional / shallow"
-    if rig < 1.5 and ((r.get("context") or {}).get("affiliate_share") or 0) >= 0.8:
+    ctx = r.get("context") or {}
+    if (rig < 1.5 and (ctx.get("affiliate_share") or 0) >= 0.8) or \
+            (rig < 3 and (ctx.get("multi_vendor_affiliate_share") or 0) >= 0.5):
         titles = [v.get("title") or "" for v in r.get("videos") or []]
         roundup = sum(1 for t in titles if _ROUNDUP.search(t)) >= max(1, len(titles) / 2)
         return "affiliate roundup (light testing)" if roundup else "affiliate-led review (light testing)"
+    analysis = r.get("kind") == "analysis review"
     if not hi_r and not hi_i and ind >= 2.5:
-        return "brand-supplied, light testing"
+        why = " ".join((r.get("reasons") or {}).get("independence") or [])
+        if re.search(r"review_unit|brand_giveaway", why):
+            return "brand-supplied, light testing"
+        return "sponsored analysis" if analysis else "sponsored, light testing"
+    if analysis and hi_i and not hi_r:
+        return "independent analysis (design, audits, demos)"
     return {(True, True): "trusted tester", (True, False): "rigorous but brand-tied",
             (False, True): "independent, light testing", (False, False): "promotional / shallow"}[(hi_r, hi_i)]
 

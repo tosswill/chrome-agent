@@ -37,7 +37,7 @@ CLI (each command prints JSON):
     youtube_tab.py shot ID [--selector CSS] [--full] [--out-dir DIR | --out PATH]   visible page
                        content (or one element), with ads_in_view
     youtube_tab.py channel ID URL|@handle                  channel header + recent uploads
-    youtube_tab.py tally ID NAME [NAME ...] [--alias "Name=Alt,Alt2; Other=..."] [--no-transcripts]
+    youtube_tab.py tally ID NAME [NAME ...] [--alias "Name=Alt,Alt2; Other=..."] [--near "Name=word,..."] [--no-transcripts]
                        channels and independent channels mentioning each name among everything this
                        window has seen (search results merged with loaded videos, their descriptions,
                        links and read transcripts), with snippets and links. No page load.
@@ -902,7 +902,8 @@ def open_window(wait_seconds: float = 0) -> dict:
 def _flag_result(r: dict) -> dict:
     """Y3/Y17 flags on a search result."""
     handle = _handle_of(r.get("channel_url"))
-    lst, why = S.likely_ai_listicle(r.get("title") or "", r.get("channel"), handle)
+    lst, why = S.likely_ai_listicle(r.get("title") or "", r.get("channel"), handle,
+                                    length_s=S._len_s(r.get("length")))
     if lst:
         r["likely_ai_listicle"], r["listicle_reasons"] = True, why
     amz, why = S.amazon_influencer(r.get("title") or "")
@@ -971,6 +972,12 @@ def sponsor_bias(data: dict, transcript_hits: list[dict] | None = None) -> dict:
     page = D.brand_adjust(page, subject, ch, title=data.get("title") or "", handle=data.get("handle"),
                           brand_domains=[u for u in data.get("description_links") or () if u not in own_links])
     extra = D.brand_adjust(list(transcript_hits or []), subject, None)
+    owner = S.brand_channel(ch, data.get("handle"), own)
+    if owner and not any(h["signal"] == "brand_owned_channel" and h.get("brand_owned") == "strong" for h in page):
+        # The channel is the brand itself ("Bitwarden", "@1Password"), whatever the title says.
+        page = [h for h in page if h["signal"] != "brand_owned_channel"]
+        page.insert(0, {"signal": "brand_owned_channel", "weight": 1.0, "source": "channel", "brand_owned": "strong",
+                        "brand": owner, "text": f"Channel '{ch}' is {owner}'s own channel"})
     every = page + extra
     third = [h for h in every if h["signal"] == "third_party_sponsor"]
     brand_reads = [h for h in every if h["signal"] == "sponsor_read" and h.get("sponsor")]
@@ -1037,8 +1044,9 @@ def video(target: str, url: str) -> dict:
     if data:
         data["disclosure"] = D.merge_link_classes(data.get("disclosure"), D.classify_links(
             data.get("description_links") or [], channel=data.get("channel"), description=data.get("description") or "",
-            handle=data.get("handle")))
-        lst, why = S.likely_ai_listicle(data.get("title") or "", data.get("channel"), data.get("handle"))
+            handle=data.get("handle"), brands=S.KNOWN_BRANDS))
+        lst, why = S.likely_ai_listicle(data.get("title") or "", data.get("channel"), data.get("handle"),
+                                        length_s=data.get("length_s"))
         if lst:
             data["likely_ai_listicle"], data["listicle_reasons"] = True, why
         amz, why = S.amazon_influencer(data.get("title") or "", data.get("description") or "",
@@ -1460,7 +1468,8 @@ def channel(target: str, url: str) -> dict:
     return {"page": page, "channel": ch}
 
 
-def tally(target: str, terms: list[str], aliases: str | dict | None = None, include_transcripts: bool = True) -> dict:
+def tally(target: str, terms: list[str], aliases: str | dict | None = None, include_transcripts: bool = True,
+          near: str | dict | None = None) -> dict:
     """For each candidate name: channels and independent channels mentioning it among everything this
     window has seen (search results merged with loaded videos: titles, descriptions, links and, when read,
     transcripts). Whole-name matching (longest name wins), aliases and built-in caption garbles, a snippet
@@ -1476,7 +1485,8 @@ def tally(target: str, terms: list[str], aliases: str | dict | None = None, incl
         def indep(r, term=term):
             return T.default_independence({**r, "sponsor_score": S.score_for_term(r, term)}, 0.6)
         out = T.tally(recs, [term], aliases=aliases, group="channel", group_label="channels", separate_search=False,
-                      include_transcripts=include_transcripts, independence=indep, group_flags=flags)
+                      include_transcripts=include_transcripts, independence=indep, group_flags=flags, near=near,
+                      compete=terms)
         for row in out["tally"]:
             row["videos"] = row.pop("threads")
             for k in ("raw_upvotes", "recommend_upvotes", "complain_upvotes"):
@@ -1678,10 +1688,14 @@ def _dispatch(cmd: str, args: list[str]):
         aliases = []
         while "--alias" in args:
             aliases.append(str(opt(args, "--alias")))
+        near = []
+        while "--near" in args:
+            near.append(str(opt(args, "--near")))
         no_tr = bool(opt(args, "--no-transcripts", False))
         if len(args) < 2:
-            raise Fail('usage: tally ID NAME [NAME ...] [--alias "Name=Alt,Alt2; Other=..."] [--no-transcripts]')
-        return tally(args[0], args[1:], "; ".join(aliases) or None, not no_tr)
+            raise Fail('usage: tally ID NAME [NAME ...] [--alias "Name=Alt,Alt2; Other=..."] [--near "Name=word,word"] '
+                       '[--no-transcripts]')
+        return tally(args[0], args[1:], "; ".join(aliases) or None, not no_tr, "; ".join(near) or None)
     if cmd == "transcript":
         ctx = int(opt(args, "--context", 0))
         frm, to, out_dir = opt(args, "--from"), opt(args, "--to"), opt(args, "--out-dir")

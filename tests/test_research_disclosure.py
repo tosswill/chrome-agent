@@ -259,3 +259,43 @@ def test_plain_amazon_share_link_is_not_affiliate():
     out = D.classify_links(["https://www.amazon.com/dp/B0ABC12345?ref=ppx_pop_mob_ap_share",
                             "https://www.amazon.com/dp/B0ABC12345?tag=creator-20", "https://amzn.to/3abc"])
     assert out["affiliate_links"] == ["https://www.amazon.com/dp/B0ABC12345?tag=creator-20", "https://amzn.to/3abc"]
+
+
+# --- password-manager run (2026-11-07) ------------------------------------------------------------
+
+def _sig(text, subject="Best password manager 2026"):
+    return [h["signal"] for h in D.scan_text(text, "d", subject=subject)]
+
+
+def test_no_affiliate_links_is_a_denial_not_a_disclosure():
+    assert _sig("We don't have any affiliate links.") == ["claims_not_sponsored"]
+    assert "affiliate_disclosure" in _sig("This description contains affiliate links.")
+
+
+def test_membership_early_access_is_not_a_review_unit():
+    assert "review_unit" not in _sig("Membership gets you early access to videos.")
+    assert "review_unit" in _sig("We got early access to the new model for this review.", "Canon R5 II review")
+
+
+def test_our_link_affiliated_and_ownership():
+    assert "use_my_link_or_code" in _sig("Using our link can save you even more.")
+    s = _sig("We are affiliated but not sponsored.")
+    assert "affiliate_disclosure" in s and "claims_not_sponsored" not in s
+    assert "ownership_tie" in _sig("VPNpro is owned by Mediatech, whose investors are the founders of Nord Security.")
+
+
+def test_in_category_sponsor_is_brand_money():
+    pm = D.scan_text("This video is sponsored by 1Password.", "d", subject="Best password manager 2026")
+    assert pm[0]["signal"] == "sponsor_read" and pm[0].get("in_category")
+    cam = D.scan_text("This video is sponsored by 1Password.", "d", subject="Sony A7 IV review")
+    assert cam[0]["signal"] == "third_party_sponsor"
+
+
+def test_own_domain_redirects_are_affiliate_links():
+    c = D.classify_links(["https://vpnpro.sale/NordPass-Discount/x/", "https://vpnpro.com/about",
+                          "https://1password.partnerlinks.io/someone"], channel="VPNpro", handle="@vpnpro")
+    assert c["own_redirect_links"] == ["https://vpnpro.sale/NordPass-Discount/x/"]
+    assert "https://1password.partnerlinks.io/someone" in c["affiliate_links"]
+    assert c["self_promotion_links"] == ["https://vpnpro.com/about"]
+    c = D.classify_links(["https://cyberlabgo.com/roboform-v2", "https://cyberlab.com/"], channel="Cyber Lab")
+    assert c["affiliate_links"] == ["https://cyberlabgo.com/roboform-v2"]
