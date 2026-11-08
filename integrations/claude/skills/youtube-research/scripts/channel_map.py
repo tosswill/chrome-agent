@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 from datetime import date, datetime
 from pathlib import Path
 
@@ -35,6 +36,9 @@ _INDEP_PENALTY = {
     "brand_code_or_link": 1.0, "brand_affiliate_links": 1.0, "brand_giveaway": 1.0, "campaign_tracking": 0.5,
     "use_my_link_or_code": 0.5, "affiliate_links": 0.3, "shopping_commission": 0.3, "third_party_sponsor": 0.3,
     "giveaway": 0.3, "rented_or_borrowed": 0.0, "self_promotion": 0.1,
+    # The creator built, sells or works for a product in the field ("the app I work on", their own
+    # Obsidian writing system): not money from a sponsor, but a stake in the verdict.
+    "creator_product": 1.5, "gear_affiliate_links": 0.0, "ownership_tie": 1.0,
 }
 _INDEP_BONUS = {"bought_it_myself": 0.5, "bought_something_myself": 0.3, "claims_not_sponsored": 0.3,
                 "editorial_independence": 0.6}
@@ -105,16 +109,29 @@ _PATTERNS = {
     "design_analysis": re.compile(r"\b(?:zero[- ]knowledge|end[- ]to[- ]end encrypt\w*|key derivation|argon2|"
                                   r"pbkdf2|kdf|secret key|master (?:password|key)|threat model\w*|attack surface|"
                                   r"open[- ]source(?:d)? (?:code|client|server)|source code|source[- ]available|"
-                                  r"self[- ]host\w*|encrypt\w* (?:locally|on (?:your|the) device)|client[- ]side)\b",
+                                  r"self[- ]host\w*|encrypt\w* (?:locally|on (?:your|the) device)|client[- ]side|"
+                                  # apps and editors: storage, format, portability, platform, extensibility
+                                  r"plain[- ]text (?:files?|format)|(?:markdown|\.md|local) files?|file format|"
+                                  r"proprietary (?:format|database|library)|(?:vendor )?lock[- ]?in|"
+                                  r"open[- ]source (?:app|project|alternative|license)|electron|native (?:mac |linux )?app|"
+                                  r"(?:sqlite|internal|local) database|works offline|offline[- ]first|"
+                                  r"sync(?:s|ing)? (?:via|through|over|across)|export(?:s|ing)? (?:to|as) (?:pdf|html|docx|"
+                                  r"markdown|word)|plugin (?:system|ecosystem|api)|(?:an|the|its) api|vim (?:mode|bindings)|"
+                                  r"wysiwyg|live preview|split (?:view|pane|preview)|keyboard shortcuts?|cross[- ]platform)\b",
                                   re.I),
     "criteria": re.compile(r"\b(?:(?:our|my|the) criteria|criteria (?:we|i) (?:use|used|look)|what (?:we|i) look(?:ed)? "
                            r"for|(?:we|i) (?:judged|graded|evaluated) (?:them|each|every)|threat model)\b", re.I),
-    "demo": re.compile(r"\b(?:let me show you|i'?ll show you|i'?m going to show you|as you can see (?:here|on)|"
-                       r"(?:i'?ll|let'?s|i'?m going to) (?:open|click|install|create|set up|log ?in|autofill|import|export)"
-                       r"|i (?:just )?(?:clicked|opened|installed|created|imported|exported|logged in))\b", re.I),
+    "demo": re.compile(r"\b(?:let me show you|i'?ll show you|i'?m going to show you|i (?:want|wanna) to show you|"
+                       r"as you can see (?:here|on)|(?:i'?ll|let'?s|let me|i'?m (?:going to|gonna)) (?:open|click|tap|type|"
+                       r"select|highlight|drag|paste|run|choose|swipe|install|create|set up|log ?in|autofill|import|"
+                       r"export|add|toggle|switch (?:over|to))|if (?:i|you) (?:tap|click|press|select|type|hit|drag) "
+                       r"(?:that|this|on|the|it|here)|let'?s see (?:if|how|what) (?:this|it|that) (?:works|does|looks)|"
+                       r"just like that,? it (?:worked|works)|i (?:just )?(?:clicked|tapped|opened|installed|created|"
+                       r"imported|exported|logged in|typed|pasted))\b", re.I),
     "plan_check": re.compile(r"\$\s?\d+(?:\.\d\d)?(?:\s*(?:a|per|/)\s*(?:year|month|yr|mo))|\bfree (?:plan|tier|"
                              r"version) (?:only|limits?|includes?|lets|doesn'?t)\b|\b(?:limited|up) to \d+ (?:devices?|users?|"
-                             r"people|members?|passwords?)\b", re.I),
+                             r"people|members?|passwords?)\b|\b(?:one[- ]time (?:purchase|price|payment|fee)|lifetime "
+                             r"licen[cs]e|(?:monthly|yearly|annual) subscription|free (?:and open[- ]source|trial))\b", re.I),
     "spec_sheet": re.compile(r"\b(?:according to the (?:manufacturer|brand|company)|features include|"
                              r"comes with (?:a|an) \d|boasts|the (?:manufacturer|brand) claims|on paper)\b", re.I),
 }
@@ -142,6 +159,10 @@ def video_independence(rec: dict) -> tuple[float, list[str]]:
         # earns from the vendors it ranks.
         score -= 1.2
         why.append(f"affiliate links to {len(vendors)} reviewed vendors")
+    if "third_party_sponsor" in sig and not sig & {"sponsor_read", "ad_tag", "brand_code_or_link", "brand_affiliate_links"}:
+        # YouTube's paid-promotion label for an unrelated sponsor (a budgeting app in a notes-app video)
+        # says nothing about the products reviewed.
+        sig.discard("paid_promotion_label")
     for s in sorted(sig):
         p = _INDEP_PENALTY.get(s, 0.0)
         if p:
@@ -218,7 +239,7 @@ def video_rigor(rec: dict) -> tuple[float | None, dict]:
     # "I tested 6" with nothing measured or shown is a claim: it counts only a little.
     tl_cap = 1.2 if measured >= 3 or hits["demo"] >= 2 else 0.3
     analysis = (min(0.8, hits["audit_or_incident"] * 0.15) + min(0.8, per10["design_analysis"] * 0.1)
-                + min(0.4, hits["criteria"] * 0.2) + min(0.6, hits["demo"] * 0.1) + min(0.3, hits["plan_check"] * 0.1))
+                + min(0.4, hits["criteria"] * 0.2) + min(1.0, max(hits["demo"] * 0.1, per10["demo"] * 0.08)) + min(0.3, hits["plan_check"] * 0.1))
     score = (min(2.5, per10["measurement"] * 0.08) + min(1.2, per10["controlled_test"] * 0.4)
              + min(tl_cap, per10["testing_language"] * 0.15) + analysis
              + min(1.0, per10["named_test"] * 0.25)
@@ -235,6 +256,7 @@ def video_rigor(rec: dict) -> tuple[float | None, dict]:
     kind = None
     if analysis >= 1.0 and measured < 3:
         kind = "analysis review (design, audits, demos; nothing measured)"
+        score = min(score, 2.9)  # analysis alone stays below "tested" (3+)
     if hits["study_citation"] >= 2 and hands_on <= 1:
         # Numbers quoted from studies or guidelines: an evidence explainer, not product testing.
         score, kind = min(score, 1.5), "evidence explainer (cites research; no hands-on testing)"
@@ -354,12 +376,14 @@ def _affiliate_weight(rec: dict) -> float:
     two or more vendors (a coupon-link tier list), or several retailer links; 0.5 for links to a single
     vendor or "use my link" (an opt-in link to one service is not a coupon farm); 0 otherwise."""
     sig = {x.get("signal"): x for x in _signals(rec)}
-    if sig.keys() & {"brand_code_or_link", "shopping_commission"}:
+    if "brand_code_or_link" in sig:
         return 1.0
     vendors, retail = _vendors(rec)
     if len(vendors) >= 2 or retail >= 2:
         return 1.0
-    if vendors or retail or sig.keys() & {"affiliate_links", "brand_affiliate_links", "use_my_link_or_code"}:
+    # A commission shelf alone is often the creator's gear (a notes-app video tagging its camera): half.
+    if vendors or retail or sig.keys() & {"affiliate_links", "brand_affiliate_links", "use_my_link_or_code",
+                                          "shopping_commission"}:
         return 0.5
     return 0.0
 
@@ -429,6 +453,9 @@ def quadrant(r: dict) -> str:
         return "brand's own channel (vendor material, not a review)"
     if r.get("kind") == "evidence explainer":
         return "evidence explainer (cites research, doesn't test products)"
+    why_all = " ".join((r.get("reasons") or {}).get("independence") or [])
+    if ind is not None and "creator_product" in why_all and ind < 4:
+        return "creator-tied (own product, course or employer in the field)"
     if rig is None or ind is None:
         return "unrated (needs a transcript)" if ind is not None else "unrated"
     hi_r, hi_i = rig >= 3, ind >= 3.5
@@ -454,7 +481,13 @@ def quadrant(r: dict) -> str:
 
 # --- registry -----------------------------------------------------------------------------------
 def _key(name: str | None, handle: str | None) -> str:
-    return (handle or name or "").lower().lstrip("@").replace(" ", "")
+    # NFKC folds look-alike characters: "Jane - j3․dev" (one-dot leader) and "Jane - j3.dev" are one channel.
+    return unicodedata.normalize("NFKC", handle or name or "").casefold().lstrip("@").replace(" ", "")
+
+
+def _name_key(name: str | None) -> str:
+    """A display name for matching only: folded, letters and digits ("Jane - j3.dev" -> "janej3dev")."""
+    return re.sub(r"[\W_]+", "", _key(name, None))
 
 
 def registry_load(path: Path) -> dict:
@@ -484,9 +517,10 @@ def registry_find(data: dict, channel: str, handle: str | None = None) -> tuple[
         for key, row in rows.items():
             if _key(None, row.get("handle")) == h or (not row.get("handle") and key == h):
                 return key, row
-    k = _key(channel, None)
+    k, nk = _key(channel, None), _name_key(channel)
     for key, row in rows.items():
-        if key == k or _key(row.get("name"), None) == k or _key(None, row.get("handle")) == k:
+        if key == k or _key(row.get("name"), None) == k or _key(None, row.get("handle")) == k or (
+                nk and _name_key(row.get("name")) == nk):
             if handle and row.get("handle") and _key(None, row["handle"]) != _key(None, handle):
                 continue
             return key, row
@@ -543,7 +577,7 @@ def registry_dedupe(data: dict) -> int:
                 continue
             o = rows[other]
             same_handle = row.get("handle") and _key(None, row["handle"]) == _key(None, o.get("handle"))
-            same_name = _key(row.get("name"), None) == _key(o.get("name"), None) and \
+            same_name = bool(_name_key(row.get("name"))) and _name_key(row.get("name")) == _name_key(o.get("name")) and \
                 (not row.get("handle") or not o.get("handle"))
             if same_handle or same_name:
                 keep, drop = (key, other) if row.get("handle") or not o.get("handle") else (other, key)

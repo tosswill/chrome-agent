@@ -106,26 +106,54 @@ _YEAR = re.compile(r"(?<!\d)(20\d\d)(?!\d)")
 _FARM_NAME = re.compile(r"(explain(?:er|ed|s)?|helper|how\s*to|howto|tutorials?|hard[\s-]*reset|instant|"
                         r"\bask\s+[a-z]+|tips\s*(?:and|&)\s*tricks|simplified|tech\s*(?:tips|help|fix)|\bwiz\b|twiz|"
                         r"\bfix(?:es|ed)?\b|answers?|solutions?)", re.I)
-_VS_TITLE = re.compile(r"\bvs\.?\b|\bversus\b|which (?:is|one is|should you|to choose)|is (?:it|\w+) (?:worth|better)",
+_VS_TITLE = re.compile(r"\bvs\.?\b(?!\s*code\b)|\bversus\b|which (?:is|one is|should you|to choose)|is (?:it|\w+) (?:worth|better)",
                        re.I)
+
+
+# SEO template fillers seen on farm comparison clips ("(2026 Guide)", "Review and Overview", "Which one
+# is better in 2026?").
+_SEO_FILLER = re.compile(r"\(\s*20\d\d\s+guide\s*\)|review and overview|which (?:one )?is better|which to choose|"
+                         r"full comparison|complete (?:guide|comparison)|everything you need to know|honest review|"
+                         r"\bin 20\d\d\??\s*$", re.I)
+_MULTI_VS = re.compile(r"\bvs\.?\b(?!\s*code\b).+\bvs\.?\b(?!\s*code\b)", re.I)
+
+
+def upload_year(age: str | None = None, published: str | None = None, today: date | None = None) -> int | None:
+    """The upload year from an ISO `published` date or a search result's relative `age` ("2y ago")."""
+    if published and re.match(r"\d{4}-", published):
+        return int(published[:4])
+    m = re.match(r"\s*(\d+)\s*(y|yr|year|mo|month|w|week|d|day|h|hour)s?\b", age or "", re.I)
+    if not m:
+        return None
+    n, u = int(m.group(1)), m.group(2).lower()
+    days = n * {"y": 365, "yr": 365, "year": 365, "mo": 30, "month": 30, "w": 7, "week": 7}.get(u, 1 if u in ("d", "day") else 0)
+    from datetime import timedelta
+    return ((today or date.today()) - timedelta(days=days)).year
 
 
 def likely_ai_listicle(title: str = "", channel: str | None = None, handle: str | None = None,
                        uploads: int | None = None, year: int | None = None,
-                       length_s: int | None = None) -> tuple[bool, list[str]]:
+                       length_s: int | None = None, uploaded: int | None = None) -> tuple[bool, list[str]]:
     """Heuristic: future-year channel names/handles or titles, generic "Picks / Reviews Club / Top5Lab"
     channel names, "Top 10" titles, very high upload counts, how-to farm names ("Wise Explainer",
-    "HelperMan") and 1-3 minute "X vs Y" clips. One strong reason, or two weak ones."""
+    "HelperMan"), "X vs Y" clips too short to compare anything (under 3 minutes, or under 5 with a
+    year or SEO filler in the title), year-stamped "X vs Y (2026 Guide)" template titles, three-way "X vs Y vs Z" titles, and a
+    title year later than the upload year (`uploaded`; retitled for search). One strong reason, or two weak ones."""
     year = year or date.today().year
     strong, weak = [], []
     name = f"{channel or ''} {handle or ''}"
+    t = title or ""
+    vs = bool(_VS_TITLE.search(t))
+    years = [int(y) for y in _YEAR.findall(t)]
     if any(int(y) > year for y in _YEAR.findall(name)):
         strong.append("future year in channel name/handle")
     if _LISTICLE_NAME.search(name.replace("@", " ")) and not detect_brands(name):  # "Hoover Product Guides"
         strong.append("generic listicle channel name")
-    if any(int(y) > year for y in _YEAR.findall(title or "")):
+    if any(y > year for y in years):
         weak.append("future year in title")
-    if _LISTICLE_TITLE.search(title or ""):
+    elif uploaded and any(y > uploaded for y in years):
+        weak.append(f"title year later than the upload ({uploaded})")
+    if _LISTICLE_TITLE.search(t):
         weak.append("'Top N' title")
     if uploads and uploads >= 1500:
         weak.append(f"very high upload count ({uploads})")
@@ -133,8 +161,14 @@ def likely_ai_listicle(title: str = "", channel: str | None = None, handle: str 
         weak.append("deals channel name")
     if _FARM_NAME.search(name.replace("@", " ")) and not detect_brands(name):
         weak.append("how-to farm channel name")
-    if length_s is not None and 0 < length_s < 200 and _VS_TITLE.search(title or ""):
+    if vs and length_s is not None and 0 < length_s < 200:
         weak.append("under-3-minute 'X vs Y' clip")
+    elif vs and length_s is not None and 0 < length_s < 300 and (years or _SEO_FILLER.search(t)):
+        weak.append("under-5-minute 'X vs Y' clip")
+    if vs and (years or _SEO_FILLER.search(t)) and (_SEO_FILLER.search(t) or re.search(r"\(\s*20\d\d\s*\)", t)):
+        weak.append("SEO-template 'X vs Y (year)' title")
+    if _MULTI_VS.search(t) and (length_s is None or length_s < 900):
+        weak.append("three-way 'X vs Y vs Z' title")
     flagged = bool(strong) or len(weak) >= 2
     return flagged, (strong + weak) if flagged else []
 
@@ -245,18 +279,34 @@ KNOWN_BRANDS = [
     "1Password", "Bitwarden", "Vaultwarden", "Proton", "Dashlane", "NordPass", "NordVPN", "Keeper Security",
     "RoboForm", "LastPass", "Enpass", "KeePassXC", "KeePass", "Strongbox", "Bitdefender", "Norton", "Surfshark",
     "ExpressVPN",
+    # writing, notes and Markdown apps (everyday-word names like Bear, Craft, Drafts need the app context)
+    "Obsidian", "Typora", "iA Writer", "Ulysses", "Logseq", "Zettlr", "Joplin", "MarkText", "MacDown", "MarkEdit",
+    "Notion", "Evernote", "Notesnook", "Trilium", "Standard Notes", "Anytype", "AFFiNE", "AppFlowy", "SiYuan",
+    "Capacities", "Heptabase", "Tana", "RemNote", "Craft Docs", "Bear Notes", "Visual Studio Code", "VSCodium",
+    "Neovim", "Zed", "Sublime Text", "BBEdit", "Emacs", "Setapp", "Raycast",
 ]
 # Software/service brands that are also common sponsors (a NordVPN read in a camera review): they count as a
 # video's brands only when the title names them or the title is about their category.
 SERVICE_BRANDS = {"1Password", "Bitwarden", "Vaultwarden", "Proton", "Dashlane", "NordPass", "NordVPN",
                   "Keeper Security", "RoboForm", "LastPass", "Enpass", "KeePassXC", "KeePass", "Strongbox",
-                  "Bitdefender", "Norton", "Surfshark", "ExpressVPN"}
-_SERVICE_TOPIC = re.compile(r"password|passkey|vpn|antivirus|security|privacy|encrypt|vault|credential", re.I)
+                  "Bitdefender", "Norton", "Surfshark", "ExpressVPN",
+                  # apps that often sponsor unrelated videos (a Notion read in a camera review)
+                  "Notion", "Evernote", "Setapp", "Raycast", "Capacities", "Tana", "Craft Docs", "Heptabase", "Anytype"}
+_SERVICE_TOPIC = re.compile(r"password|passkey|vpn|antivirus|security|privacy|encrypt|vault|credential|note|markdown|"
+                            r"writ(?:e|ing|er)|editor|pkm|second brain|knowledge|productivity|journal|obsidian|zettel",
+                            re.I)
 BRAND_ALIASES = {"Bambu Lab": ["Bambu", "BambuLab", "Bambu Labs"], "Rode": ["RØDE"], "Prusa": ["Prusa Research"],
                  "Kärcher": ["Karcher"], "EcoFlow": ["Eco Flow"], "Rug Doctor": ["RugDoctor"],
                  "Qidi": ["Qidi Tech", "QIDI"], "Insta360": ["Insta 360"], "Even Realities": ["Even G1", "Even G2"],
                  "NordPass": ["Nord Pass", "Nord Security"], "1Password": ["1 Password", "One Password"],
-                 "Keeper Security": ["Keeper Password Manager"], "RoboForm": ["Robo Form"]}
+                 "Keeper Security": ["Keeper Password Manager"], "RoboForm": ["Robo Form"],
+                 "Visual Studio Code": ["VS Code", "VSCode"], "iA Writer": ["iAWriter"], "MarkText": ["Mark Text"],
+                 "Bear Notes": ["Bear app", "Bear Markdown", "Bear 2"], "Craft Docs": ["Craft app"],
+                 "Sublime Text": ["Sublime"], "Standard Notes": ["StandardNotes"]}
+# Brands whose short name is an everyday word: matched case-sensitively, only when the title is about
+# their category (detect_brands' service topic).
+CONTEXT_ALIASES = {"Bear Notes": ["Bear"], "Craft Docs": ["Craft"], "Drafts": ["Drafts"], "Things": ["Things 3"],
+                   "Day One": ["Day One"], "Agenda": ["Agenda"], "Reflect": ["Reflect"], "Mem": ["Mem"]}
 # Hosts that never name a reviewed brand.
 _PLATFORM = re.compile(r"(^|\.)(youtube|youtu|google|goo|amazon|amzn|instagram|facebook|fb|twitter|x|tiktok|"
                        r"threads|discord|patreon|ko-fi|buymeacoffee|linktr|bit|tinyurl|geni|da|is|cutt|t|ow|"
@@ -277,8 +327,11 @@ def _fold(s: str) -> str:
 # The creator's own equipment lists ("My gear:", "Current Video Gear", "Camera: ...") name camera and mic
 # brands that are not reviewed in the video.
 _GEAR_HEAD = re.compile(
-    r"^\W*(?:(?:my|our|current|video|filming|camera|youtube|studio|recording)\s+){0,3}"
-    r"(?:gear|equipment|kit|setup|set-?up)(?:\s+(?:i|we)\s+use|\s+used|\s+list)?\b[^\n]{0,30}:?\s*$|"
+    r"^\W*(?:(?:my|our|current|video|filming|film|camera|youtube|studio|recording|creator|tech|desk|podcast|"
+    r"streaming|editing|favou?rite|everyday|edc|travel)\s+){0,3}"
+    r"(?:gear|equipment|kit|setup|set-?up|tech stack|stack|tools|accessories|essentials|edc)"
+    r"(?:\s+(?:i|we)\s+use|\s+used|\s+list)?\b[^\n]{0,30}:?\s*$|"
+    r"^\W*(?:my|our) favou?rite (?:[\w-]+ ){0,2}(?:accessories|products|gadgets|gear|tech|chargers|devices)\b[^\n]{0,20}:?\s*$|"
     r"^\W*(?:what|gear|equipment|tools?)\s+(?:i|we)\s+use\b[^\n]{0,40}:?\s*$|"
     r"^\W*(?:filmed|shot|recorded)\s+(?:with|on|using)\b", re.I)
 _GEAR_LINE = re.compile(r"^\W*(?:main |b-?roll |second |a-?cam |b-?cam )?(?:cameras?|lens(?:es)?|mics?|microphones?|lav(?:alier)?s?|"
@@ -286,18 +339,29 @@ _GEAR_LINE = re.compile(r"^\W*(?:main |b-?roll |second |a-?cam |b-?cam )?(?:came
                         r"computer|laptop)\s*[:\-–]", re.I)
 
 
+# A new description section: an emoji/symbol-led line ("📲 Get My Apps!"), a "Heading:" line, chapters.
+_SECTION_HEAD = re.compile(r"^\s*(?:[^\w\s(\[\"'“‘/.-]|\d{1,2}:\d{2}\b)|^[^\n/]{2,60}:\s*$|^\s*(?:-{3,}|={3,}|_{3,})\s*$")
+
+
 def strip_gear_blocks(description: str) -> str:
-    """The description without the creator's gear/equipment sections: a gear header and the lines under it
-    (until a blank line), and single "Camera: ..."/"Mic: ..." lines."""
+    """The description without the creator's gear/equipment sections ("My Film Gear:", "My Creator Tech
+    Stack", "My Favorite iPhone Accessories"): a gear header and the lines under it, and single
+    "Camera: ..."/"Mic: ..." lines. A block ends at a blank line, unless the next lines continue it as
+    "name / link" items (no new section heading)."""
     out, skipping = [], False
-    for ln in (description or "").splitlines():
+    lines = (description or "").splitlines()
+    for i, ln in enumerate(lines):
         if _GEAR_HEAD.search(ln):
             skipping = not re.match(r"^\W*(?:filmed|shot|recorded)\b", ln, re.I)
             continue
         if skipping:
             if not ln.strip():
-                skipping = False
-                out.append(ln)
+                nxt = [x for x in lines[i + 1:i + 4] if x.strip()][:2]
+                item = (bool(nxt) and not _SECTION_HEAD.search(nxt[0]) and not _GEAR_HEAD.search(nxt[0])
+                        and (bool(_URL.search(nxt[0])) or (len(nxt) > 1 and bool(_URL.match(nxt[1].strip())))))
+                if not item:
+                    skipping = False
+                    out.append(ln)
             continue
         if _GEAR_LINE.search(ln):
             continue
@@ -335,6 +399,11 @@ def detect_brands(title: str = "", description: str = "", links=(), own_domains=
     service_ok = bool(_SERVICE_TOPIC.search(title or ""))
     found = [b for b in KNOWN_BRANDS if _mentions(text, b)
              and (b not in SERVICE_BRANDS or service_ok or _mentions(title or "", b))]
+    if service_ok:
+        # Everyday-word app names ("Bear", "Craft", "Drafts"), capitalized, in a notes/writing-app video.
+        for b, words in CONTEXT_ALIASES.items():
+            if b not in found and any(re.search(r"(?<![\w-])" + w + r"(?![\w-])", text) for w in words):
+                found.append(b)
     gear_links = set(re.findall(r"https?://\S+", description or "")) - set(re.findall(r"https?://\S+", kept))
     own = {_alnum(d) for d in own_domains or ()}
     words = _alnum(text)
@@ -366,6 +435,28 @@ def detect_brands(title: str = "", description: str = "", links=(), own_domains=
     return found
 
 
+_UPSELL = re.compile(r"\b(?:course|system|templates?|vault|starter ?kit|kit|masterclass|cohort|workshop|bundle|"
+                     r"toolkit|blueprint|setup|guide|ebook|bootcamp|academy)\b", re.I)
+
+
+def brand_upsells(description: str, title: str = "") -> list[dict]:
+    """Description lines selling a course, template or "system" built on a reviewed product ("Complete
+    Obsidian system for fiction writers: <link>"): the creator has a stake in that product's verdict.
+    Gear lists are skipped. Returns creator_product hits (why "upsell"), one per line."""
+    import disclosure as D  # noqa: WPS433
+    kept = strip_gear_blocks(description)
+    brands = [b for b in detect_brands(title, kept) if b not in SERVICE_BRANDS or _mentions(title, b)]
+    out = []
+    for ln in kept.splitlines():
+        if not _URL.search(ln) or not _UPSELL.search(ln):
+            continue
+        named = [b for b in brands if _mentions(_URL.sub(" ", ln), b)]
+        if named:
+            out.append({"signal": "creator_product", "weight": D.WEIGHTS["creator_product"], "source": "description",
+                        "why": "upsell", "text": ln.strip()[:220]})
+    return out
+
+
 def _link_brands(url: str, description: str, brands: list[str]) -> list[str]:
     """Brands named on the description line holding `url`, or on the line before it (a label)."""
     lines = (description or "").splitlines()
@@ -380,7 +471,8 @@ def _link_brands(url: str, description: str, brands: list[str]) -> list[str]:
 
 
 _PER_BRAND_SIGNALS = {"sponsor_read", "third_party_sponsor", "review_unit", "use_my_link_or_code", "brand_code_or_link",
-                      "giveaway", "brand_giveaway", "bought_it_myself", "bought_something_myself", "ownership_tie"}
+                      "giveaway", "brand_giveaway", "bought_it_myself", "bought_something_myself", "ownership_tie",
+                      "creator_product"}
 
 
 def per_brand(hits: list[dict], brands: list[str], description: str = "", links_by_kind: dict | None = None,
@@ -394,12 +486,16 @@ def per_brand(hits: list[dict], brands: list[str], description: str = "", links_
     description = strip_gear_blocks(description)
     per = {b: [] for b in brands}
     shared: list[dict] = []
+    third: list[dict] = []  # money from an unrelated sponsor: in shared_score only, never a brand's score
     sponsored_brands: set[str] = set()
     label = None
     for h in hits:
         sig = h.get("signal")
         if sig == "paid_promotion_label":
-            label = h
+            if h.get("third_party_sponsor") is not None:
+                third.append(h)
+            else:
+                label = h
             continue
         if sig in ("affiliate_links", "brand_affiliate_links", "campaign_tracking"):
             continue  # re-attributed per link below
@@ -420,6 +516,8 @@ def per_brand(hits: list[dict], brands: list[str], description: str = "", links_
                 per[b].append(hb)
                 if hb["signal"] == "sponsor_read":
                     sponsored_brands.add(b)
+        elif sig == "third_party_sponsor":
+            third.append(h)
         else:
             shared.append(h)
     for kind in ("affiliate_links", "campaign_links"):
@@ -457,7 +555,7 @@ def per_brand(hits: list[dict], brands: list[str], description: str = "", links_
         res = score_fn(per[b], shared)
         out[b] = {"score": res["score"], "level": res["level"],
                   "signals": [e["signal"] for e in res["evidence"]]}
-    sh = score_fn([], shared)
+    sh = score_fn([], shared + third)
     return {"by_brand": out, "shared_score": sh["score"]}
 
 
@@ -766,6 +864,10 @@ def ocr_images(paths: list[str], timeout: float = 90) -> dict[str, list[dict]]:
     return res
 
 
+_STATUS_BAR = re.compile(r"\b\d{1,2}:\d{2}\s*(?:am|pm)?\b|\d+\s?%|\b(?:mon|tue|wed|thu|fri|sat|sun)\b|\b(?:vol|ram|cpu|wifi)\b",
+                         re.I)
+
+
 def screen_data(lines: list[dict]) -> dict:
     """Is this frame a results table or chart? Counts numeric cells, the rows that hold them, and
     result words ("Passes to Clean", "dB", "seconds")."""
@@ -773,6 +875,21 @@ def screen_data(lines: list[dict]) -> dict:
     rows = {round(ln["y"], 2) for ln in nums}
     words = sum(1 for ln in lines if _RESULT_WORDS.search(ln["text"]))
     table = len(nums) >= 8 and len(rows) >= 3 and words >= 1 or len(nums) >= 20
-    head = sorted((ln for ln in lines if not _NUM_CELL.match(ln["text"])), key=lambda ln: ln["y"])[:3]
+    # A small ratings table: a "Rating"/"Score" header with 3+ numbers lined up under it (OCR often
+    # drops a cell or two, so 3 is enough).
+    for h in (ln for ln in lines if _RESULT_WORDS.fullmatch(ln["text"].strip())):
+        col = [n for n in nums if abs(n["x"] - h["x"]) < 0.03 and 0 < n["y"] - h["y"] < 0.4]
+        # row labels (product names) in one column to the left, on the same rows
+        left = [ln for ln in lines if ln not in nums and ln["x"] < h["x"] - 0.02 and 0 < ln["y"] - h["y"] < 0.4]
+        xs = [round(ln["x"], 2) for ln in left]
+        labels = max((xs.count(x) for x in set(xs)), default=0)
+        if len(col) >= 3 or (len(col) >= 2 and labels >= 3):
+            table = True
+            break
+    # The headline skips a desktop or OS status bar along the top edge (clock, percentages, short tabs).
+    body = [ln for ln in lines if not _NUM_CELL.match(ln["text"]) and not (
+        ln["y"] < 0.04 and (_STATUS_BAR.search(ln["text"]) or len(ln["text"].strip()) <= 4))]
+    body = body or [ln for ln in lines if not _NUM_CELL.match(ln["text"])]
+    head = sorted(body, key=lambda ln: ln["y"])[:3]
     return {"numbers": len(nums), "rows_with_numbers": len(rows), "result_words": words, "table_like": bool(table),
             "headline": " / ".join(ln["text"] for ln in head)}

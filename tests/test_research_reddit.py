@@ -564,3 +564,58 @@ def test_stale_query_tokens_dropped():
     res = R.promo_bias({"title": "1Password price increase", "subreddit": "r/1Password", "body": "", "comments": []},
                        query="Apple Passwords family")
     assert "apple" not in res["brand_tokens"] and "1password" in res["brand_tokens"]
+
+
+# --- markdown-editor run (2026-11-08) ---------------------------------------------------------------
+
+@pytest.mark.parametrize("text", [
+    "Disclosure: I make Downright", "Shameless self-promotion: I make Raute", "Disclaimer: I'm the dev",
+    "I'm the developer", "Mine ;-) I developed Markify", "Ended up building my own: Mandrill",
+    "I also programmed it lol", "(my project)", "I vibe-coded one myself", "Hey you wanna try out my app?",
+    "the app I am maintaining called Hatchdoor", "I built markjason.sh", "I'm building Grape",
+    "(disclosure: I am on the team building it)", "I made writedown.app",
+    "Shoot me a DM and I'll send you a key for cyberwriter"])
+def test_builder_phrasings(text):
+    assert R._BUILDER.search(text)
+
+
+@pytest.mark.parametrize("text", [
+    "I made the switch to Obsidian", "I built my vault over years", "we made it work with Syncthing",
+    "I developed a habit", "i'm a developer and use VS Code", "I created a folder for each project",
+    "I made Obsidian my daily driver", "Disclaimer: I participate in the Amazon Associates program"])
+def test_builder_not_ordinary_use(text):
+    assert not R._BUILDER.search(text)
+
+
+def test_builder_launch_title_and_several_builders():
+    h = _cm(title="I built a WYSIWYG Markdown editor that doesn't rewrite your Markdown",
+            comments=[{"author": "a", "text": "Disclosure: I make Downright", "link": "c1"},
+                      {"author": "b", "text": "I'm building Grape, try it", "link": "c2"}])
+    b = h["builder_self_promotion"]
+    assert b["source"] == "post" and "+2 more users" in b["text"] and b["weight"] > 0.25
+
+
+def test_app_store_links_from_several_users_are_not_coordinated():
+    cs = [{"author": f"u{i}", "text": "this one", "links": [f"https://apps.apple.com/us/app/x/id{100 + i}"]}
+          for i in range(4)]
+    assert "coordinated_links" not in _cm(comments=cs)
+    same = [{"author": f"u{i}", "text": "this one", "links": ["https://apps.apple.com/us/app/x/id100"]}
+            for i in range(4)]
+    assert "coordinated_links" in _cm(comments=same)
+
+
+def test_markdown_category_words_are_not_brands():
+    strong, _ = R.brand_candidates(title="Best Markdown Editor for Mac?", query="markdown editor")
+    assert not strong & {"markdown", "markdowneditor", "editor", "notes", "wysiwyg"}
+    assert R.subreddit_brand("r/Markdown", {"markdown"}) is None and R.subreddit_brand("r/foss", {"foss"}) is None
+    strong, _ = R.brand_candidates(title="Typora alternatives that are free?")
+    assert "typora" in strong
+
+
+def test_crossposts_marked_in_search_results():
+    base = {"author": "dev1", "title": "I built a Markdown editor", "created": "2026-09-28T21:12:08", "score": 9,
+            "comments": 52}
+    posts = [{**base, "id": "a", "sub": "Markdown"}, {**base, "id": "b", "sub": "software"},
+             {"id": "c", "sub": "x", "author": "z", "title": "other", "created": "2026-01-01"}]
+    assert R.mark_crossposts(posts) == 2
+    assert posts[1]["crosspost_of"] == "a" and posts[0]["counts_shared"] and "crosspost_of" not in posts[2]

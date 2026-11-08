@@ -207,6 +207,11 @@ KNOWN_BRANDS = {b.split()[0].lower() for b in TL.GARBLES} | {
     "hatch", "yogasleep", "lectrofan", "snooz", "dreamegg", "momcozy", "nanit", "owlet",
     "1password", "bitwarden", "vaultwarden", "proton", "protonpass", "dashlane", "nordpass", "roboform",
     "lastpass", "enpass", "keepassxc", "keepass", "keepassium", "keepassdx", "strongbox", "gopass", "nordvpn",
+    # Markdown editors and notes apps (the distinctive names; "Bear", "Zed", "Kate" are everyday words).
+    "typora", "obsidian", "logseq", "zettlr", "joplin", "marktext", "macdown", "markedit", "iawriter", "ulysses",
+    "notesnook", "trilium", "vscode", "vscodium", "neovim", "emacs", "sublime", "bbedit", "notion", "evernote",
+    "standardnotes", "silverbullet", "anytype", "affine", "appflowy", "siyuan", "qownnotes", "ghostwriter",
+    "apostrophe", "remnote", "craftdocs", "upnote", "lettera",
 }
 # Words that look like names in title-case titles but are never a brand.
 COMMON = D.GENERIC | {
@@ -235,6 +240,13 @@ COMMON = D.GENERIC | {
     "appliances", "deal", "deals", "sale", "review", "reviews", "comparison", "guide", "pet", "pets", "dog",
     "cat", "kids", "house", "apartment", "stairs", "stain", "stains", "deep", "pro", "professional",
     "commercial", "rental", "rent", "renting", "upright", "spot", "handheld", "cordless", "corded",
+    # Writing and notes software ("Markdown Editor", "Note Taking App", r/Markdown, r/foss).
+    "markdown", "md", "editor", "editors", "editing", "notes", "note", "notetaking", "taking", "notebook", "wysiwyg",
+    "foss", "floss", "writing", "writers", "app", "apps", "application", "pkm", "knowledge", "base", "plain", "text",
+    "file", "files", "folder", "preview", "native", "electron", "plugin", "plugins", "theme", "themes", "vim", "code",
+    "coding", "programming", "developer", "developers", "productivity", "minimal", "minimalist", "distraction",
+    "tabs", "tables", "math", "latex", "pandoc", "pdf", "html", "mermaid", "wiki", "journal", "journaling",
+    "outliner", "local", "offline", "cloud", "selfhost", "macapps", "macosapps", "linuxapps", "ai", "llm",
 }
 _ALLCAPS_STOP = {"OP", "PSA", "USB", "TV", "LED", "PLA", "PETG", "ABS", "TPU", "DIY", "FDM", "SLA", "AMS", "AI",
                  "PC", "UK", "US", "USA", "EU", "FPS", "RGB", "HELP", "NEW", "WTF", "IMO", "TIL", "OMG", "ELI5",
@@ -380,7 +392,8 @@ def name_brand(name: str, strong: set, weak: set = frozenset()) -> str | None:
 # Known brands that are also everyday words or common subreddit prefixes: they name a subreddit's
 # brand only when the thread or query mentions them.
 AMBIGUOUS = {"meta", "steam", "valve", "pixel", "zoom", "apple", "sigma", "deity", "framework", "artillery",
-             "kobra", "synco", "boya", "dell", "acer", "intel", "amd", "msi", "google", "even", "bose", "canon"}
+             "kobra", "synco", "boya", "dell", "acer", "intel", "amd", "msi", "google", "even", "bose", "canon",
+             "sublime", "notion"}
 
 
 def subreddit_brand(sub: str, strong: set, weak: set = frozenset()) -> str | None:
@@ -683,6 +696,12 @@ def select_comments(comments: list[dict], host: str | None, max_comments: int = 
 
 # Content marketing (patterns seen in buying-advice threads) ---------------------
 
+# App stores and code hosts: the normal place to link an app. Several users linking the same store is
+# not seeding; several linking the same app page might be, so these are grouped by page, not host.
+_STORE_HOSTS = re.compile(r"(^|\.)(apps\.apple\.com|itunes\.apple\.com|play\.google\.com|flathub\.org|f-droid\.org|"
+                          r"snapcraft\.io|gitlab\.com|codeberg\.org|sourceforge\.net|microsoft\.com|"
+                          r"addons\.mozilla\.org|chromewebstore\.google\.com|chrome\.google\.com|setapp\.com|"
+                          r"aur\.archlinux\.org|formulae\.brew\.sh)$", re.I)
 # Hosts that are never content marketing on their own (media, Reddit, image hosts, reference).
 _NEUTRAL_HOSTS = re.compile(r"(^|\.)(reddit\.com|redd\.it|redditmedia\.com|imgur\.com|youtube\.com|youtu\.be|"
                             r"wikipedia\.org|github\.com|google\.com|archive\.org|giphy\.com|tenor\.com)$", re.I)
@@ -704,13 +723,12 @@ _BIASED = re.compile(r"\b(?:i'?m|i am|i'?ll admit i'?m)\s+(?:a (?:bit|little)|sl
                      r"probably|totally)?\s*biased\b|\bfull disclosure\b|\bi work (?:for|at|with)\b", re.I)
 # A product's own author or builder recommending it: "I'm the author of Bramble", "Full disclosure: I'm
 # building this into Decoy", "I made an app for this". Counted without needing a link.
-_BUILDER = re.compile(r"\b(?:i'?m|i am|we'?re|we are)\s+(?:the |one of the |a )?(?:author|creator|developer|dev|maker|"
-                      r"founder|co-?founder|builder|maintainer)s?\s+(?:of|behind)\b|\((?:i'?m|i am) the (?:author|dev|"
-                      r"developer|creator|maker)\)|\b(?:i'?m|i am|we'?re|we are) (?:building|developing|working on|making) "
-                      r"(?:this|it|an?|my own|our own|\w+ into)|\b(?:i|we) (?:built|made|created|wrote|developed|launched) "
-                      r"(?:an?|my own|our own|this|a little|a small|a free|an open[- ]source)\s+(?:\w+\s+){0,2}?"
-                      r"(?:app|tool|cli|extension|service|product|project|manager|vault|thing)\b|\bfull disclosure\b"
-                      r"[^.\n]{0,40}\b(?:i|we|my|our)\b|\bshameless (?:self[- ])?plug\b", re.I)
+# The product's author or builder pitching it (shared with YouTube: lib/disclosure.BUILDER).
+_BUILDER = D.BUILDER
+# A launch post: "I built a Markdown editor", "I got tired of X so I made Y", "[Release] MyApp 1.0".
+_BUILDER_TITLE = re.compile(r"\b(?:i|we) (?:built|made|created|wrote|developed|launched|released|vibe-?coded|"
+                            r"am building|'m building)\b|^\s*\[?(?:release|launch|show reddit|showoff|self-?promo)\]?\s*[:\]-]",
+                            re.I)
 _DOMAIN_TEXT = re.compile(r"\b(?:[a-z0-9-]+\.)+(?:com|net|org|io|co|shop|store|us|uk|ca|de)\b", re.I)
 _PITCH = [re.compile(p, re.I) for p in (
     r"\b\d{2,3}\s?°\s?[FC]\b", r"\b\d{3,6}\s?pa\b", r"\b\d{2,4}\s?w\b(?! ?ago)", r"\bkills? (?:99|bacteria|germs)",
@@ -726,6 +744,26 @@ def _hosts(links) -> list[str]:
         h = (urlparse(u).hostname or "").lower().removeprefix("www.")
         if h and not _NEUTRAL_HOSTS.search(h):
             out.append(h)
+    return out
+
+
+def _link_keys(links) -> list[str]:
+    """What "the same site" means for coordinated links: the host, or the app/repo page on a store or
+    code host ("apps.apple.com/app/id123"), so four users linking four different App Store apps don't
+    look coordinated."""
+    out = []
+    for u in links or []:
+        pu = urlparse(u)
+        h = (pu.hostname or "").lower().removeprefix("www.")
+        if not h or _NEUTRAL_HOSTS.search(h):
+            continue
+        if _STORE_HOSTS.search(h):
+            segs = [x for x in (pu.path or "").split("/") if x and not re.fullmatch(r"[a-z]{2}(?:-[a-z]{2})?", x)]
+            app = next((x for x in segs if re.fullmatch(r"id\d+", x)), None) or "/".join(segs[:2])
+            if not app:
+                continue
+            h = f"{h}/{app}"
+        out.append(h)
     return out
 
 
@@ -763,7 +801,7 @@ def content_marketing(data: dict, comments: list[dict]) -> list[dict]:
     by_comment: dict[str, set] = {}
     for c in comments:
         hs = _hosts(c.get("links"))
-        for h in set(hs):
+        for h in set(_link_keys(c.get("links"))):
             by_comment.setdefault(h, set()).add(c.get("author"))
         ch = {}
         for h in hs:
@@ -814,6 +852,9 @@ def content_marketing(data: dict, comments: list[dict]) -> list[dict]:
                          "link": c.get("link"), "text": "Reads like ad copy: " + ", ".join(found[:4])})
             break
     builders = []
+    title = data.get("title") or ""
+    if _BUILDER_TITLE.search(title):
+        builders.append(({"author": host, "text": title, "link": url}, _BUILDER_TITLE.search(title)))
     for c in [{"author": host, "text": body, "links": data.get("links") or [], "link": url}] + comments:
         mm = _BUILDER.search(c.get("text") or "")
         if mm and not is_utility_account(c.get("author") or ""):
@@ -822,7 +863,9 @@ def content_marketing(data: dict, comments: list[dict]) -> list[dict]:
         c, mm = builders[0]
         t = c.get("text") or ""
         n = len({b.get("author") for b, _ in builders})
-        hits.append({"signal": "builder_self_promotion", "weight": 0.25 if c.get("link") == url else 0.2,
+        users = {b.get("author") for b, _ in builders}
+        hits.append({"signal": "builder_self_promotion",
+                     "weight": min(0.4, (0.25 if c.get("link") == url else 0.2) + 0.05 * (len(users) - 1)),
                      "source": "post" if c.get("link") == url else f"comment by u/{c.get('author')}",
                      "link": c.get("link"),
                      "text": t[max(0, mm.start() - 30):mm.end() + 60].strip() + (f" (+{n - 1} more users)" if n > 1 else "")})
@@ -1285,6 +1328,25 @@ def off_scope(posts: list[dict], subreddit: str) -> list[str]:
     return [s for s in subs if s and s.lower() != want]
 
 
+def mark_crossposts(posts: list[dict]) -> int:
+    """Mark results that are copies of one post across subreddits (same author, title and created
+    time): each gets `crosspost_of` (the first copy's id) and `counts_shared: true`, since Reddit shows
+    the original's score and comment count on every copy. Returns how many results were marked."""
+    groups: dict = {}
+    for p in posts:
+        if p.get("author") and p.get("title") and p.get("created"):
+            groups.setdefault((p["author"], p["title"].strip().lower(), p["created"]), []).append(p)
+    n = 0
+    for ps in groups.values():
+        if len(ps) < 2 or len({p.get("sub") for p in ps}) < 2:
+            continue
+        for p in ps:
+            p["crosspost_of"] = ps[0]["id"] if p is not ps[0] else None
+            p["counts_shared"] = True
+            n += 1
+    return n
+
+
 def search(target: str, query: str | None = None, *, url: str | None = None,
            subreddit: str | None = None, sort: str | None = None, time_filter: str | None = None,
            typed: bool | None = None) -> dict:
@@ -1342,6 +1404,12 @@ def search(target: str, query: str | None = None, *, url: str | None = None,
             page["note"] = ((page.get("note") + " ") if page.get("note") else "") + (
                 f"Only {held} of {len(posts)} results contain the quoted phrase: Reddit didn't keep it exact. "
                 "Skim titles before opening threads; a shorter query (brand + model, 1-2 words) works better.")
+    xp = mark_crossposts(posts)
+    if xp:
+        page["note"] = ((page.get("note") + " ") if page.get("note") else "") + (
+            f"{xp} results are cross-posts of the same post (same author, title and time; marked "
+            "`crosspost_of`): Reddit shows the original's score and comment count on each, so the real "
+            "discussion in each copy may be much smaller. Open one copy, not all.")
     stale = time_outside(posts, time_filter)
     if stale:
         page["note"] = ((page.get("note") + " ") if page.get("note") else "") + (

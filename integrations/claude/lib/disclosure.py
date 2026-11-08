@@ -158,7 +158,7 @@ def negated(text: str, start: int, end: int, window: int = 6) -> bool:
 
 _SPONSOR_READ = re.compile(
     r"\b(this (?:video|episode) is (?:sponsored|brought to you) by|sponsored by|thanks? (?:you )?to \S+(?: \S+)? for "
-    r"sponsoring|today'?s sponsor|this (?:video|episode)'?s sponsor|(?:the|our) sponsor (?:of|for) (?:this|today'?s) "
+    r"(?:sponsoring|partnering with (?:me|us))|today'?s sponsor|this (?:video|episode)'?s sponsor|(?:the|our) sponsor (?:of|for) (?:this|today'?s) "
     r"(?:video|episode)|, (?:the|our|today'?s) sponsor\b|in (?:paid )?partnership with|paid partnership|#ad\b|"
     r"#sponsored|brought to you by)", re.I)
 _SPONSOR_VERB = re.compile(r"\bsponsor(?:ed|ing|s)?\b|\bpa(?:id|ying) (?:me|us)\b", re.I)
@@ -167,6 +167,11 @@ _NAME = r"([A-Z0-9][\w&.+'’-]*(?:\s+[A-Z0-9][\w&.+-]*){0,2}|[a-z0-9-]+\.(?:com
 _SPONSOR_NAMES = [
     re.compile(r"(?i:sponsored by|brought to you by|in (?:paid )?partnership with|today'?s sponsor(?: is)?|"
                r"this (?:video|episode)'?s sponsor(?: is)?)[\s:]+" + _NAME),
+    # "that's where today's sponsor comes in, Monarch." / "I recommend today's sponsor, G2I, to ..."
+    re.compile(r"(?i:today'?s sponsor|this (?:video|episode)'?s sponsor|our sponsor)(?i:\s+comes in|\s+here)?\s*[,:—–-]\s*"
+               + _NAME),
+    re.compile(r"(?i:thanks?(?: you)? to|shout ?out to)\s+" + _NAME + r"\s+(?i:for (?:partnering|sponsoring|supporting) "
+               r"(?:with )?(?:me|us|this|today))"),
     re.compile(r"(?i:thanks?(?: you)? to|shout ?out to)\s+" + _NAME + r"\s+(?i:for sponsoring|who (?:is|are) sponsoring)"),
     re.compile(r"([A-Z][\w&.+-]*(?:\s+[A-Za-z][\w&.+-]*)?)\s*,\s*(?i:(?:who (?:is|are) )?(?:the|our|today'?s|this "
                r"video'?s) sponsor)"),
@@ -261,7 +266,7 @@ WEIGHTS = {
     "rented_or_borrowed": -0.05, "bought_it_myself": -0.15, "claims_not_sponsored": -0.1,
     "editorial_independence": -0.05, "affiliate_links": 0.15, "campaign_tracking": 0.2,
     "brand_affiliate_links": 0.25, "brand_code_or_link": 0.2, "bought_something_myself": -0.05,
-    "ownership_tie": 0.3,
+    "ownership_tie": 0.3, "creator_product": 0.3, "gear_affiliate_links": 0.05,
 }
 # Kept for callers that iterate the old table.
 SIGNALS = [(k, v, None) for k, v in WEIGHTS.items()]
@@ -316,6 +321,40 @@ def _is_own(name: str, channel: str | None, own_domains) -> bool:
         return True
     a = _alnum(name)
     return bool(a) and any(t in a for t in _channel_tokens(channel))
+
+
+# A product's own author or builder recommending it: "I'm the author of Bramble", "Disclosure: I make
+# Downright", "I built markjason.sh", "the thing I'm building". Used by Reddit (builder_self_promotion)
+# and YouTube (creator_product).
+BUILDER_ROLE = r"(?:solo |indie |lead |main )?(?:author|creator|developer|dev|maker|founder|co-?founder|builder|maintainer)s?"
+BUILT_THING = (r"(?:app|tool|cli|extension|service|product|project|manager|vault|thing|editor|plugin|client|program|"
+                r"utility|theme|alternative|version|one)")
+BUILDER = re.compile(
+    r"\b(?:i'?m|i am|we'?re|we are)\s+(?:the |one of the )" + BUILDER_ROLE + r"\b"
+    r"|\b(?:i'?m|i am|we'?re|we are)\s+(?:a |an )?" + BUILDER_ROLE + r"\s+(?:of|behind)\b"
+    r"|\((?:i'?m|i am) the (?:author|dev|developer|creator|maker)\)"
+    r"|\b(?:dis(?:closure|claimer)|full disclosure|fd)\s*[:,-]?\s*(?:it'?s (?:mine|my|our)|(?:i|we)(?:'m| am|'re| are)? "
+    r"(?:the |a |an |on the team |one of the )?(?:dev|developer|make|made|built|build|building|author|creator|maker|"
+    r"founder|co-?founder|maintain|maintainer|work (?:on|for|at)|wrote|develop))\b"
+    r"|\b(?:i'?m|i am|we'?re|we are) (?:on the team )?(?:building|developing|working on|making|maintaining) "
+    r"(?:this|it|an? \w*\s*" + BUILT_THING + r"|my own|our own|(?-i:[A-Z][\w.-]+)|\w+ into)"
+    r"|\b(?:i|we) (?:make|maintain|develop|built|made|created|wrote|developed|launched|programmed|coded|"
+    r"vibe-?coded|shipped) (?:(?:an?|my own|our own|this|a little|a small|a free|an open[- ]source)\s+(?:[\w-]+\s+){0,2}?"
+    + BUILT_THING + r"|one myself|(?-i:[A-Z][a-z]+[A-Z]?\w*)(?:\.\w+)?\b(?! (?:a|the|my|it)\b)|[\w-]+\.(?:app|io|sh|dev))\b"
+    r"|\bended up (?:building|making|writing|coding) (?:my|our) own\b"
+    r"|\b(?:the|this) (?:thing|app|tool|system|product|plugin|course|template) (?:that )?(?:i|we)(?:'m| am|'re| are) "
+    r"(?:building|making|developing|working on)\b"
+    r"|\b(?:i|we) (?:also|actually) (?:built|made|developed|programmed|coded) (?:it|this|that)\b"
+    r"|\b(?:i|we) (?:programmed|coded|vibe-?coded) (?:it|this|that)\b"
+    r"|\bthe app (?:i|we)(?:'m| am|'re| are)? (?:maintain|build|develop|make|work on)(?:ing)?\b"
+    r"|\((?:it'?s )?(?:my|our) (?:own )?(?:project|app|tool)\)|\bmine\W{0,4}\s*(?:i|we) (?:developed|built|made)"
+    r"|\b(?:try|check) out my (?:own )?(?:app|tool|project|editor|extension)\b|\bwanna try (?:out )?my (?:app|tool)\b"
+    r"|\b(?:dm|message|pm)\b[^.\n]{0,30}\bsend you an? (?:free )?(?:key|license|licen[cs]e|code|promo)"
+    r"|\bfull disclosure\b[^.\n]{0,40}\b(?:i|we|my|our)\b|\bshameless (?:self[- ])?(?:plug|promo(?:tion)?)\b", re.I)
+# The creator works for the company behind a product they discuss: "the app I work on", "we at Morgen".
+_EMPLOYER = re.compile(r"\b(?:app|product|tool|company|startup|team|platform) (?:that )?(?:i|we) (?:work|worked) (?:on|for|at)\b|"
+                       r"\bwe (?:here )?at (?-i:[A-Z][\w.]+)\b(?! (?:home|work|least|first|last|all|the)\b)|"
+                       r"\bi (?:work|worked) (?:at|for) (?-i:[A-Z][\w.]+)|\b(?:my|our) (?:employer|company)(?:'s)? (?:app|product)\b", re.I)
 
 
 # -------------------------------------------------------------------------
@@ -434,6 +473,9 @@ def scan_text(text: str, source: str, link: str | None = None, subject: str = ""
                 hits[:] = [h for h in hits if not (h["signal"] == "claims_not_sponsored" and h["text"] == sent.strip()[:220])]
         if _OWNERSHIP.search(sent):
             add("ownership_tie", sent)
+        m = BUILDER.search(sent) or _EMPLOYER.search(sent)
+        if m and not negated(sent, m.start(), m.end()):
+            add("creator_product", sent, why="employer" if _EMPLOYER.search(sent) else "builder")
         m = _GIVEAWAY.search(sent)
         if m and not negated(sent, m.start(), m.end()) and not _GIVEAWAY_TELLTALE.search(sent) \
                 and (not re.fullmatch(r"give-?away", m.group(1), re.I) or _GIVEAWAY_CONTEXT.search(sent)):
@@ -453,6 +495,41 @@ def scan_text(text: str, source: str, link: str | None = None, subject: str = ""
         if _EDITORIAL.search(sent):
             add("editorial_independence", sent)
     return hits
+
+
+def resolve_third_party(*lists: list[dict]) -> tuple[list[dict], ...]:
+    """When a video names a third-party sponsor somewhere ("Thanks to Monarch for sponsoring"), the
+    unnamed sponsor read in the same video ("that's where today's sponsor comes in") and codes or links
+    naming that sponsor ("using my link monarchmoney...", "promo code JANE50" next to it) belong to
+    that sponsor, not to a reviewed brand: they become `third_party_sponsor` (via "resolved"). Unnamed
+    reads are only reassigned when no reviewed-brand read is named. Returns the lists, rewritten."""
+    every = [h for lst in lists for h in lst]
+    names = sorted({h["sponsor"] for h in every if h.get("signal") == "third_party_sponsor" and h.get("sponsor")})
+    if not names:
+        return lists
+    brand_named = any(h.get("signal") == "sponsor_read" and h.get("sponsor") for h in every)
+    stems = {n: _alnum(n) for n in names if len(_alnum(n)) >= 3}
+
+    def named_in(text: str) -> str | None:
+        a = _alnum(text)
+        return next((n for n, st in stems.items() if st in a), None)
+
+    out = []
+    for lst in lists:
+        new = []
+        for h in lst:
+            sig, txt = h.get("signal"), h.get("text") or ""
+            who = named_in(txt)
+            if sig == "sponsor_read" and not h.get("sponsor") and not h.get("in_category") and (who or not brand_named):
+                h = {**h, "signal": "third_party_sponsor", "weight": WEIGHTS["third_party_sponsor"],
+                     "sponsor": who or names[0], "via": "resolved"}
+            elif sig in ("use_my_link_or_code", "brand_code_or_link") and (
+                    who or (len(names) == 1 and not brand_named and not h.get("brand"))):
+                h = {**h, "signal": "third_party_sponsor", "weight": WEIGHTS["third_party_sponsor"],
+                     "sponsor": who or names[0], "via": "code"}
+            new.append(h)
+        out.append(dedupe_hits(new))
+    return tuple(out)
 
 
 def dedupe_hits(hits: list[dict]) -> list[dict]:
@@ -511,6 +588,9 @@ _REF_PARAM = re.compile(r"[?&](ref|rf|aff|affiliate|aff_id|affid|ref_id|sca_ref|
 # short-link style TLD or subdomain, with a path.
 _VANITY_SHORT = re.compile(r"//(?:(?:go|get|try|link|links|click|shop|buy)\.[a-z0-9-]+\.[a-z.]+|"
                            r"[a-z0-9-]+\.(?:club|link|links|page|to|ly|gg|deals|promo|codes?|store))/[^\s]+", re.I)  # not .me: proton.me
+# Chat and community invites: never affiliate or brand short links ("discord.gg/abc", "t.me/x").
+_INVITE = re.compile(r"//(?:www\.)?(?:discord\.gg|discord\.com/invite|t\.me|telegram\.me|chat\.whatsapp\.com|"
+                     r"matrix\.to|join\.slack\.com|signal\.group)/", re.I)
 _SHORT_LINK = re.compile(r"//(bit\.ly|tinyurl\.com|t\.co|ow\.ly|rebrand\.ly|lnk\.to|linktr\.ee|da\.gd|is\.gd|cutt\.ly|"
                          r"shorturl\.at|buff\.ly|tiny\.cc)/", re.I)
 _UTM = re.compile(r"[?&]utm_(campaign|source|medium)=([^&#]*)", re.I)
@@ -580,6 +660,8 @@ def classify_links(links: list[str], *, channel: str | None = None, description:
             out["self_promotion_links"].append(url)
             if host and host not in out["own_domains"] and not _CREATOR_HOSTS.search(host):
                 out["own_domains"].append(host)
+            continue
+        if _INVITE.search(url):
             continue
         if _AFF_LINK.search(url) and not _AMAZON_PLAIN(url):
             out["affiliate_links"].append(url)
