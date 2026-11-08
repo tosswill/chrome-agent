@@ -154,7 +154,10 @@ class Term:
 # "pass the test", "OP" the poster vs. 1Password's `op`).
 COMMON_WORDS = {"pass", "op", "keeper", "one", "core", "go", "air", "edge", "echo", "nest", "ring", "arc", "bolt",
                 "note", "sense", "plus", "rest", "dot", "home", "mini", "max", "pro", "live", "surface", "spark",
-                "ghost", "signal", "bear", "things", "notes", "box", "drive", "keys", "vault", "safe", "gate"}
+                "ghost", "signal", "bear", "things", "notes", "box", "drive", "keys", "vault", "safe", "gate",
+                "scratch", "paper", "nodes", "panda", "kate", "zed", "craft", "draft", "drafts", "ink", "write",
+                "writer", "focus", "typewriter", "simple", "standard", "marker", "atom", "brackets", "mark", "notion",
+                "bike", "day one", "agenda", "capacities", "reflect", "zettel"}
 
 
 def ambiguous_variants(term: "Term") -> list[str]:
@@ -321,7 +324,8 @@ _Q_START = re.compile(r"^\s*(should i|is (?:the|it|this)|are (?:the|they)|which|
 _REC_NEG = re.compile(r"\b(no (?:issues?|problems?|complaints?|regrets?)|zero (?:issues?|problems?|complaints?)|"
                       r"never (?:had|have) (?:an? )?(?:issues?|problems?)|haven'?t had (?:any|a) (?:issues?|problems?)|"
                       r"can'?t go wrong|couldn'?t be happier|not a single (?:issue|problem)|won'?t regret|"
-                      r"(?:never|haven'?t|didn'?t|don'?t) regrett?(?:ed)?|zero regrets?|no regrets?)\b", re.I)
+                      r"(?:never|haven'?t|didn'?t|don'?t) regrett?(?:ed)?|zero regrets?|no regrets?|"
+                      r"can'?t recommend (?:it |them |this |\w+ )?(?:enough|highly enough))\b", re.I)
 _COMP_NEG = re.compile(r"\b(not worth|wouldn'?t recommend|would not recommend|don'?t recommend|do not recommend|"
                        r"can'?t recommend|cannot recommend|don'?t buy|do not buy|stay away|not reliable|doesn'?t work|"
                        r"does not work|didn'?t work|stopped working|not happy|wasn'?t happy|not impressed|"
@@ -334,7 +338,10 @@ _REC = re.compile(r"\b(recommend(?:ed)?|love (?:it|mine|my|the)|loving|great|exc
                   r"game ?changer|can'?t live without|worth every penny|must[- ]have|holy grail|saved our|"
                   r"(?:we|i) use (?:the|a|our|my)|we have (?:the|a|two|three)|treating (?:me|us) (?:well|great|good|"
                   r"right)|been (?:great|fantastic|flawless|rock solid|solid)|never let (?:me|us) down|"
-                  r"(?:i|we)(?:'ve| have) been using (?:it|them|\w+) (?:for|since) (?:years|ages|a decade|\d+))\b", re.I)
+                  r"(?:i|we)(?:'ve| have) been using (?:it|them|\w+) (?:for|since) (?:years|ages|a decade|\d+)|"
+                  r"(?:still|is|the) king|just what (?:i|we) (?:need|needed|wanted)|my (?:fav|fave|go-?to|daily driver)|"
+                  r"(?:i|we) (?:really |still |thoroughly )?(?:enjoy|like|adore) (?:using|it|this|that|\w+ (?:a lot|so much))|"
+                  r"is so (?:fast|good|nice|clean|snappy|smooth|light)|can'?t recommend (?:it |\w+ )?enough)\b", re.I)
 _COMP = re.compile(r"\b(problems?|issues?|broke|broken|fail(?:s|ed|ing|ure)?|clog(?:s|ged|ging)?|jam(?:s|med)?|"
                    r"return(?:ed|ing)?|refund|regret|avoid|terrible|awful|worst|garbage|junk|disappoint(?:ed|ing)?|"
                    r"defect(?:ive)?|doa|hate|limitation|unreliable|poor|sucks?|annoying|warranty|rma|nightmare|"
@@ -348,8 +355,9 @@ def polarity(text: str) -> str:
     if t.rstrip().endswith("?") or _Q_START.search(t):
         return "question"
     rec = len(_REC_NEG.findall(t))
-    comp = len(_COMP_NEG.findall(t))
-    rest = _COMP_NEG.sub(" ", _REC_NEG.sub(" ", t))
+    t2 = _REC_NEG.sub(" ", t)  # "can't recommend it enough" is praise, not "can't recommend"
+    comp = len(_COMP_NEG.findall(t2))
+    rest = _COMP_NEG.sub(" ", t2)
     rec += len(_REC.findall(rest))
     comp += len(_COMP.findall(rest))
     if rec > comp:
@@ -372,9 +380,16 @@ _CONTRAST = re.compile(r"[;]|,?\s+\b(?:but|however|whereas|while|although|though
                        r"except|meanwhile)\b|,\s+(?:and\s+)?(?:the|my|our|their)\s+", re.I)
 
 
-def _clause_around(text: str, start: int, end: int) -> str:
+_UNFAMILIAR = re.compile(r"\b(?:not (?:aware of|familiar with)|never (?:used|tried|heard of)|haven'?t (?:used|tried)|"
+                         r"don'?t know|no experience with|can'?t speak (?:to|for))\b", re.I)
+
+
+def _clause_around(text: str, start: int, end: int, others=()) -> str:
     """The part of the sentence around a mention, cut at contrast words, when that part has a tone of
-    its own; otherwise the whole sentence (so "It broke twice. Avoid the X" still reads as a complaint)."""
+    its own; otherwise the whole sentence (so "It broke twice. Avoid the X" still reads as a complaint).
+    The clause stays neutral when it says the writer doesn't know the product ("I'm not aware of
+    Typora, but I use MacDown and recommend it") or when the toned rest of the sentence names another
+    product (`others`: (start, end) spans of other mentions in `text`)."""
     sent_start = max(text.rfind(c, 0, start) for c in ".!?\n") + 1
     sent = _sentence_around(text, start, end)
     s, e = start - sent_start, end - sent_start
@@ -382,8 +397,11 @@ def _clause_around(text: str, start: int, end: int) -> str:
     a = max(c for c in cuts if c <= s)
     b = min(c for c in cuts if c >= e)
     clause = sent[a:b]
-    if len(cuts) > 2 and clause.strip() and polarity(clause) != "mention":
-        return clause
+    if len(cuts) > 2 and clause.strip():
+        if polarity(clause) != "mention" or _UNFAMILIAR.search(clause):
+            return clause
+        if any(sent_start <= os_ < sent_start + len(sent) and not (a <= os_ - sent_start < b) for os_, _ in others):
+            return clause
     return sent
 
 
@@ -584,7 +602,8 @@ def tally(records: list[dict], names: list[str], *, aliases: dict | str | None =
                     if term.near and not _near_ok(txt, s, e, term.near):
                         near_dropped += 1
                         continue
-                    pol = polarity(_clause_around(txt, s, e))
+                    others = [(s2, e2) for n2, s2, e2 in mention_cache[key] if n2 != term.name]
+                    pol = polarity(_clause_around(txt, s, e, others))
                     if pol == "mention":
                         pol = _short_answer_polarity(txt, s, e) or pol
                     pols.append(pol)

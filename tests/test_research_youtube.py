@@ -1,5 +1,6 @@
 """YouTube research helpers (integrations/claude/skills/youtube-research/scripts). No browser."""
 import json
+import re
 import struct
 import sys
 import zlib
@@ -608,3 +609,91 @@ def test_brand_owned_channel_from_name(monkeypatch):
     data = {"title": "Secrets Manager demo", "channel": "Bitwarden", "handle": "@bitwarden", "description": "",
             "disclosure": {"own_domains": ["bitwarden.com"]}}
     assert Y.sponsor_bias(data).get("brand_owned") == "strong"
+
+
+# --- markdown-editor run (2026-11-08) ---------------------------------------------------------------
+
+GEAR_DESC = """Thanks to Monarch for partnering with me! Use my link https://monarchmoney.example/x or code jane50.
+---
+Apple Notes adds Markdown support, and maybe pulls me away from Bear...
+
+💻 My Creator Tech Stack
+
+Circle Community Platform
+https://try.circle.so/janecreator
+
+Gling.ai Video Editor
+https://gling.ai/?via=janecreator
+
+📲 My Favorite iPhone Accessories
+
+AirPods Pro 3
+https://geni.us/abc123
+
+Chapters ➡
+
+00:00 Intro
+
+🛒  My Film Gear:
+
+Sony A7C II (B-Roll Camera)
+https://geni.us/def456
+"""
+
+
+def test_gear_blocks_span_item_lists_and_context_brands():
+    kept = S.strip_gear_blocks(GEAR_DESC)
+    assert "geni.us" not in kept and "gling" not in kept and "Chapters" in kept
+    assert S.detect_brands("I might be switching note apps", GEAR_DESC) == ["Apple", "Bear Notes"]
+
+
+def test_unrelated_sponsor_stays_out_of_brand_scores():
+    data = {"title": "I might be switching note apps", "channel": "Jane Creator", "handle": "@janecreator",
+            "description": GEAR_DESC, "description_links": re.findall(r"https?://\S+", GEAR_DESC),
+            "disclosure": {"paid_promotion_label": True, "affiliate_links": ["https://geni.us/abc123",
+                                                                             "https://geni.us/def456"]}}
+    tx = [{"signal": "sponsor_read", "weight": 0.5, "sponsor": None, "source": "transcript 6:23",
+           "text": "that's where today's sponsor comes in"}]
+    sb = Y.sponsor_bias(data, tx)
+    sigs = {e["signal"] for e in sb["evidence"]}
+    assert "sponsor_read" not in sigs and "gear_affiliate_links" in sigs and "affiliate_links" not in sigs
+    assert all(v["score"] < 0.5 for v in sb["by_brand"].values())
+
+
+def test_software_brand_channels_and_upsells():
+    assert S.brand_channel("Visual Studio Code", "@code") == "Visual Studio Code"
+    assert S.brand_channel("Setapp by MacPaw", "@setapp", ["setapp.com"]) == "Setapp"
+    up = S.brand_upsells("✍️ Complete Obsidian system for fiction writers: https://go.example.com/x\n"
+                         "My camera kit: https://geni.us/x", "Ultimate Writing Software Tier List")
+    assert [h["signal"] for h in up] == ["creator_product"]
+
+
+@pytest.mark.parametrize("title,channel,length,age,flag", [
+    ("iA Writer vs Ulysses Review: Which to choose? (2026 Guide)", "One Last Guide", "2:00", "1mo ago", True),
+    ("Ulysses vs iA Writer vs Typora (2026)", "Some Finds", "9:25", "8mo ago", True),
+    ("iA Writer vs Ulysses Comparison 2026: Review and Overview", "Calder Bridge", "3:24", "9mo ago", True),
+    ("Logseq vs Joplin | Which is Best in 2026?", "Harbor Channel", "5:11", "2y ago", True),
+    ("How to View Markdown on VS Code (Step by Step)", "Jeremiah Lessons", "2:19", "1y ago", False),
+    ("Logseq vs Obsidian - Which to Choose?", "Alan Writes", "9:15", "1y ago", False),
+    ("Obsidian vs Joplin 2026 (Honest Comparison)", "Emma Notes", "13:17", "2mo ago", False),
+])
+def test_farm_comparison_titles(title, channel, length, age, flag):
+    got, _ = S.likely_ai_listicle(title, channel, length_s=S._len_s(length), uploaded=S.upload_year(age),
+                                  year=2026)
+    assert got is flag
+
+
+def test_upload_year():
+    assert S.upload_year("2y ago", today=date(2026, 11, 8)) == 2024
+    assert S.upload_year(None, "2026-02-19T02:16:35-08:00") == 2026
+
+
+def test_screen_data_small_ratings_table_and_status_bar():
+    rows = [{"x": 0.45, "y": 0.016, "text": "Tue, Dec 12"}, {"x": 0.5, "y": 0.02, "text": "5:51 PM"},
+            {"x": 0.3, "y": 0.2, "text": "Today I picked an editor"},
+            {"x": 0.27, "y": 0.39, "text": "Software"}, {"x": 0.356, "y": 0.39, "text": "Rating"}]
+    for i, n in enumerate(["Logseq", "Marktext", "Obsidian", "Joplin"]):
+        rows.append({"x": 0.267, "y": 0.416 + i * 0.028, "text": n})
+    rows += [{"x": 0.356, "y": 0.416, "text": "3"}, {"x": 0.356, "y": 0.444, "text": "8"}]
+    sd = S.screen_data(rows)
+    assert sd["table_like"] and sd["headline"].startswith("Today I picked")

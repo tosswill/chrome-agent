@@ -299,3 +299,42 @@ def test_own_domain_redirects_are_affiliate_links():
     assert c["self_promotion_links"] == ["https://vpnpro.com/about"]
     c = D.classify_links(["https://cyberlabgo.com/roboform-v2", "https://cyberlab.com/"], channel="Cyber Lab")
     assert c["affiliate_links"] == ["https://cyberlabgo.com/roboform-v2"]
+
+
+# --- markdown-editor run (2026-11-08) ---------------------------------------------------------------
+
+def test_sponsor_name_after_comma_and_partnering():
+    subj = "Apple Notes iOS 27 Markdown"
+    a = D.scan_text("And that's where today's sponsor comes in, Monarch.", "transcript", subject=subj)
+    b = D.scan_text("That's why I recommend today's sponsor, G2I, to companies.", "transcript", subject=subj)
+    c = D.scan_text("Thanks to Monarch for partnering with me!", "description", subject=subj)
+    assert [(h["signal"], h["sponsor"]) for h in a] == [("third_party_sponsor", "Monarch")]
+    assert [(h["signal"], h["sponsor"]) for h in b] == [("third_party_sponsor", "G2I")]
+    assert c and c[0]["signal"] == "third_party_sponsor"
+
+
+def test_resolve_third_party_reassigns_unnamed_read_and_codes():
+    page = [{"signal": "third_party_sponsor", "weight": 0.15, "sponsor": "Monarch", "text": "Thanks to Monarch"},
+            {"signal": "brand_code_or_link", "weight": 0.2, "text": "using my link https://monarchmoney.example/x"}]
+    extra = [{"signal": "sponsor_read", "weight": 0.5, "sponsor": None, "text": "today's sponsor is here"},
+             {"signal": "use_my_link_or_code", "weight": 0.15, "text": "Use promo code JANE50"}]
+    p, e = D.resolve_third_party(page, extra)
+    assert {h["signal"] for h in p + e} == {"third_party_sponsor"}
+    # a named reviewed-brand read keeps unrelated unnamed reads as they are
+    p, e = D.resolve_third_party(page, [{"signal": "sponsor_read", "sponsor": "Typora", "weight": 0.5, "text": "x"},
+                                        {"signal": "sponsor_read", "sponsor": None, "weight": 0.5, "text": "y"}])
+    assert [h["signal"] for h in e] == ["sponsor_read", "sponsor_read"]
+
+
+def test_creator_product_builder_and_employer():
+    for t in ("This is the app I work on, so take that into account.", "We at Morgen built a calendar.",
+              "Check out the thing I'm building for writers.", "Disclosure: I make Downright"):
+        assert any(h["signal"] == "creator_product" for h in D.scan_text(t, "transcript")), t
+    for t in ("We at least tried.", "I built my vault over years.",
+              "DISCLAIMER: I participate in the Amazon Services LLC Associates Program."):
+        assert not any(h["signal"] == "creator_product" for h in D.scan_text(t, "transcript")), t
+
+
+def test_chat_invites_are_not_affiliate_links():
+    c = D.classify_links(["https://discord.gg/abc123", "https://t.me/somechannel"])
+    assert not c["affiliate_links"] and not c["short_links"]

@@ -903,7 +903,7 @@ def _flag_result(r: dict) -> dict:
     """Y3/Y17 flags on a search result."""
     handle = _handle_of(r.get("channel_url"))
     lst, why = S.likely_ai_listicle(r.get("title") or "", r.get("channel"), handle,
-                                    length_s=S._len_s(r.get("length")))
+                                    length_s=S._len_s(r.get("length")), uploaded=S.upload_year(r.get("age")))
     if lst:
         r["likely_ai_listicle"], r["listicle_reasons"] = True, why
     amz, why = S.amazon_influencer(r.get("title") or "")
@@ -962,6 +962,16 @@ def sponsor_bias(data: dict, transcript_hits: list[dict] | None = None) -> dict:
     ch, own = data.get("channel"), d.get("own_domains") or ()
     page += D.scan_text(data.get("title", ""), "title", subject=subject, channel=ch, own_domains=own)
     page += D.scan_text(data.get("description", ""), "description", subject=subject, channel=ch, own_domains=own)
+    # Affiliate links in the creator's own gear lists ("My Film Gear", "My Creator Tech Stack") earn from
+    # their equipment, not from the products reviewed: a separate, light signal.
+    desc = data.get("description") or ""
+    gear = set(re.findall(r"https?://\S+", desc)) - set(re.findall(r"https?://\S+", S.strip_gear_blocks(desc)))
+    if gear and d.get("affiliate_links"):
+        d = {**d, "affiliate_links": [u for u in d["affiliate_links"] if u not in gear]}
+        gear_aff = [u for u in (data.get("disclosure") or {}).get("affiliate_links") or [] if u in gear]
+        if gear_aff:
+            page.append({"signal": "gear_affiliate_links", "weight": 0.05, "source": "description",
+                         "text": f"{len(gear_aff)} affiliate link(s) in the creator's gear lists, e.g. {gear_aff[0]}"})
     page += D.link_hits(d)
     if d.get("products_earning_commission"):
         page.append({"signal": "shopping_commission", "weight": 0.15, "source": "product shelf",
@@ -978,6 +988,8 @@ def sponsor_bias(data: dict, transcript_hits: list[dict] | None = None) -> dict:
         page = [h for h in page if h["signal"] != "brand_owned_channel"]
         page.insert(0, {"signal": "brand_owned_channel", "weight": 1.0, "source": "channel", "brand_owned": "strong",
                         "brand": owner, "text": f"Channel '{ch}' is {owner}'s own channel"})
+    page += S.brand_upsells(data.get("description") or "", data.get("title") or "")
+    page, extra = D.resolve_third_party(page, extra)
     every = page + extra
     third = [h for h in every if h["signal"] == "third_party_sponsor"]
     brand_reads = [h for h in every if h["signal"] == "sponsor_read" and h.get("sponsor")]
@@ -1046,7 +1058,7 @@ def video(target: str, url: str) -> dict:
             data.get("description_links") or [], channel=data.get("channel"), description=data.get("description") or "",
             handle=data.get("handle"), brands=S.KNOWN_BRANDS))
         lst, why = S.likely_ai_listicle(data.get("title") or "", data.get("channel"), data.get("handle"),
-                                        length_s=data.get("length_s"))
+                                        length_s=data.get("length_s"), uploaded=S.upload_year(None, data.get("published")))
         if lst:
             data["likely_ai_listicle"], data["listicle_reasons"] = True, why
         amz, why = S.amazon_influencer(data.get("title") or "", data.get("description") or "",

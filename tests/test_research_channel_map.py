@@ -291,3 +291,33 @@ def test_multi_vendor_affiliate_tier_list():
     assert r["context"]["multi_vendor_affiliate_share"] == 1.0 and CM.quadrant(r).startswith("affiliate roundup")
     one = {"signal": "affiliate_links", "text": "https://go.getproton.me/x, https://proton.me/pass"}
     assert CM._affiliate_weight(rec("t", [one])) == 0.5
+
+
+# --- markdown-editor run (2026-11-08) ---------------------------------------------------------------
+
+def test_third_party_label_and_creator_product():
+    tp = {"url": "https://www.youtube.com/watch?v=aaaaaaaaaaa", "title": "Notes app update",
+          "signals": [{"signal": "paid_promotion_label"}, {"signal": "third_party_sponsor"}]}
+    assert CM.video_independence(tp)[0] >= 4.5
+    cp = {"url": "https://www.youtube.com/watch?v=bbbbbbbbbbb", "title": "Why I left an app",
+          "signals": [{"signal": "creator_product"}]}
+    r = CM.rate_channel("Jane Creator", [cp], {"handle": "@janecreator"}, "markdown editors")
+    assert CM.quadrant(r).startswith("creator-tied")
+
+
+def test_demo_walkthrough_is_analysis_not_tested():
+    demo = ("Let me show you. I'm going to tap the link icon. If I tap that, it jumps down. I'll run the shortcut "
+            "and just like that it worked. Markdown files export to PDF. ") * 20
+    g, gd = CM.video_rigor({"segments": [{"text": demo}], "length_s": 600})
+    assert gd.get("kind", "").startswith("analysis") and 1.0 <= g < 3
+
+
+def test_registry_names_fold_lookalike_characters(tmp_path):
+    data = {"channels": {"janedev": {"name": "Jane - j3\u2024dev", "handle": "@janedev", "topics": {}},
+                         "jane-j3.dev": {"name": "Jane - j3.dev", "handle": None, "topics": {},
+                                        "observations": [{"topic": "x", "text": "note"}]}}}
+    p = tmp_path / "r.json"
+    CM.registry_save(p, data)
+    d = CM.registry_load(p)
+    assert list(d["channels"]) == ["janedev"] and d["channels"]["janedev"]["observations"]
+    assert CM.registry_find(d, "Jane - j3.dev")[0] == "janedev"

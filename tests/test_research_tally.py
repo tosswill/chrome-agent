@@ -288,3 +288,24 @@ def test_repeat_promoters_across_threads():
                                    "text": "RoboForm is great."}]
     row = T.tally(recs, ["RoboForm"])["tally"][0]
     assert row["repeat_promoters"] == [{"author": "fan", "threads": 3}]
+
+
+def test_markdown_run_polarity_fixes():
+    recs = [{"id": "c1", "via": "comment", "author": "a", "score": 17,
+             "text": "I'm not aware of Typora, but I use MacDown 3000 and recommended it."},
+            {"id": "c2", "via": "comment", "author": "b", "score": 3, "text": "Typora is still king to me."},
+            {"id": "c3", "via": "comment", "author": "c", "score": 2, "text": "I can't recommend Zettlr enough."},
+            {"id": "c4", "via": "comment", "author": "d", "score": 2, "text": "I enjoy using Kate."}]
+    rows = {r["term"]: r for r in T.tally(recs, ["Typora", "MacDown 3000", "Zettlr", "Kate"])["tally"]}
+    # the MacDown recommendation isn't credited to Typora; "still king" is praise
+    assert rows["Typora"]["recommend_upvotes"] == 3 and rows["Typora"]["polarity"]["mention"] == 1
+    assert rows["MacDown 3000"]["recommend_upvotes"] == 17
+    assert rows["Zettlr"]["polarity"]["recommend"] == 1 and rows["Kate"]["polarity"]["recommend"] == 1
+    assert "common word" in rows["Kate"]["warning"]
+    assert T.polarity("I can't recommend it.") == "complain"
+
+
+def test_everyday_word_app_names_warn():
+    for name in ("Scratch", "Paper", "Zed", "Panda"):
+        assert T.ambiguous_variants(T.Term(name, [name]))
+    assert not T.ambiguous_variants(T.Term("Obsidian", ["Obsidian"]))
