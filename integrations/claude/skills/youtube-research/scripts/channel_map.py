@@ -69,7 +69,8 @@ _PATTERNS = {
         r"\b(?:side[- ]by[- ]side|same (?:amount|stain|carpet|conditions|test|spot)|each (?:machine|one|unit|"
         r"model) (?:got|gets|was)|control(?:led)? (?:test|sample|group)|three (?:passes|runs|trials)|"
         r"(?:test|trial|run) (?:number|#)\s*\d|averaged|on average|repeat(?:ed)? (?:the|this) test|"
-        r"to keep (?:it|things) fair|head[- ]to[- ]head)\b", re.I),
+        r"to keep (?:it|things) fair|head[- ]to[- ]head|once with [\w ]{1,30}?(?:enabled|on|turned on) and once with "
+        r"(?:it |[\w ]{1,30}?)?(?:disabled|off|turned off))\b", re.I),
     "testing_language": re.compile(r"\b(?:we|i) (?:tested|measured|weighed|timed|compared|ran (?:each|the|a) test)\b"
                                    r"|\b(?:test results?|(?:our|my) results|winner of this test)\b", re.I),
     "study_citation": re.compile(r"\b(?:a|one|this|the|that|another) (?:\d{4} )?(?:study|studies|paper|"
@@ -132,6 +133,14 @@ _PATTERNS = {
                              r"version) (?:only|limits?|includes?|lets|doesn'?t)\b|\b(?:limited|up) to \d+ (?:devices?|users?|"
                              r"people|members?|passwords?)\b|\b(?:one[- ]time (?:purchase|price|payment|fee)|lifetime "
                              r"licen[cs]e|(?:monthly|yearly|annual) subscription|free (?:and open[- ]source|trial))\b", re.I),
+    # Network and privacy testing: traffic captured or logged, not just described.
+    "network_test": re.compile(r"\b(?:wireshark|packet captures?|captured (?:the |all |its |their )?(?:network )?(?:traffic|packets)|"
+                               r"traffic (?:volume|patterns?|spikes?|bursts?)|network behaviou?r|(?:identifiable |known )?endpoints|"
+                               r"destination host ?names|(?:data|traffic) (?:collection )?(?:spikes?|bursts?)|bursts of data|pcap|tcpdump|"
+                               r"mitmproxy|pi-?hole (?:logs?|query log|dashboard)|(?:dns|query) logs?|blocked "
+                               r"(?:queries|requests|domains|lookups)|(?:monitored|logged|sniffed|recorded) (?:the |all |its )?"
+                               r"(?:network )?(?:traffic|packets|requests|connections)|bytes per second|(?:kilo|mega)bytes? "
+                               r"(?:per|a) (?:second|minute|hour))\b", re.I),
     "spec_sheet": re.compile(r"\b(?:according to the (?:manufacturer|brand|company)|features include|"
                              r"comes with (?:a|an) \d|boasts|the (?:manufacturer|brand) claims|on paper)\b", re.I),
 }
@@ -235,7 +244,8 @@ def video_rigor(rec: dict) -> tuple[float | None, dict]:
     hits = rigor_hits(text)
     minutes = (rec.get("length_s") or 0) / 60 or max(1.0, len(text.split()) / 150)  # ~150 spoken words/min
     per10 = {k: v * 10 / minutes for k, v in hits.items()}
-    measured = hits["measurement"] + hits["named_test"] + hits["controlled_test"] + hits["instrument"]
+    measured = (hits["measurement"] + hits["named_test"] + hits["controlled_test"] + hits["instrument"]
+                + hits["network_test"])
     # "I tested 6" with nothing measured or shown is a claim: it counts only a little.
     tl_cap = 1.2 if measured >= 3 or hits["demo"] >= 2 else 0.3
     analysis = (min(0.8, hits["audit_or_incident"] * 0.15) + min(0.8, per10["design_analysis"] * 0.1)
@@ -245,13 +255,13 @@ def video_rigor(rec: dict) -> tuple[float | None, dict]:
              + min(1.0, per10["named_test"] * 0.25)
              + min(1.0, hits["claim_check"] * 0.5) + min(1.0, per10["comparative"] * 0.3)
              + (0.6 if hits["data_table"] else 0) + min(0.6, hits["method"] * 0.3) + (0.6 if hits["instrument"] else 0)
-             + (0.4 if hits["long_term"] else 0)
+             + (0.4 if hits["long_term"] else 0) + min(1.5, hits["network_test"] * 0.3)
              - min(1.0, per10["spec_sheet"] * 0.3))
     score += screen
     hits["on_screen_table"] = 1 if screen else 0
     if rec.get("likely_ai_listicle"):
         score -= 2
-    hands_on = (hits["testing_language"] + hits["named_test"] + hits["claim_check"] + hits["controlled_test"]
+    hands_on = (hits["network_test"] + hits["testing_language"] + hits["named_test"] + hits["claim_check"] + hits["controlled_test"]
                 + hits["instrument"] + hits["method"] + hits["on_screen_table"] * 2)
     kind = None
     if analysis >= 1.0 and measured < 3:
@@ -356,7 +366,7 @@ def _vendors(rec: dict) -> tuple[set[str], int]:
         brands = [(b, re.sub(r"[^a-z0-9]", "", b.lower())) for b in S.KNOWN_BRANDS]
     except Exception:  # pragma: no cover
         brands = []
-    vendors, retail = set(), 0
+    vendors, others, retail = set(), set(), 0
     for x in _signals(rec):
         if x.get("signal") not in ("affiliate_links", "brand_affiliate_links"):
             continue
@@ -367,7 +377,10 @@ def _vendors(rec: dict) -> tuple[set[str], int]:
             flat = re.sub(r"[^a-z0-9]", "", u.lower())
             named = [b for b, a in brands if len(a) >= 4 and a in flat]
             host = re.sub(r"^https?://(?:www\.)?", "", u.lower()).split("/")[0]
-            vendors.add(named[0] if named else ".".join(host.split(".")[-2:]))
+            if named:  # a known brand's program; a creator's own partner hub (lmg.gg/...) names no vendor
+                vendors.add(named[0])
+            else:
+                others.add(".".join(host.split(".")[-2:]))
     return vendors, retail
 
 

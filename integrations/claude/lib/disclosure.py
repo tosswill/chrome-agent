@@ -253,7 +253,7 @@ _BOUGHT_STRONG = re.compile(
 _BOUGHT_WEAK = re.compile(r"\b(?:i|we) (?:bought|purchased|paid for)\b", re.I)
 _NOT_SPONSORED = re.compile(
     r"\b(not (?:an? )?(?:sponsored|paid|gifted)|no(?:body| one) (?:paid|sponsored)|un-?sponsored|isn'?t (?:an? )?"
-    r"sponsored|wasn'?t (?:an? )?(?:sponsored|paid)|no sponsors?\b|non-?sponsored)", re.I)
+    r"sponsored|wasn'?t (?:an? )?(?:sponsored|paid)|no sponsors?\b|non-?sponsored|(?:we|i) (?:never|don'?t|do not) (?:accept|take|do) (?:any )?(?:sponsorships?|sponsors?|paid (?:promotions?|reviews?)))", re.I)
 _EDITORIAL = re.compile(
     r"\b((?:they|\w+) (?:did ?n'?o?t|do ?n'?o?t|never) (?:see|review|approve|preview|get to see) (?:the|this|my) "
     r"(?:video|review)(?: before| ahead| in advance)?|(?:did ?n'?o?t|do ?n'?o?t|never) (?:have|get) (?:any )?"
@@ -330,16 +330,16 @@ BUILDER_ROLE = r"(?:solo |indie |lead |main )?(?:author|creator|developer|dev|ma
 BUILT_THING = (r"(?:app|tool|cli|extension|service|product|project|manager|vault|thing|editor|plugin|client|program|"
                 r"utility|theme|alternative|version|one)")
 BUILDER = re.compile(
-    r"\b(?:i'?m|i am|we'?re|we are)\s+(?:the |one of the )" + BUILDER_ROLE + r"\b"
-    r"|\b(?:i'?m|i am|we'?re|we are)\s+(?:a |an )?" + BUILDER_ROLE + r"\s+(?:of|behind)\b"
+    r"\b(?:i['’]?m|i am|we['’]re|we are)\s+(?:the |one of the )" + BUILDER_ROLE + r"\b"
+    r"|\b(?:i['’]?m|i am|we['’]re|we are)\s+(?:a |an )?" + BUILDER_ROLE + r"\s+(?:of|behind)\b"
     r"|\((?:i'?m|i am) the (?:author|dev|developer|creator|maker)\)"
     r"|\b(?:dis(?:closure|claimer)|full disclosure|fd)\s*[:,-]?\s*(?:it'?s (?:mine|my|our)|(?:i|we)(?:'m| am|'re| are)? "
     r"(?:the |a |an |on the team |one of the )?(?:dev|developer|make|made|built|build|building|author|creator|maker|"
     r"founder|co-?founder|maintain|maintainer|work (?:on|for|at)|wrote|develop))\b"
-    r"|\b(?:i'?m|i am|we'?re|we are) (?:on the team )?(?:building|developing|working on|making|maintaining) "
+    r"|\b(?:i['’]?m|i am|we['’]re|we are) (?:on the team )?(?:building|developing|working on|making|maintaining) "
     r"(?:this|it|an? \w*\s*" + BUILT_THING + r"|my own|our own|(?-i:[A-Z][\w.-]+)|\w+ into)"
     r"|\b(?:i|we) (?:make|maintain|develop|built|made|created|wrote|developed|launched|programmed|coded|"
-    r"vibe-?coded|shipped) (?:(?:an?|my own|our own|this|a little|a small|a free|an open[- ]source)\s+(?:[\w-]+\s+){0,2}?"
+    r"vibe-?coded|shipped|published|released|open[- ]sourced) (?:(?:an?|my own|our own|this|a little|a small|a free|an open[- ]source)\s+(?:[\w-]+\s+){0,2}?"
     + BUILT_THING + r"|one myself|(?-i:[A-Z][a-z]+[A-Z]?\w*)(?:\.\w+)?\b(?! (?:a|the|my|it)\b)|[\w-]+\.(?:app|io|sh|dev))\b"
     r"|\bended up (?:building|making|writing|coding) (?:my|our) own\b"
     r"|\b(?:the|this) (?:thing|app|tool|system|product|plugin|course|template) (?:that )?(?:i|we)(?:'m| am|'re| are) "
@@ -543,11 +543,16 @@ def dedupe_hits(hits: list[dict]) -> list[dict]:
     return out
 
 
+# Auto-caption sound tags ("[music]", "[applause]"): not words anyone said (a sponsor named "music").
+_CAPTION_TAG = re.compile(r"\[(?:music|applause|laughter|laughs|__|inaudible|silence|cheering|sound|noise)\]", re.I)
+
+
 def scan_segments(segments: list[dict], subject: str = "", *, channel: str | None = None, own_domains=(),
                   source_fmt: str = "transcript {at}") -> list[dict]:
     """scan_text over transcript segments ({text, at, link}); each segment sees its neighbors as context
     (a denial in the next segment cancels "sponsored by them"). Duplicate segments are scanned once."""
     uniq, keys = [], set()
+    segments = [{**sg, "text": _CAPTION_TAG.sub(" ", sg.get("text") or "")} for sg in segments or []]
     for sg in segments or []:
         k = (sg.get("sec", sg.get("at")), sg.get("text"))
         if k not in keys:
@@ -593,7 +598,7 @@ _INVITE = re.compile(r"//(?:www\.)?(?:discord\.gg|discord\.com/invite|t\.me|tele
                      r"matrix\.to|join\.slack\.com|signal\.group)/", re.I)
 _SHORT_LINK = re.compile(r"//(bit\.ly|tinyurl\.com|t\.co|ow\.ly|rebrand\.ly|lnk\.to|linktr\.ee|da\.gd|is\.gd|cutt\.ly|"
                          r"shorturl\.at|buff\.ly|tiny\.cc)/", re.I)
-_UTM = re.compile(r"[?&]utm_(campaign|source|medium)=([^&#]*)", re.I)
+_UTM = re.compile(r"[?&](?:utm|mtm|pk)_(campaign|source|medium|kwd)=([^&#]*)", re.I)
 _UTM_STRICT = re.compile(r"kol|influencer|creator|sponsor|partner|launch|ambassador|paid|affiliate", re.I)
 _CREATOR_HOSTS = re.compile(r"(^|\.)(patreon\.com|ko-fi\.com|buymeacoffee\.com|gumroad\.com|teespring\.com|"
                             r"fourthwall\.com|spreadshirt\.[a-z.]+|spring\.com|bonfire\.com|merchbar\.com)$", re.I)
@@ -618,7 +623,16 @@ def _own_redirect(url: str, host: str, stem: str, ch_toks: set[str], brands=()) 
 
 
 _MY_LINE = re.compile(r"\b(my|our) (own )?(store|shop|site|website|merch|kits?|course|courses|patreon|presets|luts|"
-                      r"book|newsletter|podcast|blog|products?|designs?|models|files|discord)\b", re.I)
+                      r"book|newsletter|podcast|blog|products?|designs?|models|files|discord|membership|members?|"
+                      r"investigations|work|channel)\b|\bbecom(?:e|ing) a (?:channel )?member\b|\bjoin (?:the|our) "
+                      r"(?:membership|members|community)\b|\bsupport (?:us|the channel|our work)\b", re.I)
+# A vendor link carrying the creator's name as its path ("vpn.example/QuadQ", "vpn.example/jct" by initials) or an
+# affiliate subdomain ("affiliate.ipvanish.com/SH18"): a referral that pays the creator.
+_PLATFORM_HOST = re.compile(r"(^|\.)(youtube\.com|youtu\.be|instagram\.com|twitter\.com|x\.com|facebook\.com|fb\.me|"
+                            r"tiktok\.com|twitch\.tv|threads\.net|bsky\.app|patreon\.com|ko-fi\.com|discord\.gg|"
+                            r"github\.com|linktr\.ee|reddit\.com)$", re.I)
+_AFF_SUBDOMAIN = re.compile(r"//(?:www\.)?(?:affiliates?|partners?|refer(?:ral)?|ref|go|get|try)\.[a-z0-9-]+\.[a-z.]+/[^\s]+",
+                            re.I)
 
 
 def classify_links(links: list[str], *, channel: str | None = None, description: str = "",
@@ -644,7 +658,9 @@ def classify_links(links: list[str], *, channel: str | None = None, description:
         # the creator: affiliate, not own.
         bare = re.sub(r"^(?:shop|store|get|go|the|my|try|buy)(?=[a-z0-9]{4})", "", stem)
         whole = {t for t in (full, _alnum(handle or "")) if len(t) >= 4}
-        by_name = (stem in ch_toks or bare in ch_toks or any(stem.startswith(w) or bare.startswith(w) for w in whole)
+        inits = "".join(w[0] for w in re.findall(r"[A-Za-z0-9]+", _CHANNEL_FILLER.sub(" ", channel or ""))).lower()
+        by_name = ((len(inits) >= 3 and stem.startswith(inits) and stem[len(inits):] in {"", "store", "shop", "merch", "labs"})
+                   or stem in ch_toks or bare in ch_toks or any(stem.startswith(w) or bare.startswith(w) for w in whole)
                    or any(stem.startswith(t) for t in ch_toks if len(t) >= 6) or bool(_CREATOR_HOSTS.search(host)))
         # "?ref=TheSolarLab": the creator is the referrer, so the store is someone else's.
         refs = {_alnum(v) for k, vs in parse_qs(urlparse(url).query).items() if _REF_PARAM.search("?" + k + "=")
@@ -652,6 +668,10 @@ def classify_links(links: list[str], *, channel: str | None = None, description:
         referrer = bool(refs & (whole | ch_toks))
         own = bool(host) and not referrer and (
             by_name or (any(url in ln for ln in my_lines) and not _REF_PARAM.search(url)))
+        if own and _SHORT_LINK.search(url) and not by_name:
+            # "Support our investigations by becoming a member: bit.ly/x": the creator's own program
+            out["self_promotion_links"].append(url)
+            continue
         if own and _own_redirect(url, host, stem, ch_toks | whole, brands):
             out["affiliate_links"].append(url)
             out["own_redirect_links"].append(url)
@@ -663,7 +683,11 @@ def classify_links(links: list[str], *, channel: str | None = None, description:
             continue
         if _INVITE.search(url):
             continue
-        if _AFF_LINK.search(url) and not _AMAZON_PLAIN(url):
+        seg = _alnum((urlparse(url).path or "").strip("/").split("/")[0]) if host else ""
+        initials = "".join(w[0] for w in re.findall(r"[A-Za-z0-9]+", _CHANNEL_FILLER.sub(" ", channel or ""))).lower()
+        named_path = bool(seg) and not _PLATFORM_HOST.search(host) and (
+            seg in ch_toks or seg in whole or (len(initials) >= 3 and seg == initials))
+        if (_AFF_LINK.search(url) and not _AMAZON_PLAIN(url)) or _AFF_SUBDOMAIN.search(url) or named_path:
             out["affiliate_links"].append(url)
         if _UTM.search(url):
             out["campaign_links"].append(url)

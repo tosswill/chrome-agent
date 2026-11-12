@@ -17,6 +17,7 @@ If the `reddit_*` tools aren't available, say so and stop. Don't fall back to we
 4. **If a result contains `stop` or `error`, stop and tell the user why.** Never retry another way.
    - **Need the user (don't retry):** the screen is locked or asleep, the research window is hidden, a `stop` (sign-in, CAPTCHA, block or bot check), or `reddit_open` failing to restore the browser.
    - **May retry once, after waiting about 30 s:** all windows busy (`wait_seconds`), a page that didn't finish loading, or a timeout. If the retry fails the same way, stop and tell the user.
+   - **Pop-ups:** If a click on a result misses, the helper first checks for a covering pop-up (a login or app nag) and dismisses it with its own close button before the second try.
    - **Not an error, move on:** `thread: null` with a `note`, an empty search (its `note` says how to simplify), a removed thread.
 5. **Budget:** 25 page loads for a Reddit-focused task, 10 when Reddit is one source among several, 12–15 for the middle case (a light pass plus complaints, or named products plus a landscape check), about 20 for a landscape question. A user-given cap wins. Each result reports `page.loads`. Ask before exceeding the budget.
 6. **Always `reddit_close` your window** when done, even after errors.

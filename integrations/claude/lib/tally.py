@@ -326,7 +326,7 @@ _REC_NEG = re.compile(r"\b(no (?:issues?|problems?|complaints?|regrets?)|zero (?
                       r"can'?t go wrong|couldn'?t be happier|not a single (?:issue|problem)|won'?t regret|"
                       r"(?:never|haven'?t|didn'?t|don'?t) regrett?(?:ed)?|zero regrets?|no regrets?|"
                       r"can'?t recommend (?:it |them |this |\w+ )?(?:enough|highly enough))\b", re.I)
-_COMP_NEG = re.compile(r"\b(not worth|wouldn'?t recommend|would not recommend|don'?t recommend|do not recommend|"
+_COMP_NEG = re.compile(r"\b(not worth|(?:don'?t|do not|never) (?:get|buy|go with|bother with)|wouldn'?t recommend|would not recommend|don'?t recommend|do not recommend|"
                        r"can'?t recommend|cannot recommend|don'?t buy|do not buy|stay away|not reliable|doesn'?t work|"
                        r"does not work|didn'?t work|stopped working|not happy|wasn'?t happy|not impressed|"
                        r"(?:not|isn'?t|wasn'?t|aren'?t) (?:that |very |so |really |super |too )?(?:great|good|"
@@ -341,12 +341,15 @@ _REC = re.compile(r"\b(recommend(?:ed)?|love (?:it|mine|my|the)|loving|great|exc
                   r"(?:i|we)(?:'ve| have) been using (?:it|them|\w+) (?:for|since) (?:years|ages|a decade|\d+)|"
                   r"(?:still|is|the) king|just what (?:i|we) (?:need|needed|wanted)|my (?:fav|fave|go-?to|daily driver)|"
                   r"(?:i|we) (?:really |still |thoroughly )?(?:enjoy|like|adore) (?:using|it|this|that|\w+ (?:a lot|so much))|"
-                  r"is so (?:fast|good|nice|clean|snappy|smooth|light)|can'?t recommend (?:it |\w+ )?enough)\b", re.I)
+                  r"is so (?:fast|good|nice|clean|snappy|smooth|light)|can'?t recommend (?:it |\w+ )?enough|"
+                  r"(?:just |i'?d |i would |you should |should )?(?:get|grab|buy) (?:an?|yourself an?)|go (?:with|for) (?:an?|the)|"
+                  r"use (?:just )?(?:that|it|one)|(?:i'?d|i would) (?:go|pick|choose)|my vote|vote for)\b", re.I)
 _COMP = re.compile(r"\b(problems?|issues?|broke|broken|fail(?:s|ed|ing|ure)?|clog(?:s|ged|ging)?|jam(?:s|med)?|"
                    r"return(?:ed|ing)?|refund|regret|avoid|terrible|awful|worst|garbage|junk|disappoint(?:ed|ing)?|"
                    r"defect(?:ive)?|doa|hate|limitation|unreliable|poor|sucks?|annoying|warranty|rma|nightmare|"
                    r"overpriced|flaky|bug(?:s|gy)?|noisy|hiss|dropouts?|cutting out|died|dead|leak(?:s|ed|ing|y)?|"
-                   r"crap|crappy|piece of (?:junk|crap|shit))\b", re.I)
+                   r"crap|crappy|piece of (?:junk|crap|shit)|mess|bloat(?:ed|ware)?|ad[- ]?(?:bloated|infested|riddled|filled)|"
+                   r"ads? everywhere|full of ads|spy(?:ing|ware)?|enshittifi\w*|unusable|laggy|sluggish)\b", re.I)
 
 
 def polarity(text: str) -> str:
@@ -513,13 +516,18 @@ def _parts(rec: dict, include_transcripts: bool) -> list[tuple[str, str, str | N
     return [p for p in parts if p[1]]
 
 
+# A title asking to replace or compare a product: replies there endorse something else.
+_NOT_ABOUT = re.compile(r"\b(?:vs\.?|versus|or|alternatives?|instead of|replac(?:e|ing|ement)|switch(?:ing)? (?:from|away)|"
+                        r"ditch(?:ing)?|leav(?:e|ing)|other than|besides|without|better than|ditched|moving (?:off|away))\b", re.I)
+
+
 def _implied(recs: list[dict], term: Term, terms: list[Term], indep_fn, max_examples: int) -> dict:
     """Endorsements that don't name the product: top-level replies that read as a recommendation
     ("Love mine. No regrets.") in a thread whose post title names this product and no other tallied
     product. Kept apart from the main counts; read the examples before using them."""
     posts = {}
     for r in recs:
-        if r.get("via") == "post" and r.get("title"):
+        if r.get("via") == "post" and r.get("title") and not _NOT_ABOUT.search(r["title"]):
             named = {t.name for t in terms if find_mentions(r["title"], [t])}
             if named == {term.name}:
                 posts[str(r.get("thread") or r.get("id"))] = r

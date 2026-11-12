@@ -309,3 +309,14 @@ def test_everyday_word_app_names_warn():
     for name in ("Scratch", "Paper", "Zed", "Panda"):
         assert T.ambiguous_variants(T.Term(name, [name]))
     assert not T.ambiguous_variants(T.Term("Obsidian", ["Obsidian"]))
+
+
+def test_streaming_run_polarity_and_implied():
+    assert T.polarity("Get an Apple TV and use just that.") == "recommend"
+    assert T.polarity("Fire TV UI has become an ad bloated mess") == "complain"
+    assert T.polarity("Don't get a Roku.") == "complain" and T.polarity("Should I get a Roku?") == "question"
+    recs = [{"id": "p1", "thread": "p1", "via": "post", "title": "Roku alternatives?", "author": "op", "text": ""},
+            {"id": "c1", "thread": "p1", "via": "comment", "author": "a", "depth": 0, "score": 9,
+             "text": "Love mine, highly recommend it."}]
+    row = T.tally(recs, ["Roku"])["tally"][0]
+    assert not (row.get("implied") or {}).get("users")

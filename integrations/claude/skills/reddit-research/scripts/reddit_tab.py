@@ -247,13 +247,21 @@ COMMON = D.GENERIC | {
     "coding", "programming", "developer", "developers", "productivity", "minimal", "minimalist", "distraction",
     "tabs", "tables", "math", "latex", "pandoc", "pdf", "html", "mermaid", "wiki", "journal", "journaling",
     "outliner", "local", "offline", "cloud", "selfhost", "macapps", "macosapps", "linuxapps", "ai", "llm",
+    # Streaming, TV and home-network words ("Smart TV", "DNS", "HDR", "Widevine"; streaming services are the
+    # content, not the device being judged).
+    "tv", "tvs", "smart", "streaming", "stream", "streamer", "device", "devices", "box", "boxes", "stick", "dongle",
+    "dns", "hdr", "hdr10", "dolby", "vision", "atmos", "drm", "widevine", "acr", "4k", "8k", "1080p", "720p",
+    "hdmi", "cec", "remote", "launcher", "ads", "spying", "spy", "tracking", "telemetry", "router", "firewall",
+    "network", "vlan", "netflix", "hulu", "disney", "max", "prime", "youtube", "htpc", "minipc", "nas", "media",
+    "server", "homelab", "cordcutters", "privacy",
 }
 _ALLCAPS_STOP = {"OP", "PSA", "USB", "TV", "LED", "PLA", "PETG", "ABS", "TPU", "DIY", "FDM", "SLA", "AMS", "AI",
                  "PC", "UK", "US", "USA", "EU", "FPS", "RGB", "HELP", "NEW", "WTF", "IMO", "TIL", "OMG", "ELI5",
                  "AMA", "FAQ", "PSU", "CPU", "GPU", "RAM", "SSD", "HDD", "DM", "PM", "IRL", "TLDR", "EDIT",
                  "UPDATE", "RF", "UHF", "VHF", "XLR", "TRS", "BT", "HDMI", "VR", "AR", "XR", "MR", "OLED", "LCD",
                  "NFC", "GPS", "APP", "WIFI", "ISO", "RAW", "LOG", "MP", "MM", "IS", "IT", "OK", "NOT", "AND",
-                 "THE", "FOR", "VS", "BUY", "WHY", "HOW", "WHAT", "BEST", "WORST", "HELP!", "ANY", "NO", "YES"}
+                 "THE", "FOR", "VS", "BUY", "WHY", "HOW", "WHAT", "BEST", "WORST", "HELP!", "ANY", "NO", "YES",
+                 "DNS", "HDR", "DRM", "ACR", "ADB", "CEC", "UI", "UX", "VPN", "LAN", "WAN", "NAS", "HTPC", "OS", "PSA:"}
 _WORD = re.compile(r"(?:\d+(?=[A-Za-z]{2}))?[A-Za-z][A-Za-z0-9+&'-]*")  # "1Password" is one word
 
 
@@ -463,6 +471,9 @@ def affix_of(name: str) -> str | None:
     return (_tok(m.group(1)) or None) if m else None
 
 
+# "Founder of Home Assistant", "Lead dev @ Logseq": a role at a named project or company.
+_ROLE_OF = re.compile(r"\b(founder|co-?founder|lead|lead dev(?:eloper)?|developer|dev|maintainer|creator|author|ceo|cto|"
+                      r"engineer|employee|staff|team)\s+(?:of|at|@|for)\s+([A-Z][\w.&+' -]{1,40})", re.I)
 _TEAM_FLAIR = re.compile(r"\b(team|staff|employee|official|support|rep|representative|community (?:manager|moderator|"
                          r"team|lead)|"
                          r"cm|engineer|developer|dev|founder|ceo|pr|marketing)\b", re.I)
@@ -529,6 +540,7 @@ def staff_flair(flair: str, brands: set, weak: set = frozenset(), *, sub_brand: 
     m = _BRAND_NAME_FLAIR.match(norm)
     if m and fb and name_brand(m.group("b"), brands | ({sub_brand} if sub_brand else set()), weak) and \
             len(_WORD.findall(m.group("n"))) == 1 and not re.search(r"\d", m.group("n")) and \
+            not (m.group("n").strip().isupper() and len(m.group("n").strip()) >= 3) and \
             _tok(m.group("n")) not in COMMON and not D.GENERIC & {_tok(m.group("n"))}:
         # One plain name after the brand ("EcoFlow | Ryan"); owner flair lists models instead.
         return f"flair '{fl}' (brand | name)", fb
@@ -937,6 +949,12 @@ def promo_bias(data: dict, query: str = "", brands=()) -> dict:
     reviewers = _reviewer_names()
     strong, weak = strong - reviewers, weak - reviewers
     sub_brand = subreddit_brand(sub, strong, weak)
+    if not sub_brand:
+        for m in data.get("moderators") or []:
+            mm = _ROLE_OF.search(m.get("flair") or "")
+            if mm and len(_tok(sub)) >= 4 and _tok(mm.group(2)) == _tok(sub):
+                sub_brand = _tok(sub)  # the project's founder/lead moderates its subreddit
+                break
     if sub_brand:
         strong = strong | {sub_brand}
     subject = " ".join([title, data.get("flair") or "", " ".join(sorted(strong))])
@@ -1577,6 +1595,8 @@ def _open_thread(full_id: str, url: str, pid: str) -> dict:
                 return st
             if _post_id(_href(full_id)) not in (None, pid):
                 break  # landed somewhere else; load the URL
+            if attempt == 1:
+                SITE.recover_overlay(full_id, _title_sel(pid))  # a login or app nag covering the result
             pause(random.uniform(0.6, 1.4))
         _uncount_load(full_id)
         st = SITE.nav(full_id, url)

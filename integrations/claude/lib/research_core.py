@@ -533,6 +533,40 @@ class Site:
         self.click(target, x, y)
         return True
 
+    def covered_by(self, target: str, selector: str) -> dict | None:
+        """What sits on top of `selector`'s center (a promo dialog, a consent banner, a login nag), or None
+        when the element itself (or nothing) is there. Includes the covering layer's own dismiss button
+        ("No thanks", "Not now", close/X), when it has one, as `dismiss` {x, y, label}."""
+        return self.evaluate(target, _COVERED_JS % json.dumps(selector))
+
+    def recover_overlay(self, target: str, selector: str, shot_dir: Path | None = None) -> dict:
+        """Recovery for a click whose expected result didn't happen (not run before normal clicks).
+        If something covers the target, click that layer's own dismiss button and report it; if it has
+        none, save a screenshot and report what covers the target. Returns {covered, by?, dismissed?,
+        screenshot?}."""
+        try:
+            c = self.covered_by(target, selector)
+        except Fail:
+            return {"covered": None}
+        if not c:
+            return {"covered": False}
+        out = {"covered": True, "by": c.get("by")}
+        d = c.get("dismiss")
+        if d:
+            pause(random.uniform(0.6, 1.4))  # a person notices the popup first
+            self.click(target, d["x"], d["y"])
+            pause(random.uniform(0.8, 1.4))
+            still = self.covered_by(target, selector)
+            out.update(dismissed=d.get("label") or True, still_covered=bool(still))
+            if not still:
+                return out
+        try:
+            path = Path(shot_dir or self.state / "shots") / f"overlay-{int(time.time())}.jpg"
+            out["screenshot"] = str(self.screenshot(target, path, max_width=1600))
+        except Exception:  # noqa: BLE001 - a missing screenshot must not hide the report
+            pass
+        return out
+
     def screenshot(self, target: str, out: Path, clip: dict | None = None,
                    max_width: int | None = None, quality: int = 85) -> Path:
         """Capture the viewport (or `clip`). JPEG when `out` ends in .jpg, scaled down so the
@@ -861,6 +895,37 @@ class Site:
     def gc(self) -> dict:
         with self._locked("claims.lock"):
             return {"released": self._gc_locked({t["full_id"] for t in self.targets()})}
+
+
+# What covers an element's center, and that layer's own dismiss button. %s = the selector (JSON).
+_COVERED_JS = r"""(() => {
+  const el = document.querySelector(%s);
+  if (!el) return null;
+  const r = el.getBoundingClientRect();
+  if (!r.width || !r.height) return null;
+  const cx = r.x + r.width / 2, cy = r.y + r.height / 2;
+  if (cx < 0 || cy < 0 || cx > innerWidth || cy > innerHeight) return null;
+  const top = document.elementFromPoint(cx, cy);
+  if (!top || top === el || el.contains(top) || top.contains(el)) return null;
+  const layer = top.closest('[role=dialog], [role=alertdialog], [aria-modal=true], tp-yt-paper-dialog, ytd-popup-container, ' +
+    'ytd-mealbar-promo-renderer, ytd-enforcement-message-view-model, yt-mealbar-promo-renderer, faceplate-modal, ' +
+    'shreddit-async-loader[bundlename*=modal], [class*=modal], [class*=popup], [class*=overlay], [class*=banner], ' +
+    '[class*=consent], [id*=consent]') || top;
+  const desc = (layer.tagName.toLowerCase() + (layer.id ? '#' + layer.id : '') + ' ' +
+    (layer.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 100)).trim();
+  const rx = /^(no,? thanks|no thanks|not now|maybe later|dismiss|close|skip|skip trial|got it|×|✕|x|reject all|decline)$/i;
+  let best = null;
+  for (const b of layer.querySelectorAll('button, [role=button], a, tp-yt-paper-button, yt-button-shape')) {
+    const label = ((b.getAttribute('aria-label') || '') + ' ' + (b.innerText || '')).replace(/\s+/g, ' ').trim();
+    const words = (b.innerText || '').trim() || (b.getAttribute('aria-label') || '').trim();
+    if (!(rx.test(words) || /^(close|dismiss)\b/i.test(b.getAttribute('aria-label') || ''))) continue;
+    const br = b.getBoundingClientRect();
+    if (!br.width || !br.height) continue;
+    best = {x: br.x + br.width * (0.35 + Math.random() * 0.3), y: br.y + br.height * (0.35 + Math.random() * 0.3), label};
+    break;
+  }
+  return {by: desc, dismiss: best};
+})()"""
 
 
 class _Lock:

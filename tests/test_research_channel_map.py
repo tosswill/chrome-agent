@@ -321,3 +321,11 @@ def test_registry_names_fold_lookalike_characters(tmp_path):
     d = CM.registry_load(p)
     assert list(d["channels"]) == ["janedev"] and d["channels"]["janedev"]["observations"]
     assert CM.registry_find(d, "Jane - j3.dev")[0] == "janedev"
+
+
+def test_network_traffic_testing_counts_as_rigor():
+    txt = ("We tested 15 devices, once with ACR enabled and once with it disabled, and captured its network traffic "
+           "using Wireshark. We compared destination host names, timing and traffic volume. With ACR enabled they sent "
+           "regular bursts of data to identifiable endpoints; with ACR disabled that traffic stopped. ") * 3
+    g, gd = CM.video_rigor({"segments": [{"text": txt}], "length_s": 540})
+    assert gd["hits"]["network_test"] >= 6 and g >= 2
