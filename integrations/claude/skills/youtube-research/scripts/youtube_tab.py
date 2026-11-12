@@ -273,7 +273,10 @@ def _video_record(data: dict, sb: dict, segments: list[dict] | None = None) -> d
            "views": data.get("views"), "sponsor_score": sb.get("score"),
            "transcript_scanned": bool(sb.get("transcript_scanned")),
            # for the channel map: compact evidence, length and channel identity
-           "signals": [{k: e.get(k) for k in ("signal", "source", "sec", "sponsor") if e.get(k) is not None}
+           "signals": [{**{k: e.get(k) for k in ("signal", "source", "sec", "sponsor") if e.get(k) is not None},
+                        # link lists stay, so the channel map can tell vendors and retailers apart
+                        **({"text": e.get("text")} if e.get("signal") in ("affiliate_links", "brand_affiliate_links")
+                           and e.get("text") else {})}
                        for e in sb.get("evidence") or []],
            "length_s": data.get("length_s"), "handle": data.get("handle"), "subscribers": data.get("subscribers")}
     if sb.get("brand_owned"):
@@ -622,17 +625,31 @@ def _open_transcript(full_id: str) -> tuple[bool, str | None]:
         SITE.read_pause(full_id, random.uniform(2.5, 6.0), area=SITE.content_area(full_id))
     if not SITE.click_on(full_id, btn, look=random.uniform(1.0, 2.5)):
         return False, "no_transcript: this video has no 'Show transcript' button."
-    deadline = time.time() + 15
-    while time.time() < deadline:
-        if SITE.evaluate(full_id, f"!!document.querySelector({json.dumps(_SEG)})"):
-            pause(0.8)  # let the rest of the list render
-            return True, None
-        status = SITE.evaluate(full_id, _TRANSCRIPT_ERR_JS) or 0
-        if status >= 400:
-            return False, (f"youtube_error: YouTube's transcript service returned HTTP {status} for this video, "
-                           "so the panel never loads (a person would see the same endless spinner). "
-                           "Use chapters, the description, comments and frames instead.")
-        pause(1)
+    recovery = None
+    for wait in (6, 15):
+        deadline = time.time() + wait
+        while time.time() < deadline:
+            if SITE.evaluate(full_id, f"!!document.querySelector({json.dumps(_SEG)})"):
+                pause(0.8)  # let the rest of the list render
+                return True, None
+            status = SITE.evaluate(full_id, _TRANSCRIPT_ERR_JS) or 0
+            if status >= 400:
+                return False, (f"youtube_error: YouTube's transcript service returned HTTP {status} for this video, "
+                               "so the panel never loads (a person would see the same endless spinner). "
+                               "Use chapters, the description, comments and frames instead.")
+            pause(1)
+        if recovery is not None:
+            break
+        # The panel didn't open: something may cover the button (a Premium trial popup). Recover once.
+        recovery = SITE.recover_overlay(full_id, btn)
+        if not (recovery.get("dismissed") and not recovery.get("still_covered")):
+            break
+        SITE.click_on(full_id, btn, look=random.uniform(0.6, 1.4))
+    if recovery and recovery.get("covered"):
+        return False, (f"covered: the transcript button is covered by {recovery.get('by')!r}"
+                       + (f"; tried '{recovery.get('dismissed')}'" if recovery.get("dismissed") else "")
+                       + (f"; screenshot {recovery['screenshot']}" if recovery.get("screenshot") else "")
+                       + ". Ask the user to dismiss it, then retry.")
     return False, "timeout: the transcript panel did not load within 15 s."
 
 
@@ -882,7 +899,13 @@ def _open_by_click(full_id: str, vid: str) -> tuple[dict | None, str]:
     except Fail as e:
         return missed(f"url (click failed: {str(e)[:80]})")
     if not SITE.wait_for(full_id, _watch_ready_js(vid), timeout=15, settle=SITE.settle):
-        return missed("url (click missed)")
+        rec = SITE.recover_overlay(full_id, sel)
+        if not (rec.get("dismissed") and not rec.get("still_covered")):
+            return missed("url (click missed" + (f"; covered by {rec.get('by')!r}" if rec.get("covered") else "") + ")")
+        if not (SITE.click_on(full_id, sel, look=random.uniform(0.6, 1.4)) and
+                SITE.wait_for(full_id, _watch_ready_js(vid), timeout=15, settle=SITE.settle)):
+            return missed("url (click missed after dismissing an overlay)")
+        how = f"{how} (after dismissing '{rec.get('dismissed')}')"
     state = SITE.evaluate(full_id, SITE.page_state_js) or {}
     state["loads"] = loads
     reason = _stop_reason(state, SITE)
@@ -950,6 +973,26 @@ def search(target: str, query: str, sort: str = "relevance", upload: str | None 
     return {"page": page, "results": results}
 
 
+_KNOWN_FLAT = {re.sub(r"[^a-z0-9]", "", b.lower()) for b in S.KNOWN_BRANDS}
+
+
+def _unrelated_codes(hits: list[dict], subject: str) -> list[dict]:
+    """A "use my code/link" pitch for a site the video isn't about ("course.example/?promo=JCT" in a smart-TV
+    video) is a third-party sponsor's code: neither the title/keywords nor the known-brand list names it."""
+    subj = re.sub(r"[^a-z0-9]", "", (subject or "").lower())
+    out = []
+    for h in hits:
+        if h.get("signal") == "use_my_link_or_code":
+            hosts = [D._host(u) for u in re.findall(r"https?://[^\s,)]+", h.get("text") or "")]
+            stems = [re.sub(r"[^a-z0-9]", "", x.rsplit(".", 1)[0].split(".")[-1]) for x in hosts if x]
+            stems = [x for x in stems if len(x) >= 3]
+            if stems and not any(x in subj or x in _KNOWN_FLAT for x in stems):
+                h = {**h, "signal": "third_party_sponsor", "weight": D.WEIGHTS["third_party_sponsor"],
+                     "sponsor": hosts[0], "via": "code"}
+        out.append(h)
+    return out
+
+
 def sponsor_bias(data: dict, transcript_hits: list[dict] | None = None) -> dict:
     """0.0-1.0 likelihood that a video is sponsored or sponsor-influenced, with its evidence.
     Y5: the paid-promotion label weighs 0.2 instead of 0.6 when the only named sponsor is a third party.
@@ -989,6 +1032,7 @@ def sponsor_bias(data: dict, transcript_hits: list[dict] | None = None) -> dict:
         page.insert(0, {"signal": "brand_owned_channel", "weight": 1.0, "source": "channel", "brand_owned": "strong",
                         "brand": owner, "text": f"Channel '{ch}' is {owner}'s own channel"})
     page += S.brand_upsells(data.get("description") or "", data.get("title") or "")
+    page, extra = _unrelated_codes(page, subject), _unrelated_codes(extra, subject)
     page, extra = D.resolve_third_party(page, extra)
     every = page + extra
     third = [h for h in every if h["signal"] == "third_party_sponsor"]

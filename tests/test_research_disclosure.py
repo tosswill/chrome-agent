@@ -338,3 +338,34 @@ def test_creator_product_builder_and_employer():
 def test_chat_invites_are_not_affiliate_links():
     c = D.classify_links(["https://discord.gg/abc123", "https://t.me/somechannel"])
     assert not c["affiliate_links"] and not c["short_links"]
+
+
+# --- private-streaming run (2026-11-12) ---------------------------------------------------------------
+
+def test_contractions_need_an_apostrophe():
+    for t in ("If you were building this from scratch, what would you use?", "when we were working on this video"):
+        assert not D.BUILDER.search(t), t
+    assert D.BUILDER.search("I published Flixer today") and D.BUILDER.search("We're building it in the open")
+
+
+def test_creator_named_vendor_paths_and_affiliate_subdomains():
+    c = D.classify_links(["https://affiliate.vpn.example/SH18", "https://vpn.example/QuadQ",
+                          "https://www.youtube.com/channel/x/join"], channel="Quad Q", handle="@Quad_Q")
+    assert c["affiliate_links"] == ["https://affiliate.vpn.example/SH18", "https://vpn.example/QuadQ"]
+    c = D.classify_links(["https://vpn.example/jct", "https://jctstore.com"], channel="Jane Creator Tech")
+    assert c["affiliate_links"] == ["https://vpn.example/jct"] and c["self_promotion_links"] == ["https://jctstore.com"]
+
+
+def test_membership_short_link_is_own_and_no_sponsorship_claim():
+    d = "Support our investigations by becoming a member here: https://bit.ly/abc123"
+    c = D.classify_links(["https://bit.ly/abc123"], channel="Lab Reviews", description=d)
+    assert c["self_promotion_links"] == ["https://bit.ly/abc123"] and not c["affiliate_links"]
+    sigs = [h["signal"] for h in D.scan_text("We never accept sponsorships, and we make money from members.", "d")]
+    assert "claims_not_sponsored" in sigs
+
+
+def test_caption_tags_are_not_sponsors_and_matomo_campaigns_count():
+    hits = D.scan_segments([{"text": "Everything [music] uses SSL. Thanks to [music] Acme for sponsoring this video.",
+                             "at": "1:00"}], "smart tv")
+    assert all((h.get("sponsor") or "").lower() != "music" for h in hits)
+    assert D.classify_links(["https://shop.example/pc/?mtm_campaign=review-2026"])["campaign_links"]

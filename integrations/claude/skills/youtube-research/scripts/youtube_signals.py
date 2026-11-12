@@ -24,6 +24,7 @@ import struct
 import zlib
 from datetime import date, datetime, timezone
 from pathlib import Path
+from urllib.parse import urlparse
 
 DEFAULT_TRANSCRIPTS = Path("~/.local/share/chrome-agent-research/youtube-transcripts")
 
@@ -284,6 +285,9 @@ KNOWN_BRANDS = [
     "Notion", "Evernote", "Notesnook", "Trilium", "Standard Notes", "Anytype", "AFFiNE", "AppFlowy", "SiYuan",
     "Capacities", "Heptabase", "Tana", "RemNote", "Craft Docs", "Bear Notes", "Visual Studio Code", "VSCodium",
     "Neovim", "Zed", "Sublime Text", "BBEdit", "Emacs", "Setapp", "Raycast",
+    # streaming boxes, TVs and mini PCs
+    "Roku", "Fire TV", "Nvidia", "Onn", "Homatics", "Chromecast", "Apple TV", "Google TV", "LG", "TCL", "Hisense",
+    "Vizio", "Geekom", "Beelink", "Minisforum", "GMKtec", "Intel NUC", "Plex",
 ]
 # Software/service brands that are also common sponsors (a NordVPN read in a camera review): they count as a
 # video's brands only when the title names them or the title is about their category.
@@ -302,7 +306,14 @@ BRAND_ALIASES = {"Bambu Lab": ["Bambu", "BambuLab", "Bambu Labs"], "Rode": ["RØ
                  "Keeper Security": ["Keeper Password Manager"], "RoboForm": ["Robo Form"],
                  "Visual Studio Code": ["VS Code", "VSCode"], "iA Writer": ["iAWriter"], "MarkText": ["Mark Text"],
                  "Bear Notes": ["Bear app", "Bear Markdown", "Bear 2"], "Craft Docs": ["Craft app"],
-                 "Sublime Text": ["Sublime"], "Standard Notes": ["StandardNotes"]}
+                 "Sublime Text": ["Sublime"], "Standard Notes": ["StandardNotes"],
+                 "Fire TV": ["Firestick", "Fire Stick", "Fire TV Stick", "Amazon Fire"], "Nvidia": ["NVIDIA Shield", "Nvidia Shield"],
+                 "Onn": ["onn 4K", "Onn 4K Pro"], "Roku": ["Roku TV", "Roku Ultra"]}
+# Open-source projects and community sites: named in descriptions, never a sponsor's brand.
+_NONCOMMERCIAL = re.compile(r"\.org$|(^|\.)(bazzite\.gg|kodi\.tv|jellyfin\.\w+|libreelec\.tv|coreelec\.org|osmc\.tv|"
+                            r"kde\.org|fedoraproject\.org|ubuntu\.com|debian\.org|archlinux\.org|linuxmint\.com|"
+                            r"pi-hole\.net|adguard-dns\.io|f-droid\.org|github\.io|gitlab\.io|codeberg\.page|"
+                            r"sourceforge\.net|flathub\.org)$", re.I)
 # Brands whose short name is an everyday word: matched case-sensitively, only when the title is about
 # their category (detect_brands' service topic).
 CONTEXT_ALIASES = {"Bear Notes": ["Bear"], "Craft Docs": ["Craft"], "Drafts": ["Drafts"], "Things": ["Things 3"],
@@ -413,7 +424,7 @@ def detect_brands(title: str = "", description: str = "", links=(), own_domains=
             host = (urlparse(u).hostname or "").lower().removeprefix("www.")
         except ValueError:
             continue
-        if (not host or u in gear_links or _PLATFORM.search(host + ".")
+        if (not host or u in gear_links or _PLATFORM.search(host + ".") or _NONCOMMERCIAL.search(host)
                 or any(o and o in _alnum(host) for o in own)):
             continue
         stem = host.split(".")[-2] if host.count(".") >= 1 else host
@@ -448,7 +459,9 @@ def brand_upsells(description: str, title: str = "") -> list[dict]:
     brands = [b for b in detect_brands(title, kept) if b not in SERVICE_BRANDS or _mentions(title, b)]
     out = []
     for ln in kept.splitlines():
-        if not _URL.search(ln) or not _UPSELL.search(ln):
+        urls = _URL.findall(ln)
+        if not urls or not _UPSELL.search(ln) or all(_PLATFORM.search(((urlparse(u).hostname or "").removeprefix("www.")) + ".")
+                                                     for u in urls):
             continue
         named = [b for b in brands if _mentions(_URL.sub(" ", ln), b)]
         if named:
@@ -836,10 +849,12 @@ def save_transcript(out_dir: str | Path | None, meta: dict, segments: list[dict]
 
 # --- on-screen text (OCR of captured frames) ------------------------------------------------------
 OCR_SWIFT = Path(__file__).with_name("ocr.swift")
-_NUM_CELL = re.compile(r"^[<>~≈]?\s*\d+(?:[.,]\d+)?\s*(?:%|s|sec|min|h|hrs?|db|dba|oz|ml|lbs?|kg|g|w|wh|psi|°[cf]?|/\d+)?$",
+_NUM_CELL = re.compile(r"^[<>~≈]?\s*\d+(?:[.,]\d+)?\s*(?:%|s|sec|ms|min|h|hrs?|db|dba|oz|ml|lbs?|kg|g|w|wh|psi|°[cf]?|/\d+|"
+                       r"bytes?|[kmg]i?b|[kmg]bps|mbit/s)?$",
                        re.I)
 _RESULT_WORDS = re.compile(r"\b(?:test|tests|tested|results?|score|scores|passes|ranking|ranked|rating|seconds|"
-                           r"minutes|db|dba|decibels?|recovery|runtime|average|avg|time|measured|percent)\b", re.I)
+                           r"minutes|db|dba|decibels?|recovery|runtime|average|avg|time|measured|percent|hits|count|"
+                           r"queries|requests|blocked|bytes(?:/s(?:ec)?)?|traffic|frequency)\b", re.I)
 
 
 def ocr_images(paths: list[str], timeout: float = 90) -> dict[str, list[dict]]:

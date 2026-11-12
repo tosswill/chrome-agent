@@ -619,3 +619,20 @@ def test_crossposts_marked_in_search_results():
              {"id": "c", "sub": "x", "author": "z", "title": "other", "created": "2026-01-01"}]
     assert R.mark_crossposts(posts) == 2
     assert posts[1]["crosspost_of"] == "a" and posts[0]["counts_shared"] and "crosspost_of" not in posts[2]
+
+
+# --- private-streaming run (2026-11-12) ---------------------------------------------------------------
+
+def test_streaming_category_words_are_not_brands():
+    strong, _ = R.brand_candidates(title="Best streaming device for privacy? Smart TV, DNS, HDR, Widevine, Netflix")
+    assert not strong
+
+
+def test_staff_flair_needs_a_person_name_and_role_of_project():
+    assert R.staff_flair("Mint | VOID", {"mint"}) is None
+    assert R.staff_flair("EcoFlow | Ryan", {"ecoflow"})
+    data = {"subreddit": "r/homeassistant", "title": "Which media box?", "url": "https://www.reddit.com/r/x/comments/p/t/",
+            "author": "op", "body": "", "comments": [], "sidebar": True,
+            "moderators": [{"name": "pat_dev", "flair": "Founder of Home Assistant"}]}
+    pb = R.promo_bias(data)
+    assert pb["brand_moderators"] == ["pat_dev"]

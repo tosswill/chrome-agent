@@ -697,3 +697,28 @@ def test_screen_data_small_ratings_table_and_status_bar():
     rows += [{"x": 0.356, "y": 0.416, "text": "3"}, {"x": 0.356, "y": 0.444, "text": "8"}]
     sd = S.screen_data(rows)
     assert sd["table_like"] and sd["headline"].startswith("Today I picked")
+
+
+# --- private-streaming run (2026-11-12) ---------------------------------------------------------------
+
+def test_streaming_brands_and_open_source_hosts():
+    b = S.detect_brands("Streaming Devices Are Spying on You - Firestick, Roku, Google TV", "")
+    assert {"Roku", "Fire TV", "Google TV"} <= set(b)
+    b = S.detect_brands("This free app fixes modern TV", "Bazzite https://bazzite.gg/\nKodi https://kodi.tv/\n"
+                        "Jellyfin https://jellyfin.org/", ["https://bazzite.gg/", "https://kodi.tv/", "https://jellyfin.org/"])
+    assert not {"Bazzite", "Kodi", "Jellyfin"} & set(b)
+
+
+def test_upsell_ignores_links_to_videos():
+    assert S.brand_upsells("CHECK OUT THIS VIDEO: Ultimate TV Buyers Guide! Samsung vs LG https://youtu.be/abc",
+                           "Samsung TV review") == []
+
+
+def test_screen_data_pihole_table_and_traffic_chart():
+    rows = [{"x": 0.04, "y": 0.41, "text": "Top Blocked Domains"}, {"x": 0.04, "y": 0.47, "text": "Domain"},
+            {"x": 0.21, "y": 0.47, "text": "Hits"}]
+    for i, (d, n) in enumerate([("scribe.logs.example.com", "4324"), ("acr.example.tv", "2120"),
+                                ("telemetry.example.com", "1582")]):
+        rows += [{"x": 0.04, "y": 0.5 + i * 0.04, "text": d}, {"x": 0.21, "y": 0.5 + i * 0.04, "text": n}]
+    assert S.screen_data(rows)["table_like"]
+    assert S._NUM_CELL.match("1.5 MB") and S._NUM_CELL.match("500 kB")

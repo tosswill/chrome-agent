@@ -86,7 +86,7 @@ Search first and open threads from the result list, several per search. `thread`
 
 ### 4. If a page fails
 
-If a thread is removed or deleted, or `thread` returns `null`, note it (with its `note`) and move on to the next candidate. Don't retry the same URL. On `stop`, end the research and tell the user.
+If a thread is removed or deleted, or `thread` returns `null`, note it (with its `note`) and move on to the next candidate. Don't retry the same URL. On `stop`, end the research and tell the user. If a click on a result misses, the helper first checks for a covering pop-up (a login or app nag) and dismisses it with its own close button before the second try.
 
 ### 5. Close
 
