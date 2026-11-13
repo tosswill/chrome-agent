@@ -50,7 +50,7 @@ def test_scaffold_generates_and_never_overwrites(tmp_path, monkeypatch):
     assert all(v == "created" for v in out["scaffold"].values())
     helper = fake / "skills" / "shopsite-research" / "scripts" / "shopsite_tab.py"
     txt = helper.read_text()
-    assert 'default_instance="shopsite-research-01"' in txt and "{{" not in txt
+    assert 'default_instance="shopsite"' in txt and "{{" not in txt
     assert "Shop Site" in (fake / "skills" / "shopsite-research" / "SKILL.md").read_text()
     again = O.scaffold("shopsite", "shopsite.example")
     assert all(v.startswith("exists") for v in again["scaffold"].values())
