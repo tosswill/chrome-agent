@@ -284,13 +284,13 @@ def click(target: str, text: str | None = None, selector: str | None = None) -> 
     return res
 
 
-def type_into(target: str, selector: str, text: str) -> dict:
+def type_into(target: str, selector: str, text: str, secret: bool = False) -> dict:
     _, st = _site_of_target(target)
     full_id = st.resolve(target)
     if not st.click_on(full_id, selector, look=0.4):
         raise Fail(f"no visible field matches {selector!r}.")
     pause(0.4)
-    st.type_text(full_id, text)
+    st.type_text(full_id, text, secret=secret)
     got = st.evaluate(full_id, f"(document.querySelector({json.dumps(selector)})?.value || '').length")
     return {"typed_into": selector, "length": got, "ok": got == len(text)}
 
@@ -395,6 +395,8 @@ def scaffold(site: str, domain: str, name: str | None = None) -> dict:
             txt = txt.replace(k, v)
         dst.parent.mkdir(parents=True, exist_ok=True)
         dst.write_text(txt)
+        if dst.suffix == ".py" and dst.parent.name == "scripts":
+            dst.chmod(0o755)
         out[str(dst)] = "created"
     return {"scaffold": out, "next": "Fill in the site's search/page readers and its signed-in check, then add tests."}
 
@@ -433,7 +435,7 @@ def _dispatch(cmd: str, args: list[str]):
             text = persona(per)
         else:
             text = " ".join(args[1:])
-        res = type_into(args[0], sel, text)
+        res = type_into(args[0], sel, text, secret=isinstance(pw, str) or isinstance(per, str))
         return res if not isinstance(pw, str) else {**res, "typed_into": sel, "secret": True}
     if cmd == "key" and len(args) == 2:
         return key(*args)

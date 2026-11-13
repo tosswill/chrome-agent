@@ -22,19 +22,14 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parents[2] / "lib"))
-from research_core import Fail, Site, common_cli, opt, run_cli  # noqa: E402
+from research_core import BLOCK_CHECK_JS, Fail, Site, common_cli, opt, run_cli  # noqa: E402
 
 # Where the tab is, whether the site shows the signed-in account, and whether a wall is up.
 # TODO: replace the signed-in selectors with the site's own account menu / sign-in link.
 PAGE_STATE_JS = r"""(() => {
-  const text = ((document.title || "") + " " + (document.body?.innerText || "").slice(0, 4000)).toLowerCase();
-  const visible = el => { const r = el.getBoundingClientRect(), s = getComputedStyle(el);
-    return r.width > 60 && r.height > 60 && s.visibility !== "hidden" && s.display !== "none"; };
-  const challenge = [...document.querySelectorAll("iframe")].some(f =>
-    /recaptcha\/.*\/bframe|hcaptcha|challenges\.cloudflare|captcha-delivery|arkoselabs/.test(f.src || "") && visible(f));
-  const signedOut = /\bsign in\b|\blog in\b/.test((document.querySelector("header")?.innerText || "").toLowerCase());
-  return {url: location.href, title: document.title, loggedIn: signedOut ? false : null,
-          blocked: challenge || /access denied|unusual traffic|verify you are (a )?human|press (&|and) hold|are you a robot/.test(text)};
+  const header = (document.querySelector("header")?.innerText || "").toLowerCase();
+  const loggedIn = /\bsign in\b|\blog in\b/.test(header) ? false : null;
+  return Object.assign({url: location.href, title: document.title, loggedIn}, """ + BLOCK_CHECK_JS + r""");
 })()"""
 
 

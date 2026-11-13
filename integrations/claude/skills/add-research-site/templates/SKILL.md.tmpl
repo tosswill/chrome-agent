@@ -19,4 +19,8 @@ H=~/.claude/skills/{{SLUG}}-research/scripts/{{SLUG}}_tab.py
 
 ## Commands
 
-TODO: document the readers once they exist (`open`, `nav`, `shot`, `eval`, `close` work now).
+TODO: document the readers once they exist (`open`, `nav`, `shot`, `eval`, `close` and `log` work now). Open product pages by clicking them in search results, not by URL: cold product-URL loads look like a bot.
+
+## Action log
+
+Every command is logged per window in `~/.local/state/chrome-agent-research/logs/<site>/` (`$H log [<ID>] [--since 2h]`); a `stop` saves a screenshot (`stop_shot`) and the rule that matched (`blocked_by`).

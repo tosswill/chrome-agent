@@ -34,6 +34,7 @@ $R back <ID>                                         # browser back (rarely need
 $R tally <ID> "Core One" MK4S "A1 mini" [--alias "Core One=C1,Core 1; MK4S=MK 4S"] [--near "pass=gpg,gopass"] [--exclude-op]
 $R shot <ID> --at post | --comment <id or permalink> | --selector '<css>' [--out-dir <report dir>]
 $R close <ID>
+$R log [<ID>] [--since 2h] [--last N] [--raw]   # action log (no page load): every load, pacing wait, click, key, typed text, scroll, result and stop
 $R list | gc                                         # active windows across agents / release ones left by crashed agents
 $R nav <ID> '<reddit url>' | eval <ID> '<js>'        # escape hatches: paced load / read something the commands don't return
 ```
@@ -151,3 +152,7 @@ Use it sparingly: a highly upvoted answer, a comparison table, a moderator list.
 **Reddit among other sources:** fold the findings into the overall answer, attributed as Reddit user reports with comment links and dates, and note brand involvement where present. Note the Reddit sample size in one line. Where Reddit agrees with or contradicts other sources (e.g. YouTube reviewers), say so; owners on Reddit are often the best check on sponsored reviews.
 
 If saving to disk, name the file `YYYY-MM-DD_reddit-<topic>.md`.
+
+## Action log
+
+Every command is logged as it runs, one JSON line per action, in `~/.local/state/chrome-agent-research/logs/<site>/<date>_<window>.jsonl` (kept 30 days; `RESEARCH_LOG=0` turns it off): commands and results, page loads with their pacing wait, clicks (with the selector), key presses, typed text (secrets redacted), wheel scrolls, back/history navigation and the page state after each load. A `stop` also saves a screenshot (`stop_shot`) and records which rule matched (`blocked_by`). Read it with `log` (your window by ID, or the whole site with no ID). When a run hits a `stop` or behaves oddly, say so in the report and include the log's path.

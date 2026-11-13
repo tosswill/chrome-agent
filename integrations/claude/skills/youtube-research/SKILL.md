@@ -55,6 +55,7 @@ $Y registry list [--topic T] | show <channel> | describe <channel> --covers "...
 $Y transcript <ID> --from 4:00 --to 6:30         # only a time window (e.g. one chapter)
 $Y rescore --topic "smart kettles" [--dir <raw or report dir>] [--save]   # re-rate saved videos after a fix (no browser)
 $Y close <ID>
+$Y log [<ID>] [--since 2h] [--last N] [--raw]   # action log (no page load): every load, pacing wait, click, key, typed text, scroll, result and stop
 $Y list                                          # active research windows across all agents
 $Y gc                                            # release windows left behind by crashed agents
 $Y nav <ID> '<youtube url>'                      # escape hatch: paced load of any youtube.com page
@@ -247,3 +248,7 @@ If saving to disk, name the report `YYYY-MM-DD_youtube-<topic>.md`, with frames 
 - A result contains `stop`, or `open` fails (browser can't be restored, or no slot after waiting).
 - The plan needs more page loads than the budget.
 - The task would require writing to YouTube or downloading media.
+
+## Action log
+
+Every command is logged as it runs, one JSON line per action, in `~/.local/state/chrome-agent-research/logs/<site>/<date>_<window>.jsonl` (kept 30 days; `RESEARCH_LOG=0` turns it off): commands and results, page loads with their pacing wait, clicks (with the selector), key presses, typed text (secrets redacted), wheel scrolls, back/history navigation and the page state after each load. A `stop` also saves a screenshot (`stop_shot`) and records which rule matched (`blocked_by`). Read it with `log` (your window by ID, or the whole site with no ID). When a run hits a `stop` or behaves oddly, say so in the report and include the log's path.

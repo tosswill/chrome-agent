@@ -27,6 +27,7 @@ $H reviews <ID> '<product url>' --sort lowest --verified [--stars 1] [--page 2] 
 $H qa <ID> '<product url>' [--page 2]           # questions with answers opened; brand answers flagged (1 load)
 $H shot <ID> [--out PATH]                       # look at it before using it
 $H close <ID>
+$H log [<ID>] [--since 2h] [--last N] [--raw]   # action log (no page load): every load, pacing wait, click, key, typed text, scroll, result and stop
 ```
 
 - **`search`** returns product cards: `id`, `url`, `brand`, `title`, `price`, `was_price`, `rating`, `reviews`,
@@ -54,3 +55,7 @@ and average rating, not for opinion bias the way YouTube or Reddit are; promoted
   so check before quoting it as this product's spec.
 - **Prices** change constantly and vary by store (the browser's store is set by Home Depot from location);
   give the date.
+
+## Action log
+
+Every command is logged as it runs, one JSON line per action, in `~/.local/state/chrome-agent-research/logs/<site>/<date>_<window>.jsonl` (kept 30 days; `RESEARCH_LOG=0` turns it off): commands and results, page loads with their pacing wait, clicks (with the selector), key presses, typed text (secrets redacted), wheel scrolls, back/history navigation and the page state after each load. A `stop` also saves a screenshot (`stop_shot`) and records which rule matched (`blocked_by`). Read it with `log` (your window by ID, or the whole site with no ID). When a run hits a `stop` or behaves oddly, say so in the report and include the log's path.

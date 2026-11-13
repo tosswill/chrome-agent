@@ -25,7 +25,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "skills" / "reddit-research" / "scripts"))
 sys.path.insert(0, str(HERE.parent / "skills" / "youtube-research" / "scripts"))
 import reddit_tab  # noqa: E402
-from research_core import attach_timings, timings_reset  # noqa: E402
+from research_core import attach_timings, begin_command, end_command, timings_reset  # noqa: E402
 import youtube_tab  # noqa: E402
 import brands as research_brands  # noqa: E402
 
@@ -66,10 +66,13 @@ def _run(args: list[str], timeout: float) -> str:
 
 def _reddit(fn, *args, **kwargs) -> str:
     timings_reset()
+    begin_command(f"mcp:{fn.__name__}", [*args, *(f"{k}={v}" for k, v in kwargs.items())])
     try:
-        return json.dumps(attach_timings(fn(*args, **kwargs)), ensure_ascii=False)
+        res = attach_timings(fn(*args, **kwargs))
     except reddit_tab.Fail as e:  # the same Fail class backs both sites
-        return json.dumps(attach_timings({"error": str(e)}))
+        res = attach_timings({"error": str(e)})
+    end_command(res)
+    return json.dumps(res, ensure_ascii=False)
 
 
 def _frame_images(target, at, burst, out_dir=None, scan=None, samples=4):
@@ -87,12 +90,16 @@ def _frame_images(target, at, burst, out_dir=None, scan=None, samples=4):
 def _with_image(fn, *args, **kwargs):
     """Run a capture and return its JSON plus the image itself, so the model can check it."""
     timings_reset()
+    begin_command(f"mcp:{fn.__name__}", [*args, *(f"{k}={v}" for k, v in kwargs.items())])
     try:
         res = fn(*args, **kwargs)
     except youtube_tab.Fail as e:
-        return json.dumps(attach_timings({"error": str(e)}))
+        err = attach_timings({"error": str(e)})
+        end_command(err)
+        return json.dumps(err)
     if isinstance(res, dict) and "result" in res:
         attach_timings(res["result"])
+        end_command(res["result"])
     if isinstance(res, dict) and "images" in res:
         return [json.dumps(res["result"], ensure_ascii=False)] + [Image(path=p) for p in res["images"]]
     return [json.dumps(res, ensure_ascii=False), Image(path=res["path"])]

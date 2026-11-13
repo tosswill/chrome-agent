@@ -56,3 +56,9 @@ def browser_session(event_loop, tmp_path_factory):
 def fixture_url():
     """URL to the test fixture page."""
     return f"file://{FIXTURE_PATH.resolve()}"
+
+
+@pytest.fixture(autouse=True)
+def _no_research_action_log(monkeypatch):
+    """Research helpers log every action to ~/.local/state; tests must not (test_research_log opts in)."""
+    monkeypatch.setenv("RESEARCH_LOG", "0")
