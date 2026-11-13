@@ -1,0 +1,22 @@
+---
+name: {{SLUG}}-research
+description: Research {{NAME}} ({{DOMAIN}}) by reading real pages in the user's signed-in Chrome (a shared chrome-agent browser). Read-only. TODO: say when to use it (product reviews, Q&A, prices, availability).
+---
+
+# {{NAME}} Research
+
+```bash
+H=~/.claude/skills/{{SLUG}}-research/scripts/{{SLUG}}_tab.py
+```
+
+## Hard rules
+
+1. **Use `$H` only.** Never touch another agent's window or send raw CDP commands to the shared browser.
+2. **Read-only.** Never buy, add to cart, review, ask a question, change the account or the store.
+3. **If a result contains `stop`, stop and tell the user why.** Never solve CAPTCHAs; never retry another way.
+4. **Budget:** TODO page loads. Each result reports `loads`.
+5. **Always `$H close` your window** when done, even after errors.
+
+## Commands
+
+TODO: document the readers once they exist (`open`, `nav`, `shot`, `eval`, `close` work now).
