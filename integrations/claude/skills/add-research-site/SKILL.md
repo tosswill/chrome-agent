@@ -52,14 +52,21 @@ ordinary traffic), else sign up by email with a generated password.
    its verification link (it may open a new tab: `adopt` it).
 6. **Confirm the login:** load the site again and check the account menu shows the persona's name, not
    "Sign in". Note how the site shows it (selector, cookie name) for the research helper's signed-in check.
-7. **Tidy and save:** `$O close <ID>`, then `$O tidy <site> --keep <domain>` (closes every other tab: Gmail,
-   popups, the new-tab page) and `$O save <site>` (`chrome-agent save <site>-research-01 --overwrite`).
+7. **Tidy and save:** with a tab on the site, `$O tidy <site> --keep <domain>` (closes every other tab: Gmail,
+   popups, the new-tab page, and releases the windows; don't `close` the site's tab first), then `$O save <site>`
+   (`chrome-agent save <site>-research-01 --overwrite`). Check `tabs` after: one tab, on the site.
 8. **Helper:** `$O scaffold <site> --domain <domain> --name "<Site Name>"` creates
    `skills/<site>-research/` (helper with pacing, window claims, stop rules; SKILL.md stub) and a test. Fill in
    the signed-in check from step 6, then the readers the research needs (search, product page, reviews, Q&A),
-   add tests, and add the site to the Desktop MCP server if it should be available there.
+   add tests, and add the site to the Desktop MCP server if it should be available there. For retail sites,
+   read the landscape, specs, price, popularity and average rating; promoted placements don't need flags,
+   but note when an average rating is pooled across variants.
 
 ## Site notes
+
+- **Newegg (2026-11-12):** "Sign in with Google" on secure.newegg.com/login/signin (the header's Sign in link
+  is in a hover menu: load the URL). Signed-in header: "Hey <first> <last>!"; cookies `CustomerLogin`,
+  `NV%5FCUSTOMERLOGIN`.
 
 - **Home Depot (2026-11-12):** no Google sign-in; email sign-up asks for a phone number ("My phone number will
   be … for recovering account") before the password step. Not created: the browser is set up and signed in to

@@ -30,7 +30,7 @@ $H close <ID>
 ```
 
 - **`search`** returns product cards: `id`, `url`, `brand`, `title`, `price`, `was_price`, `rating`, `reviews`,
-  `sponsored` (an ad) and `badges` ("Best Seller", "Exclusive", "Top Rated"). A search often redirects to a
+  and `badges` ("Best Seller", "Exclusive", "Top Rated"). A search often redirects to a
   category page (`page.url`). `product` clicks a card from the current results when it's listed there.
 - **`product`** opens the Product Details, Specifications and Customer Reviews sections like a reader and
   returns `name`, `brand`, `model`, `sku`, `price`, `rating`, `review_count`, `recommend_pct`, `histogram`
@@ -43,16 +43,14 @@ $H close <ID>
 - **`qa`** opens up to `--max` (8) questions' answers. Each answer has `by`, `date`, `badges`, `text`,
   `brand_answer` and `other_variant` (the brand answered about a sibling model: check before quoting).
 
-## Weighing what you find
+## Using what you find
 
-- **Review flags:** `syndicated_from` (collected on the brand's own site, e.g. ryobitools.com),
-  `incentivized` (Home Depot's Incentivized Review Program) and `promotion` ("collected as part of a
-  promotion") are rewarded or brand-collected reviews; `verified_purchase` is a Home Depot buyer; `variant`
-  means the review is for a sibling product (another kit, size or color) and is pooled into this rating.
-  On a popular product these can be a large share of the first page (the RYOBI drill above: 4 of 10
-  syndicated and incentivized), so **read `--verified --sort lowest` and `--sort newest`** before trusting the
-  average, and report the share of rewarded reviews.
-- **Brand answers** in Q&A are the manufacturer: usually right on specs, sometimes about a sibling model
-  (`other_variant`), never an independent opinion.
+Retail sites are for the landscape (what's sold, by whom), specs, price, popularity (review counts, badges)
+and average rating, not for opinion bias the way YouTube or Reddit are; promoted placements don't matter here.
+
+- **Average rating accuracy:** `variant` reviews are for a sibling product (another kit, size or color) pooled
+  into this rating; when a product has many, say the rating is shared across variants.
+- **Q&A:** `brand_answer` answers come from the manufacturer; `other_variant` means it's about a sibling model,
+  so check before quoting it as this product's spec.
 - **Prices** change constantly and vary by store (the browser's store is set by Home Depot from location);
   give the date.

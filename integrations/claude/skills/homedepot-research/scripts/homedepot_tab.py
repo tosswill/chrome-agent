@@ -9,7 +9,7 @@ CLI (each command prints JSON):
     homedepot_tab.py open [--wait [SECONDS]]      claim a window -> {"target": ID} (`stop` when signed out)
     homedepot_tab.py search ID QUERY             typed into the site's search box when a homedepot.com page is
                        open (`page.via`: typed), else the search URL is loaded (one page load either way).
-                       Returns the product cards: id, url, brand, title, price, rating, reviews, sponsored, badges.
+                       Returns the product cards: id, url, brand, title, price, rating, reviews, badges.
                        Home Depot often redirects a search to a category page (`page.url`).
     homedepot_tab.py product ID URL               a product page: facts, price, details, highlights, specs, rating
                        histogram, recommend %, AI review summary, first reviews with flags, Q&A count (1 load;
@@ -110,7 +110,6 @@ _RESULTS_JS = r"""(() => {
       price_text: price.slice(0, 80) || null,
       rating: rm ? parseFloat(rm[1]) : (parseFloat((stars.match(/[\d.]+/) || [])[0]) || null),
       reviews: rm ? parseInt(rm[2].replace(/,/g, "")) : null,
-      sponsored: /\bsponsored\b/i.test(txt(pod).slice(0, 300)),
       badges: txt(pod.querySelector("[data-testid=pod-header]")) || null,
     });
   }
@@ -153,8 +152,8 @@ def search(target: str, query: str) -> dict:
     SITE.read_pause(full_id, 2.5)
     results = SITE.evaluate(full_id, _RESULTS_JS) or []
     return {"page": page, "results": results, "count": len(results),
-            "note": "Sponsored cards are ads (`sponsored`). Ratings and review counts are Home Depot's own, "
-                    "which include syndicated reviews from the brand's site."}
+            "note": "Ratings and review counts include reviews of sibling variants and reviews collected on the "
+                    "brand's own site."}
 
 
 
@@ -232,8 +231,7 @@ def product(target: str, url: str) -> dict:
     data["questions_url"] = f"https://www.homedepot.com/p/questions/{slug}/{pid}/1"
     SITE.scroll_to_top(full_id)
     return {"page": page, "product": data, "sections_opened": opened_secs,
-            "note": ("rating/review_count include reviews syndicated from the brand's own site and incentivized "
-                     "ones (see review_flags). Use `reviews` for more (30 a page, sortable) and `qa` for answers.")}
+            "note": "Use `reviews` for more (30 a page, sortable) and `qa` for questions."}
 
 
 def _review_flags(revs: list[dict]) -> dict:
@@ -287,9 +285,7 @@ def reviews(target: str, url: str, sort: str | None = None, verified: bool = Fal
         if not rv.get("reviews"):
             break
     return {"page": state, "pages": pages_read, "reviews": out, "flags": _review_flags(out),
-            "note": ("`syndicated_from` reviews were collected on the brand's own site; `incentivized` and "
-                     "`promotion` reviews were written in exchange for a reward. Weigh verified, unrewarded "
-                     "reviews more. Sorting or filtering past page 1 applies to that page only.")}
+            "note": "Sorting or filtering past page 1 applies to that page only."}
 
 
 _ANSWER_TOGGLES_JS = r"""(() => {
@@ -340,7 +336,7 @@ def qa(target: str, url: str, page: int = 1, max_open: int = 8) -> dict:
     qs = data.get("questions", [])
     return {"page": state, "brand": brand or None, "viewing": data.get("viewing"), "total": data.get("total"),
             "questions": qs, "brand_answers": sum(1 for q in qs for a in q["answers"] if a["brand_answer"]),
-            "note": "Brand answers (`brand_answer`) are the manufacturer speaking: accurate on specs, not independent."}
+            "note": "`brand_answer`: the manufacturer answered; `other_variant`: the answer is about a sibling model."}
 
 def shot(target: str, out: str | None = None) -> dict:
     full_id = SITE.resolve(target)

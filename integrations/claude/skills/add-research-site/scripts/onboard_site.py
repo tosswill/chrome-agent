@@ -62,8 +62,10 @@ PAGE_STATE_JS = r"""(() => {
           blocked: challenge || /access denied|unusual traffic|verify you are (a )?human|press (&|and) hold|are you a robot|request unsuccessful|pardon our interruption/.test(text),
           // A visible phone field (Home Depot asks "My phone number will be" before the password step).
           phone: [...document.querySelectorAll("input[type=tel], input[autocomplete*=tel], input[id*=phone i], " +
-                   "input[name*=phone i], input[placeholder*=phone i]")].some(i => { const r = i.getBoundingClientRect();
-                     return r.width > 20 && r.height > 10; })
+                   "input[name*=phone i], input[placeholder*=phone i]")].some(i => { const r = i.getBoundingClientRect(),
+                     st = getComputedStyle(i);
+                     return i.type !== "hidden" && r.width > 40 && r.height > 14 && r.bottom > 0 && r.top < innerHeight
+                       && st.visibility !== "hidden" && st.display !== "none" && +st.opacity > 0 && !i.closest("[aria-hidden=true]"); })
                  || /verify (your )?phone|phone number is required|enter (your )?(mobile|phone) number|text (you )?a code/.test(text)};
 })()"""
 
