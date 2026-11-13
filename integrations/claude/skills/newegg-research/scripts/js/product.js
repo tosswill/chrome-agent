@@ -7,7 +7,9 @@
     const k = clean(r.querySelector("th")?.innerText), v = clean(r.querySelector("td")?.innerText);
     if (k && v && !(k in specs)) specs[k] = v.slice(0, 200);
   }
-  const prices = [...document.querySelectorAll("[class*=price-current]")].map(e => clean(e.textContent))
+  // Price fields come from the buy box only: carousels ("Keep Exploring", "Similar") reuse the same classes.
+  const box = document.querySelector(".product-buy-box, .product-pane") || document;
+  const prices = [...box.querySelectorAll("[class*=price-current]")].map(e => clean(e.textContent))
     .map(t => (t.match(/\$\s?[\d,]+(?:\.\d{2})?/) || [])[0]).filter(Boolean);
   const pane = [...document.querySelectorAll(".tab-pane")].find(e => /customer ratings/.test(e.innerText || ""));
   const ptext = pane ? pane.innerText : "";
@@ -20,7 +22,7 @@
     item: (location.pathname.match(/\/p\/([\w-]+)/) || [])[1] || null,
     brand: specs["Brand"] || null, model: specs["Model"] || null,
     price: prices[0] ? prices[0].replace(/\s/g, "") : null,
-    was_price: clean(document.querySelector(".product-price .price-was-data, .price-was-data")?.textContent) || null,
+    was_price: clean(box.querySelector(".price-was-data")?.textContent) || null,
     sold_by: clean((body.match(/Sold by\s*:?\s*([^\n]+)/) || [])[1]) || null,
     ships_from: clean((body.match(/Ships from\s*:?\s*([^\n]+)/) || [])[1]) || null,
     rating: parseFloat((ptext.match(/([\d.]+) out of 5 eggs/) || [])[1]) || null,
