@@ -11,6 +11,7 @@ Usage: chrome-agent <command> [args...]
 import asyncio
 import json
 import os
+import re
 import sys
 
 
@@ -255,7 +256,7 @@ def _print_static_usage() -> None:
     print("chrome-agent -- CLI for AI agents to control Chrome via CDP\n")
     print("Usage: chrome-agent <command> [args...]\n")
     print("Operational commands:")
-    print("  launch [--port PORT] [--fingerprint PATH] [--headless] [--no-window-border] [-- CHROME_ARGS]  Launch Chrome")
+    print("  launch [--port PORT] [--name NAME] [--fingerprint PATH] [--headless] [--no-window-border] [-- CHROME_ARGS]  Launch Chrome")
     print("  status [<instance>]                                    List instances and targets")
     print("  attach <instance> [+Event ...] [TARGET]                Attach for events")
     print("  help [<instance>] [Domain | Domain.method]             Protocol discovery")
@@ -301,6 +302,7 @@ async def _run_launch(args: list[str]) -> None:
     headless = False
     port_override = None
     window_border = True
+    name = None
     extra_args = []
     i = 0
     while i < len(args):
@@ -317,6 +319,13 @@ async def _run_launch(args: list[str]) -> None:
         elif args[i] == "--no-window-border":
             window_border = False
             i += 1
+        elif args[i] == "--name" and i + 1 < len(args):
+            # An exact instance name instead of one derived from the working directory.
+            name = args[i + 1]
+            if not re.fullmatch(r"[a-z0-9][a-z0-9.-]*", name):
+                print(f"Error: invalid instance name: {name!r} (lowercase letters, digits, '.' and '-')", file=sys.stderr)
+                sys.exit(1)
+            i += 2
         elif args[i] == "--port" and i + 1 < len(args):
             try:
                 port_override = int(args[i + 1])
@@ -335,6 +344,7 @@ async def _run_launch(args: list[str]) -> None:
             headless=headless,
             extra_args=extra_args,
             window_border=window_border,
+            instance_name=name,
         )
     except (BrowserNotFoundError, RuntimeError, TimeoutError) as exc:
         print(f"Error: {exc}", file=sys.stderr)

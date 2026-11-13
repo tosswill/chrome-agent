@@ -9,7 +9,7 @@ description: Add a new research site (e.g. a retailer such as Home Depot or Newe
 O=~/.claude/skills/add-research-site/scripts/onboard_site.py
 ```
 
-The site gets its own browser (`<site>-research-01`) and profile, so research there never disturbs the
+The site gets its own browser (named after the site: `homedepot`, `newegg`) and profile, so research there never disturbs the
 YouTube or Reddit browsers. Accounts use the research persona; prefer **Sign in with Google** (it looks like
 ordinary traffic), else sign up by email with a generated password.
 
@@ -32,11 +32,12 @@ ordinary traffic), else sign up by email with a generated password.
 
 ## Workflow
 
-1. **Browser:** `$O clone <site>` launches a fresh `<site>-research-01` (profile folder
-   `~/.local/share/chrome-agent-profiles/<site>-research`) and copies the Google cookies from
-   `youtube-research-01`. Google treats copied cookies as a new device, so expect Gmail to show the account as
-   **signed out**: `$O open <site> --domain <domain>`, `$O nav <ID> https://mail.google.com/mail/u/0/`, `$O shot <ID>`;
-   if it asks to sign in, **ask the user to sign in once** in that window, then `$O google-check <site>`.
+1. **Browser:** `$O clone <site>` launches a fresh browser named `<site>` (profile folder
+   `~/.local/share/chrome-agent-profiles/<site>`) with no chrome-agent window border or title tag (both are
+   visible to the site). `$O open <site> --domain <domain>`, `$O nav <ID> https://mail.google.com/mail/u/0/`,
+   `$O shot <ID>`: **ask the user to sign in to the research Google account once** in that window, then
+   `$O google-check <site>`. Never copy Google cookies between browsers: it doesn't carry the sign-in and Google
+   can sign the original browser out.
 2. **Find sign-up:** `$O nav <ID> https://www.<domain>/`, `$O shot <ID>` (look at it), then the account menu
    (`$O fields <ID>` lists buttons and inputs with selectors; `$O click <ID> --text "Create an Account"` or
    `--selector ...`). Header pop-ups close on their own; if a click lands elsewhere, open the account menu and
@@ -54,7 +55,7 @@ ordinary traffic), else sign up by email with a generated password.
    "Sign in". Note how the site shows it (selector, cookie name) for the research helper's signed-in check.
 7. **Tidy and save:** with a tab on the site, `$O tidy <site> --keep <domain>` (closes every other tab: Gmail,
    popups, the new-tab page, and releases the windows; don't `close` the site's tab first), then `$O save <site>`
-   (`chrome-agent save <site>-research-01 --overwrite`). Check `tabs` after: one tab, on the site.
+   (`chrome-agent save <site> --overwrite`). Check `tabs` after: one tab, on the site.
 8. **Helper:** `$O scaffold <site> --domain <domain> --name "<Site Name>"` creates
    `skills/<site>-research/` (helper with pacing, window claims, stop rules; SKILL.md stub) and a test. Fill in
    the signed-in check from step 6, then the readers the research needs (search, product page, reviews, Q&A),

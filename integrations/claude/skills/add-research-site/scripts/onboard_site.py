@@ -7,8 +7,8 @@ login, close every other tab, save the profile, and scaffold the site's research
 
 CLI (each command prints JSON):
 
-    onboard_site.py clone SITE [--from youtube-research-01]   launch a fresh SITE-research-01 browser and copy
-                       only the Google sign-in cookies into it (the source browser keeps running untouched)
+    onboard_site.py clone SITE                               launch the site's own browser (named SITE, no window
+                       border); the user signs in to the research Google account in it once
     onboard_site.py google-check SITE                        is the research Google account signed in? (cookies)
     onboard_site.py open SITE --domain D                     claim a window in SITE's browser -> {"target"}
     onboard_site.py nav ID URL                               paced page load (the site, Google sign-in, Gmail)
@@ -22,7 +22,7 @@ CLI (each command prints JSON):
     onboard_site.py password SITE                            generate a password and store it in the logins file
     onboard_site.py login-record SITE --method google|email [--email E]   record the account in the logins file
     onboard_site.py tidy SITE --keep DOMAIN                  close every tab not on DOMAIN (one tab stays)
-    onboard_site.py save SITE                                chrome-agent save SITE-research-01 --overwrite
+    onboard_site.py save SITE                                chrome-agent save SITE --overwrite
     onboard_site.py scaffold SITE --domain D [--name "Home Depot"]   generate the site's research helper,
                        SKILL.md stub and a test from the template (refuses to overwrite)
     onboard_site.py close ID
@@ -78,7 +78,8 @@ def _stop(state: dict, site: Site) -> str | None:
 
 
 def instance_of(site: str) -> str:
-    return site if site.endswith("-research-01") else f"{site}-research-01"
+    """The site's browser is named after the site ("newegg", "homedepot")."""
+    return site
 
 
 def site_for(site: str, domain: str | None = None) -> Site:
@@ -124,46 +125,25 @@ def _ca(*args: str, timeout: float = 180) -> str:
 # --- browser lifecycle ------------------------------------------------------------------
 
 PROFILES = Path(os.environ.get("CHROME_AGENT_PROFILES", "~/.local/share/chrome-agent-profiles")).expanduser()
-_SESSION_DOMAINS = re.compile(r"(^|\.)(google\.com|youtube\.com|gmail\.com)$")
-_COOKIE_KEYS = ("name", "value", "domain", "path", "secure", "httpOnly", "sameSite", "expires", "priority",
-                "sourceScheme", "partitionKey")
 
 
-def _one_shot(instance: str, method: str, params: dict | None = None) -> dict:
-    out = _ca(instance, method, json.dumps(params or {}), "--target-index", "1")
-    return json.loads(out) if out.strip() else {}
-
-
-def clone(site: str, source: str = "youtube-research-01") -> dict:
-    """Launch a fresh browser for the site (its own profile folder, named SITE-research-01) and copy only the
-    Google sign-in cookies into it from the signed-in source browser. The source keeps running untouched and
-    none of its history or other sites come along. Cookie values stay on this machine and are never printed."""
+def clone(site: str, source: str | None = None) -> dict:
+    """Launch the site's own browser: a fresh profile, named after the site, with no chrome-agent window
+    border (the border and the title tag it adds are visible to the site). The research Google account is
+    signed in by the user once, in this browser: copying Google cookies from another browser doesn't carry
+    the sign-in and can make Google sign the original browser out."""
     inst = instance_of(site)
     status = json.loads(_ca("status"))
-    if not any(i.get("name") == source and i.get("alive") for i in status):
-        _ca("restore", source)
-    d = PROFILES / f"{site}-research"
-    running = any(i.get("name") == inst and i.get("alive") for i in status)
-    if not running:
-        d.mkdir(parents=True, exist_ok=True)
-        p = subprocess.run(["chrome-agent", "launch"], cwd=str(d), capture_output=True, text=True, timeout=120,
-                           stdin=subprocess.DEVNULL)
-        if p.returncode != 0:
-            raise Fail(f"chrome-agent launch failed: {(p.stderr or p.stdout).strip()[:400]}")
-        status = json.loads(_ca("status"))
-    if not any(i.get("name") == inst and i.get("alive") for i in status):
-        names = [i.get("name") for i in status]
-        raise Fail(f"launched, but no {inst} is running (instances: {names}); stop the extra one and retry.")
-    cookies = [c for c in _one_shot(source, "Network.getAllCookies").get("cookies", [])
-               if _SESSION_DOMAINS.search((c.get("domain") or "").lstrip("."))]
-    clean = []
-    for c in cookies:
-        k = {key: c[key] for key in _COOKIE_KEYS if key in c}
-        if c.get("session") or (k.get("expires") or 0) <= 0:
-            k.pop("expires", None)
-        clean.append(k)
-    _one_shot(inst, "Network.setCookies", {"cookies": clean})
-    return {"instance": inst, "profile_dir": str(d), "cloned_from": source, "google_cookies_copied": len(clean)}
+    if any(i.get("name") == inst and i.get("alive") for i in status):
+        return {"instance": inst, "already_running": True}
+    d = PROFILES / site
+    d.mkdir(parents=True, exist_ok=True)
+    p = subprocess.run(["chrome-agent", "launch", "--no-window-border", "--name", inst], cwd=str(d),
+                       capture_output=True, text=True, timeout=120, stdin=subprocess.DEVNULL)
+    if p.returncode != 0:
+        raise Fail(f"chrome-agent launch failed: {(p.stderr or p.stdout).strip()[:400]}")
+    return {"instance": inst, "profile_dir": str(d), "border": False,
+            "next": "open a window, load https://mail.google.com/ and ask the user to sign in once if it isn't"}
 
 
 def google_check(site: str) -> dict:
@@ -422,9 +402,8 @@ def scaffold(site: str, domain: str, name: str | None = None) -> dict:
 # --- CLI -----------------------------------------------------------------------------------------------
 
 def _dispatch(cmd: str, args: list[str]):
-    if cmd == "clone" and args:
-        src = opt(args, "--from", "youtube-research-01")
-        return clone(args[0], str(src))
+    if cmd == "clone" and len(args) == 1:
+        return clone(args[0])
     if cmd == "google-check" and len(args) == 1:
         return google_check(args[0])
     if cmd == "open":
