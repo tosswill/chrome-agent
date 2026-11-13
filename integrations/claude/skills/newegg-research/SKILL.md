@@ -6,16 +6,16 @@ description: Research Newegg (newegg.com) by reading real pages in the user's si
 # Newegg Research
 
 ```bash
-H=~/.claude/skills/newegg-research/scripts/newegg_tab.py
+N=~/.claude/skills/newegg-research/scripts/newegg_tab.py
 ```
 
 ## Hard rules
 
-1. **Use `$H` only.** Never touch another agent's window or send raw CDP commands to the shared browser.
+1. **Use `$N` only.** Never touch another agent's window or send raw CDP commands to the shared browser.
 2. **Read-only.** Never buy, add to cart, review, ask a question, change the account or the store.
 3. **If a result contains `stop`, stop and tell the user why.** Never solve CAPTCHAs; never retry another way.
 4. **Budget:** 15 page loads unless the user says otherwise. Each result reports `loads`.
-5. **Always `$H close` your window** when done, even after errors.
+5. **Always `$N close` your window** when done, even after errors.
 
 ## Commands
 
@@ -27,11 +27,16 @@ $N reviews <ID> '<product url>' --sort lowest --filter verified [--filter curren
 $N qa <ID> '<product url>'                       # the Q & A tab
 $N shot <ID> [--out PATH]
 $N close <ID>
+$N log [<ID>] [--since 2h] [--last N] [--raw]   # action log (no page load): every load, pacing wait, click, key, typed text, scroll, result and stop
 ```
 
 - **`search`** returns cards: `item`, `url`, `title`, `brand`, `price`, `was_price`, `rating`, `reviews`,
   `refurbished`, `ships_from`, `direct_from` (a marketplace seller ships it) and `promo`. `product` clicks a
-  card from the current results when it's listed there; `reviews` and `qa` reuse an open product page (no load).
+  card from the current results when it's listed there; when it was in the last results and you're on another
+  product, it goes back to the results (mouse back button) and clicks it (`opened: "clicked (after back)"`, with
+  `back`; Newegg usually re-fetches the results, which counts a load). It only loads a product URL cold when
+  the item wasn't in your last results, so pick products from a search rather than pasting URLs. Product pages
+  get about twice the pacing gap of searches. `reviews` and `qa` reuse an open product page (no load).
 - **`product`** opens the Specs and Reviews tabs like a reader: `title`, `brand`, `model`, `price`,
   `was_price`, `sold_by` (Newegg or a marketplace seller), `rating`, `ratings_count`, `reviews_with_text`,
   `histogram` (star → %), `best_seller_rank`, `questions` (count), `bullets`, `specifications`, the first
@@ -55,3 +60,7 @@ best-seller rank) and average rating, not for opinion bias the way YouTube or Re
 - **Seller:** `sold_by` other than Newegg (or `ships_from` abroad) is a marketplace listing: prices and returns
   differ.
 - **Prices** change constantly; give the date.
+
+## Action log
+
+Every command is logged as it runs, one JSON line per action, in `~/.local/state/chrome-agent-research/logs/<site>/<date>_<window>.jsonl` (kept 30 days; `RESEARCH_LOG=0` turns it off): commands and results, page loads with their pacing wait, clicks (with the selector), key presses, typed text (secrets redacted), wheel scrolls, back/history navigation and the page state after each load. A `stop` also saves a screenshot (`stop_shot`) and records which rule matched (`blocked_by`). Read it with `log` (your window by ID, or the whole site with no ID). When a run hits a `stop` or behaves oddly, say so in the report and include the log's path.

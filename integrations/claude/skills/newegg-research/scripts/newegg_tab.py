@@ -34,19 +34,16 @@ from urllib.parse import quote_plus
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parents[2] / "lib"))
-from research_core import Fail, Site, common_cli, opt, pause, run_cli, timed  # noqa: E402
+from research_core import BLOCK_CHECK_JS, Fail, Site, common_cli, opt, pause, run_cli, timed  # noqa: E402
 
 # Where the tab is, whether the site shows the signed-in account, and whether a wall is up.
-# TODO: replace the signed-in selectors with the site's own account menu / sign-in link.
 PAGE_STATE_JS = r"""(() => {
-  const text = ((document.title || "") + " " + (document.body?.innerText || "").slice(0, 4000)).toLowerCase();
-  const visible = el => { const r = el.getBoundingClientRect(), s = getComputedStyle(el);
-    return r.width > 60 && r.height > 60 && s.visibility !== "hidden" && s.display !== "none"; };
-  const challenge = [...document.querySelectorAll("iframe")].some(f =>
-    /recaptcha\/.*\/bframe|hcaptcha|challenges\.cloudflare|captcha-delivery|arkoselabs/.test(f.src || "") && visible(f));
-  const signedOut = /\bsign in\b|\blog in\b/.test((document.querySelector("header")?.innerText || "").toLowerCase());
-  return {url: location.href, title: document.title, loggedIn: signedOut ? false : null,
-          blocked: challenge || /access denied|unusual traffic|verify you are (a )?human|press (&|and) hold|are you a robot/.test(text)};
+  // Signed in: the header's account menu greets the account (p.hlp3-hey "Hey <first> <last>!"; it sits in a
+  // collapsed panel, so read textContent, not innerText); signed out, the header offers "Sign in".
+  const hey = document.querySelector(".hlp3-hey")?.textContent || "";
+  const header = document.querySelector(".header2021-inner, header")?.textContent || "";
+  const loggedIn = /\bhey\s+\S/i.test(hey) ? true : (/\bsign in\b/i.test(header) ? false : null);
+  return Object.assign({url: location.href, title: document.title, loggedIn}, """ + BLOCK_CHECK_JS + r""");
 })()"""
 
 
@@ -112,6 +109,8 @@ def search(target: str, query: str) -> dict:
         page.update(loads=loads, via="typed")
         if _stop_reason(page, SITE):
             page["stop"] = _stop_reason(page, SITE)
+        else:
+            SITE.log_page(page)
     else:
         page = SITE.nav(target, f"https://www.newegg.com/p/pl?d={quote_plus(query)}")
         page["via"] = "url"
@@ -120,6 +119,7 @@ def search(target: str, query: str) -> dict:
     SITE.wait_for(full_id, "document.querySelectorAll('div.goods-container .goods-price').length > 0", timeout=8)
     SITE.read_pause(full_id, random.uniform(2, 3.5))
     results = SITE.evaluate(full_id, _js("search_results.js")) or []
+    _remember_results(full_id, results)
     return {"page": page, "results": results, "count": len(results),
             "note": ("`ships_from` outside the US and `direct_from` mean a marketplace seller, not Newegg: check "
                      "`sold_by` on the product page.")}
@@ -145,8 +145,73 @@ def _item_of(url: str) -> str:
     return m.group(1)
 
 
+_PRODUCT_PACE = 2.0  # product pages are heavier than searches: leave about twice the gap before one
+
+
+def _remember_results(full_id: str, results: list[dict]) -> None:
+    """Keep the last results page (URL, document, item ids) in the claim, so a later product from it is
+    reached the way a person would: back to the results, then a click."""
+    c = SITE.claims().get(full_id)
+    if c is None:
+        return
+    items = []
+    for r in results:
+        try:
+            items.append(_item_of(r.get("url") or ""))
+        except Fail:
+            pass
+    c["last_results"] = {"url": SITE.evaluate(full_id, "location.href"),
+                         "origin": SITE.evaluate(full_id, "performance.timeOrigin"), "items": items}
+    SITE._write_claim(full_id, c)
+
+
+def _back_to_results(full_id: str, item: str) -> dict | None:
+    """When `item` was in the last results and the results page is the previous history entry (product
+    tabs only change the hash), go back to it with the mouse's back button. Returns {via, restored, loads?}
+    or None when that isn't possible. A back that re-fetches the page counts as a load."""
+    lr = (SITE.claims().get(full_id) or {}).get("last_results") or {}
+    if item not in (lr.get("items") or []):
+        return None
+    hist = SITE.cdp(full_id, "Page.getNavigationHistory")
+    idx, entries = hist.get("currentIndex", 0), hist.get("entries", [])
+    here = (entries[idx]["url"] if entries else "").split("#")[0]
+    j = idx - 1
+    while j >= 0 and entries[j]["url"].split("#")[0] == here:
+        j -= 1
+    if j < 0 or entries[j]["url"] != lr.get("url"):
+        return None
+    with timed("pace_wait"):
+        SITE._pace()  # Newegg usually fetches the results again on back (no back/forward cache)
+    x, y = SITE.pointer_into(full_id)
+    pause(random.uniform(0.3, 0.8))
+    for _ in range(idx - j):  # one press per entry (hash-only entries are skipped in place)
+        SITE.cdp(full_id, "Input.dispatchMouseEvent", {"type": "mousePressed", "x": x, "y": y, "button": "back",
+                                                       "buttons": 8, "clickCount": 1})
+        time.sleep(random.uniform(0.06, 0.13))
+        SITE.cdp(full_id, "Input.dispatchMouseEvent", {"type": "mouseReleased", "x": x, "y": y, "button": "back",
+                                                       "buttons": 0, "clickCount": 1})
+        pause(0.4)
+    via = "mouse back button"
+    ready = "document.querySelectorAll('div.goods-container a.goods-title').length > 0 && document.readyState === 'complete'"
+    if not SITE.wait_for(full_id, f"location.href === {json.dumps(lr['url'])} && " + ready, timeout=8):
+        SITE.cdp(full_id, "Page.navigateToHistoryEntry", {"entryId": entries[j]["id"]})
+        via = "browser back (fallback)"
+        if not SITE.wait_for(full_id, ready, timeout=20, settle=1.0):
+            return None
+    res = {"via": via}
+    if SITE.evaluate(full_id, "performance.timeOrigin") == lr.get("origin"):
+        res["restored"] = "back/forward cache (no page load)"
+    else:
+        res.update(restored="fetched again", loads=SITE._count_load(full_id))
+        _remember_results(full_id, [{"url": f"/p/{i}"} for i in lr.get("items") or []])
+    SITE.read_pause(full_id, random.uniform(1.5, 3.5))  # look over the list again before picking
+    return res
+
+
 def _load_product(target: str, url: str) -> tuple[str, dict]:
-    """Open the product (click it in the current results when listed there, else load the URL)."""
+    """Open the product like a person: click it in the current results; when it was in the last results
+    and the window has moved on to a product page, go back to the results first and click it there; else
+    load the URL. Product pages get a longer pacing gap than searches."""
     full_id = SITE.resolve(target)
     SITE.ensure_visible(full_id)
     item = _item_of(url)
@@ -154,19 +219,29 @@ def _load_product(target: str, url: str) -> tuple[str, dict]:
     if f"/p/{item}" in here:
         return full_id, {"url": here, "opened": "already open", "loads": None}
     sel = f'div.goods-container a.goods-title[href*="/p/{item}"]'
+    went_back = None
+    if not SITE.evaluate(full_id, f"!!document.querySelector({json.dumps(sel)})"):
+        went_back = _back_to_results(full_id, item)
     if SITE.evaluate(full_id, f"!!document.querySelector({json.dumps(sel)})"):
         loads = SITE._count_load(full_id)
         with timed("pace_wait"):
-            SITE._pace()
+            SITE._pace(_PRODUCT_PACE)
         if SITE.click_on(full_id, sel, look=random.uniform(0.5, 1.2)) and SITE.wait_for(
                 full_id, f"location.pathname.includes('/p/{item}') && document.readyState === 'complete'",
                 timeout=20, settle=SITE.settle):
             page = SITE.evaluate(full_id, PAGE_STATE_JS) or {}
-            page.update(loads=loads, opened="clicked")
+            page.update(loads=loads, opened="clicked (after back)" if went_back else "clicked")
+            if went_back:
+                page["back"] = went_back
+            reason = _stop_reason(page, SITE)
+            if reason:
+                page["stop"] = reason
+            else:
+                SITE.log_page(page)
             return full_id, page
         SITE.uncount_load(full_id)
-    page = SITE.nav(target, url.split("#")[0])
-    page["opened"] = "url"
+    page = SITE.nav(target, url.split("#")[0], pace_scale=_PRODUCT_PACE)
+    page["opened"] = "url (click missed)" if went_back else "url"
     return full_id, page
 
 

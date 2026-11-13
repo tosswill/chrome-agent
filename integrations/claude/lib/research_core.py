@@ -28,6 +28,30 @@ from pathlib import Path
 from typing import Callable
 from urllib.parse import urlparse
 
+# Is the page a bot check / CAPTCHA / access-denied wall? A visible challenge frame always counts. A wall
+# phrase counts only when the page also looks like a wall: the title or path says so, or the page is short
+# (a wall has little else on it). A phrase on an otherwise normal page is reported as `phrase_ignored`.
+# Returns {blocked, blocked_by, phrase_ignored?}; site PAGE_STATE_JS merges it in.
+BLOCK_CHECK_JS = r"""(() => {
+  const body = document.body?.innerText || "";
+  const text = ((document.title || "") + " " + body.slice(0, 4000)).toLowerCase();
+  const visible = el => { const r = el.getBoundingClientRect(), s = getComputedStyle(el);
+    return r.width > 60 && r.height > 60 && s.visibility !== "hidden" && s.display !== "none"; };
+  const frame = [...document.querySelectorAll("iframe")].find(f =>
+    /recaptcha\/.*\/bframe|hcaptcha|challenges\.cloudflare|captcha-delivery|arkoselabs/.test(f.src || "") && visible(f));
+  if (frame) return {blocked: true, blocked_by: "challenge frame: " + (frame.src || "").split("?")[0].slice(0, 120)};
+  const phrase = (text.match(/access denied|unusual traffic|verify you are (a )?human|are you a (human|robot)|press (&|and) hold|just a moment/) || [])[0];
+  if (!phrase) return {blocked: false, blocked_by: null};
+  const wallTitle = /access denied|are you a (human|robot)|captcha|just a moment|attention required|blocked/i.test(document.title || "");
+  const wallPath = /captcha|areyouahuman|blocked|denied|challenge/i.test(location.pathname);
+  const short = body.length < 2500;
+  if (wallTitle || wallPath || short)
+    return {blocked: true, blocked_by: "phrase '" + phrase + "' on a wall page (" +
+            [wallTitle && "title", wallPath && "path", short && "short page"].filter(Boolean).join(", ") + ")"};
+  return {blocked: false, blocked_by: null, phrase_ignored: phrase};
+})()"""
+
+
 BIN = shutil.which("chrome-agent") or str(Path.home() / ".local/bin/chrome-agent")
 
 
@@ -158,6 +182,126 @@ def attach_timings(obj):
     return obj
 
 
+# --- action log: one JSON line per action, per window, for debugging and tuning ------------------
+# ~/.local/state/chrome-agent-research/logs/<site>/<date>_<window>.jsonl (RESEARCH_LOG_DIR overrides;
+# RESEARCH_LOG=0 turns it off). Commands, page loads, pacing waits, clicks, key presses, typing, wheel
+# scrolls, history navigation, page state after loads, results and stops (with a screenshot). Never
+# cookies or page text; typed secrets are redacted. Files older than RESEARCH_LOG_KEEP_DAYS (30) go.
+LOG_DIR = Path(os.environ.get("RESEARCH_LOG_DIR", "~/.local/state/chrome-agent-research/logs")).expanduser()
+_LOG = threading.local()
+_PRUNED: set[str] = set()
+
+
+def _log_on() -> bool:
+    return os.environ.get("RESEARCH_LOG", "1") != "0"
+
+
+def _prune(d: Path) -> None:
+    if str(d) in _PRUNED:
+        return
+    _PRUNED.add(str(d))
+    cutoff = time.time() - 86400 * float(os.environ.get("RESEARCH_LOG_KEEP_DAYS", "30"))
+    for f in [*d.glob("*.jsonl"), *d.glob("shots/*")]:
+        try:
+            if f.is_file() and f.stat().st_mtime < cutoff:
+                f.unlink()
+        except OSError:
+            pass
+
+
+def log_event(event: str, **fields) -> None:
+    """Append one action to the current window's log (never raises)."""
+    site = getattr(_LOG, "site", None)
+    if not site or not _log_on():
+        return
+    pending = getattr(_LOG, "pending", None)
+    if pending is not None:  # the command's own line, written once its window is known
+        _LOG.pending = None
+        log_event("command", _t=pending["t"], target=fields.get("target"), args=pending["args"])
+    try:
+        target = fields.pop("target", None) or getattr(_LOG, "target", None)
+        now = fields.pop("_t", None) or time.time()
+        rec = {"t": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(now)) + f".{int(now * 1000) % 1000:03d}",
+               "site": site, "target": target[:8] if target else None, "cmd": getattr(_LOG, "cmd", None),
+               "pid": os.getpid(), "event": event, **fields}
+        d = LOG_DIR / site
+        d.mkdir(parents=True, exist_ok=True)
+        _prune(d)
+        f = d / f"{time.strftime('%Y-%m-%d', time.localtime(now))}_{(target or 'site')[:8]}.jsonl"
+        with open(f, "a") as fh:
+            fh.write(json.dumps(rec, ensure_ascii=False, default=str) + "\n")
+    except Exception:  # noqa: BLE001 - logging must never break research
+        pass
+
+
+def _find_stop(obj, depth: int = 0) -> dict | None:
+    """The dict holding a `stop` in a command result (top level or one level down, e.g. `page`)."""
+    if isinstance(obj, dict):
+        if obj.get("stop"):
+            return obj
+        if depth < 1:
+            for v in obj.values():
+                hit = _find_stop(v, depth + 1)
+                if hit:
+                    return hit
+    return None
+
+
+def _brief(result) -> dict:
+    """The parts of a command result worth logging (no page content)."""
+    if not isinstance(result, dict):
+        return {"type": type(result).__name__, "n": len(result) if isinstance(result, list) else None}
+    out = {}
+    page = result.get("page") if isinstance(result.get("page"), dict) else {}
+    for src in (result, page):
+        for k in ("target", "url", "title", "loads", "via", "opened", "blocked", "blocked_by", "loggedIn",
+                  "stop", "stop_shot", "warning", "count", "error"):
+            if k in src and k not in out and src[k] not in (None, "", []):
+                v = src[k]
+                out[k] = v[:200] if isinstance(v, str) else v
+    return out
+
+
+def read_log(site: str, target: str | None = None, since: str | None = None, last: int = 60,
+             raw: bool = False) -> dict:
+    """Recent actions from the logs: one window's (target prefix) or the whole site's, oldest first."""
+    d = LOG_DIR / site
+    secs = None
+    if since:
+        unit = {"s": 1, "m": 60, "h": 3600, "d": 86400}.get(since[-1:], None)
+        try:
+            secs = float(since[:-1]) * unit if unit else float(since) * 60
+        except ValueError:
+            raise Fail("--since takes a duration like 30m, 2h or 1d")
+    cutoff = time.time() - secs if secs else 0
+    recs = []
+    for f in sorted(d.glob("*.jsonl")) if d.is_dir() else []:
+        if f.stat().st_mtime < cutoff:
+            continue
+        if target and not f.stem.split("_", 1)[-1].upper().startswith(target[:8].upper()):
+            continue
+        for line in f.read_text().splitlines():
+            try:
+                r = json.loads(line)
+            except ValueError:
+                continue
+            if cutoff and time.mktime(time.strptime(r["t"][:19], "%Y-%m-%dT%H:%M:%S")) < cutoff:
+                continue
+            recs.append(r)
+    recs.sort(key=lambda r: r["t"])
+    recs = recs[-last:] if last else recs
+    if raw:
+        return {"dir": str(d), "events": recs}
+    lines = []
+    for r in recs:
+        rest = {k: v for k, v in r.items() if k not in ("t", "site", "target", "cmd", "pid", "event")}
+        detail = " ".join(f"{k}={json.dumps(v, ensure_ascii=False) if not isinstance(v, str) else v}"
+                          for k, v in rest.items())
+        lines.append(f"{r['t'][5:10]} {r['t'][11:19]} {r.get('target') or '-':8} {r.get('cmd') or '-':9} "
+                     f"{r['event']:13} {detail}"[:400])
+    return {"dir": str(d), "events": lines}
+
+
 @dataclass
 class Site:
     prefix: str                      # env var prefix, e.g. "REDDIT_TAB"
@@ -185,6 +329,7 @@ class Site:
     state: Path = field(init=False)
     long_idle_p: float = field(init=False)
     long_idle: tuple[float, float] = field(init=False)
+    name: str = field(init=False)
 
     def __post_init__(self):
         p = self.prefix
@@ -197,7 +342,10 @@ class Site:
         self.long_idle_p = _env(p, "LONG_IDLE_P", 0.125)
         self.long_idle = _parse_range(os.environ.get(f"{p}_LONG_IDLE", ""), (20.0, 60.0))
         name = p.split("_")[0].lower()
+        self.name = name
         self.state = _env(p, "STATE", Path(f"/tmp/chrome-agent-{name}"))
+        if not getattr(_LOG, "site", None):
+            _LOG.site, _LOG.site_obj = name, self
 
     # ---------------------------------------------------------------------
     # chrome-agent plumbing
@@ -214,9 +362,30 @@ class Site:
         return p.stdout
 
     def cdp(self, target: str, method: str, params: dict | None = None, timeout: float = 60) -> dict:
+        self._log_input(target, method, params or {})
         out = self.ca(self.instance, "--target-id", target, method, json.dumps(params or {}),
                       timeout=timeout)
         return json.loads(out) if out.strip() else {}
+
+    def _log_input(self, target: str, method: str, p: dict) -> None:
+        """Log the inputs a site sees (presses, keys, wheel, navigation); not pointer moves."""
+        if method == "Input.dispatchMouseEvent":
+            if p.get("type") == "mousePressed":
+                sel = getattr(_LOG, "sel", None)
+                log_event("click" if p.get("button") == "left" else f"mouse_{p.get('button')}",
+                          target=target, x=round(p.get("x", 0)), y=round(p.get("y", 0)),
+                          **({"selector": sel[:160]} if sel else {}))
+                _LOG.sel = None
+            elif p.get("type") == "mouseWheel":
+                log_event("wheel", target=target, dy=round(p.get("deltaY", 0)))
+        elif method == "Input.dispatchKeyEvent" and p.get("type") == "keyDown" and not getattr(_LOG, "typing", False):
+            log_event("key", target=target, key=p.get("key"))
+        elif method == "Page.navigate":
+            log_event("navigate", target=target, url=p.get("url"))
+        elif method == "Page.navigateToHistoryEntry":
+            log_event("history", target=target, entry=p.get("entryId"))
+        elif method == "Page.reload":
+            log_event("reload", target=target)
 
     def evaluate(self, target: str, expr: str, timeout: float = 30):
         res = self.cdp(target, "Runtime.evaluate",
@@ -606,6 +775,7 @@ class Site:
             pause(look)
         x = r["x"] + r["width"] * random.uniform(0.3, 0.7)
         y = r["y"] + r["height"] * random.uniform(0.35, 0.65)
+        _LOG.sel = selector
         self.click(target, x, y)
         return True
 
@@ -633,8 +803,19 @@ class Site:
         self.cdp(target, "Input.dispatchKeyEvent", {"type": "keyUp", "key": key, "code": code,
                                                     "windowsVirtualKeyCode": vk, "modifiers": modifiers})
 
-    def type_text(self, target: str, text: str) -> None:
-        """Type key by key with uneven, human timing (longer after spaces, rare hesitations)."""
+    def type_text(self, target: str, text: str, secret: bool = False) -> None:
+        """Type key by key with uneven, human timing (longer after spaces, rare hesitations).
+        `secret`: the log records only the length."""
+        t0 = time.monotonic()
+        _LOG.typing = True
+        try:
+            self._type_keys(target, text)
+        finally:
+            _LOG.typing = False
+            log_event("type", target=target, text="<redacted>" if secret else text[:200], chars=len(text),
+                      secs=round(time.monotonic() - t0, 1))
+
+    def _type_keys(self, target: str, text: str) -> None:
         for ch in text:
             if ch.isascii() and ch.isalpha():
                 code, vk, shift = f"Key{ch.upper()}", ord(ch.upper()), ch.isupper()
@@ -811,6 +992,7 @@ class Site:
                        "(or run list to see active claims).")
         if self.on_resolve:
             self.on_resolve(hits[0])
+        _LOG.site, _LOG.site_obj, _LOG.target = self.name, self, hits[0]
         return hits[0]
 
     def touch(self, full_id: str) -> None:
@@ -845,6 +1027,7 @@ class Site:
         c["loads"] = c.get("loads", 0) + 1
         c["last_used"] = time.time()
         self._write_claim(full_id, c)
+        log_event("load", target=full_id, n=c["loads"])
         return c["loads"]
 
     def uncount_load(self, full_id: str) -> None:
@@ -853,9 +1036,11 @@ class Site:
         if c is not None and c.get("loads", 0) > 0:
             c["loads"] -= 1
             self._write_claim(full_id, c)
+            log_event("load_undone", target=full_id, n=c["loads"])
 
-    def _pace(self) -> None:
+    def _pace(self, scale: float = 1.0) -> None:
         """Block until a skewed gap (see pace_delay) has passed since the last load by any agent.
+        `scale` stretches the gap (e.g. 2 before a heavier page such as a product page).
         Tune with {PREFIX}_GAP, {PREFIX}_LONG_IDLE_P (0 disables long idles) and {PREFIX}_LONG_IDLE ("20-60")."""
         with self._locked("pace.lock") as f:
             f.seek(0)
@@ -863,7 +1048,10 @@ class Site:
                 last = float(f.read().strip() or 0)
             except ValueError:
                 last = 0.0
-            wait = last + pace_delay(self.gap, self.long_idle_p, self.long_idle) - time.time()
+            delay = pace_delay(self.gap * scale, self.long_idle_p, self.long_idle)
+            wait = last + delay - time.time()
+            log_event("pace", since_last_s=round(time.time() - last, 1) if last else None,
+                      delay_s=round(delay, 1), waited_s=round(max(wait, 0), 1), **({"scale": scale} if scale != 1 else {}))
             if wait > 0:
                 time.sleep(wait)
             f.seek(0)
@@ -968,14 +1156,14 @@ class Site:
         if any(f in url for f in self.forbidden):
             raise Fail("that URL is an API/internal endpoint and is off-limits; load the normal page instead.")
 
-    def nav(self, target: str, url: str, ready_js: str | None = None) -> dict:
+    def nav(self, target: str, url: str, ready_js: str | None = None, pace_scale: float = 1.0) -> dict:
         """Paced, counted page load. Returns {url, title, loggedIn, blocked, loads, stop?}."""
         full_id = self.resolve(target)
         self.check_url(url)
         self.ensure_visible(full_id)  # before counting a load: a hidden window would only stall
         loads = self._count_load(full_id)
         with timed("pace_wait"):
-            self._pace()
+            self._pace(pace_scale)
         try:
             with timed("page_load"):
                 self.cdp(full_id, "Page.navigate", {"url": url})
@@ -990,7 +1178,32 @@ class Site:
         reason = self.stop_reason(state, self)
         if reason:
             state["stop"] = reason
+            self.record_stop(full_id, state)
+        else:
+            self.log_page(state)
         return state
+
+    def log_page(self, state: dict, **extra) -> None:
+        """Log the page a load landed on (url, title, signed-in and block state)."""
+        log_event("page", **{k: state.get(k) for k in ("url", "title", "loggedIn", "blocked", "blocked_by",
+                                                      "phrase_ignored") if state.get(k) is not None}, **extra)
+
+    def record_stop(self, full_id: str, state: dict) -> None:
+        """Log a stop with a screenshot of what the page showed (once per command)."""
+        if getattr(_LOG, "stop_logged", False):
+            return
+        _LOG.stop_logged = True
+        shot = None
+        if _log_on():
+            try:
+                shot = str(self.screenshot(full_id, LOG_DIR / self.name / "shots" /
+                                           f"{time.strftime('%Y-%m-%d_%H%M%S')}_{full_id[:8]}.jpg", max_width=1600))
+                state["stop_shot"] = shot
+            except Exception:  # noqa: BLE001 - the stop itself matters more than its picture
+                pass
+        log_event("stop", target=full_id, reason=state.get("stop"), shot=shot,
+                  **{k: state.get(k) for k in ("url", "title", "loggedIn", "blocked", "blocked_by", "phrase_ignored")
+                     if state.get(k) is not None})
 
     def run_js(self, target: str, js: str):
         full_id = self.resolve(target)
@@ -1107,7 +1320,35 @@ def common_cli(site: Site, cmd: str, args: list[str]):
         return site.list_claims()
     if cmd == "gc":
         return site.gc()
+    if cmd == "log":
+        since, last, raw = opt(args, "--since"), opt(args, "--last"), opt(args, "--raw")
+        return read_log(site.name, args[0] if args else None, since if isinstance(since, str) else None,
+                        int(last) if isinstance(last, str) else (0 if since else 60), raw is True)
     return NotImplemented
+
+
+def begin_command(cmd: str, args: list) -> None:
+    """Start a command's log context (CLI and MCP)."""
+    _LOG.cmd, _LOG.target, _LOG.stop_logged, _LOG.sel = cmd, None, False, None
+    _LOG.quiet = cmd in ("log", "list")
+    # Written with the first action (or the result), so it lands in the window's file, not the site's.
+    _LOG.pending = None if _LOG.quiet else {"t": time.time(), "args": [str(a)[:300] for a in args]}
+
+
+def end_command(result) -> None:
+    """Log a command's outcome; a stop that no load recorded yet gets its screenshot here."""
+    if isinstance(result, dict) and "error" in result and len(result) <= 2:
+        if not getattr(_LOG, "quiet", False):
+            log_event("result", ok=False, error=str(result["error"])[:300],
+                      secs=(result.get("timings") or {}).get("total_s"))
+        return
+    hit = _find_stop(result)
+    site_obj, full_id = getattr(_LOG, "site_obj", None), getattr(_LOG, "target", None)
+    if hit and site_obj is not None and full_id:
+        site_obj.record_stop(full_id, hit)
+    if not getattr(_LOG, "quiet", False):
+        log_event("result", ok=True, secs=(result.get("timings") or {}).get("total_s")
+                  if isinstance(result, dict) else None, **_brief(result))
 
 
 def run_cli(doc: str, dispatch: Callable[[str, list[str]], object], argv: list[str]) -> int:
@@ -1119,12 +1360,17 @@ def run_cli(doc: str, dispatch: Callable[[str, list[str]], object], argv: list[s
         print(doc.strip())
         return 0
     timings_reset()
+    cmd = argv[1]
+    begin_command(cmd, argv[2:])
     try:
-        result = dispatch(argv[1], argv[2:])
+        result = dispatch(cmd, argv[2:])
         if result is NotImplemented:
             raise Fail(doc.strip())
-        print(json.dumps(attach_timings(result), indent=2, ensure_ascii=False))
+        end_command(attach_timings(result))
+        print(json.dumps(result, indent=2, ensure_ascii=False))
         return 0
     except Fail as e:
-        print(json.dumps(attach_timings({"error": str(e)}), ensure_ascii=False))
+        out = attach_timings({"error": str(e)})
+        end_command(out)
+        print(json.dumps(out, ensure_ascii=False))
         return 1
