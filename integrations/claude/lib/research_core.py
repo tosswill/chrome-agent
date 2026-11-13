@@ -451,7 +451,9 @@ class Site:
                 continue
             wid, cur = parts[0].strip(), parts[2].strip()
             title = parts[3].strip() if len(parts) > 3 else ""
-            dest = park if park and title.startswith(self.IDLE_TITLE) else ws
+            # chrome-agent may prefix titles ("🤖 <instance> — research-idle - Google Chrome")
+            idle = title.startswith(self.IDLE_TITLE) or f"— {self.IDLE_TITLE}" in title
+            dest = park if park and idle else ws
             if cur != dest and self._aerospace("move-node-to-workspace", "--window-id", wid, dest) is not None:
                 if dest == ws:
                     moved += 1
@@ -606,6 +608,50 @@ class Site:
         y = r["y"] + r["height"] * random.uniform(0.35, 0.65)
         self.click(target, x, y)
         return True
+
+    _PUNCT = {" ": ("Space", 32, False), "-": ("Minus", 189, False), "_": ("Minus", 189, True),
+              ".": ("Period", 190, False), ",": ("Comma", 188, False), "/": ("Slash", 191, False),
+              "?": ("Slash", 191, True), "'": ("Quote", 222, False), '"': ("Quote", 222, True),
+              ":": ("Semicolon", 186, True), ";": ("Semicolon", 186, False), "+": ("Equal", 187, True),
+              "=": ("Equal", 187, False), "!": ("Digit1", 49, True), "@": ("Digit2", 50, True),
+              "#": ("Digit3", 51, True), "$": ("Digit4", 52, True), "%": ("Digit5", 53, True),
+              "^": ("Digit6", 54, True), "&": ("Digit7", 55, True), "*": ("Digit8", 56, True),
+              "(": ("Digit9", 57, True), ")": ("Digit0", 48, True)}
+    _KEYS = {"Enter": ("Enter", 13, "\r"), "Tab": ("Tab", 9, None), "Escape": ("Escape", 27, None),
+             "Backspace": ("Backspace", 8, None), "ArrowDown": ("ArrowDown", 40, None), "ArrowUp": ("ArrowUp", 38, None)}
+
+    def key(self, target: str, key: str, code: str | None = None, vk: int | None = None, text: str | None = None,
+            modifiers: int = 0) -> None:
+        """One key press (down, a short hold, up). Named keys: Enter, Tab, Escape, Backspace, arrows."""
+        if key in self._KEYS and code is None:
+            code, vk, text = self._KEYS[key]
+        down = {"type": "keyDown", "key": key, "code": code, "windowsVirtualKeyCode": vk, "modifiers": modifiers}
+        if text:
+            down.update(text=text, unmodifiedText=text)
+        self.cdp(target, "Input.dispatchKeyEvent", down)
+        time.sleep(random.uniform(0.03, 0.09))
+        self.cdp(target, "Input.dispatchKeyEvent", {"type": "keyUp", "key": key, "code": code,
+                                                    "windowsVirtualKeyCode": vk, "modifiers": modifiers})
+
+    def type_text(self, target: str, text: str) -> None:
+        """Type key by key with uneven, human timing (longer after spaces, rare hesitations)."""
+        for ch in text:
+            if ch.isascii() and ch.isalpha():
+                code, vk, shift = f"Key{ch.upper()}", ord(ch.upper()), ch.isupper()
+            elif ch.isascii() and ch.isdigit():
+                code, vk, shift = f"Digit{ch}", ord(ch), False
+            elif ch in self._PUNCT:
+                code, vk, shift = self._PUNCT[ch]
+            else:
+                self.cdp(target, "Input.insertText", {"text": ch})
+                continue
+            self.key(target, ch, code, vk, text=ch, modifiers=8 if shift else 0)
+            gap = min(random.lognormvariate(-2.6, 0.6), 0.6)
+            if ch == " ":
+                gap += random.uniform(0.05, 0.25)
+            if random.random() < 0.04:
+                gap += random.uniform(0.4, 1.2)
+            time.sleep(gap)
 
     def covered_by(self, target: str, selector: str) -> dict | None:
         """What sits on top of `selector`'s center (a promo dialog, a consent banner, a login nag), or None
