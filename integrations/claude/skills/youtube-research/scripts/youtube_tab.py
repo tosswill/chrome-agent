@@ -37,7 +37,7 @@ CLI (each command prints JSON):
     youtube_tab.py shot ID [--selector CSS] [--full] [--out-dir DIR | --out PATH]   visible page
                        content (or one element), with ads_in_view
     youtube_tab.py channel ID URL|@handle                  channel header + recent uploads
-    youtube_tab.py tally ID NAME [NAME ...] [--alias "Name=Alt,Alt2; Other=..."] [--near "Name=word,..."] [--no-transcripts]
+    youtube_tab.py tally ID NAME [NAME ...] [--alias "Name=Alt,Alt2; Other=..."] [--near "Name=word,..."] [--no-transcripts] [--examples N] [--groups N]
                        channels and independent channels mentioning each name among everything this
                        window has seen (search results merged with loaded videos, their descriptions,
                        links and read transcripts), with snippets and links. No page load.
@@ -972,11 +972,12 @@ def open_window(wait_seconds: float = 0) -> dict:
     return SITE.open_window(wait_seconds)
 
 
-def _flag_result(r: dict) -> dict:
-    """Y3/Y17 flags on a search result."""
+def _flag_result(r: dict, flagged_channels=()) -> dict:
+    """Y3/Y17 flags on a search result (a channel flagged earlier in the window counts as one weak reason)."""
     handle = _handle_of(r.get("channel_url"))
     lst, why = S.likely_ai_listicle(r.get("title") or "", r.get("channel"), handle,
-                                    length_s=S._len_s(r.get("length")), uploaded=S.upload_year(r.get("age")))
+                                    length_s=S._len_s(r.get("length")), uploaded=S.upload_year(r.get("age")),
+                                    channel_flagged=r.get("channel") in flagged_channels)
     if lst:
         r["likely_ai_listicle"], r["listicle_reasons"] = True, why
     amz, why = S.amazon_influencer(r.get("title") or "")
@@ -1001,7 +1002,8 @@ def search(target: str, query: str, sort: str = "relevance", upload: str | None 
     if "stop" in page:
         return {"page": page, "results": []}
     page.update(_settle_results(full_id, query))
-    results = [_flag_result(r) for r in (SITE.evaluate(full_id, _call("search_results.js", {"shorts": shorts})) or [])]
+    flagged = {c for c, f in (_seen_load(full_id).get("channels") or {}).items() if (f or {}).get("listicle")}
+    results = [_flag_result(r, flagged) for r in (SITE.evaluate(full_id, _call("search_results.js", {"shorts": shorts})) or [])]
     farms = S.near_duplicate_clips(results)  # one channel posting several near-identical clips
     for r in results:
         why = farms.get(r.get("channel"))
@@ -1054,7 +1056,14 @@ def sponsor_bias(data: dict, transcript_hits: list[dict] | None = None) -> dict:
     subject = " ".join([data.get("title") or ""] + list(data.get("keywords") or [])[:8])
     ch, own = data.get("channel"), d.get("own_domains") or ()
     page += D.scan_text(data.get("title", ""), "title", subject=subject, channel=ch, own_domains=own)
-    page += D.scan_text(data.get("description", ""), "description", subject=subject, channel=ch, own_domains=own)
+    desc_hits = D.scan_text(data.get("description", ""), "description", subject=subject, channel=ch, own_domains=own)
+    kept = S.strip_gear_blocks(data.get("description") or "")
+    # Codes in the channel's standing gear/affiliate list are referral codes, not this video's sponsor.
+    def standing_code(h: dict) -> bool:
+        is_code = h.get("signal") == "use_my_link_or_code" or (h.get("signal") == "third_party_sponsor"
+                                                              and h.get("via") == "code")
+        return is_code and (h.get("text") or "")[:60] not in kept
+    page += [h for h in desc_hits if not standing_code(h)]
     # Affiliate links in the creator's own gear lists ("My Film Gear", "My Creator Tech Stack") earn from
     # their equipment, not from the products reviewed: a separate, light signal.
     desc = data.get("description") or ""
@@ -1075,7 +1084,8 @@ def sponsor_bias(data: dict, transcript_hits: list[dict] | None = None) -> dict:
     page = D.brand_adjust(page, subject, ch, title=data.get("title") or "", handle=data.get("handle"),
                           brand_domains=[u for u in data.get("description_links") or () if u not in own_links])
     extra = D.brand_adjust(list(transcript_hits or []), subject, None)
-    owner = S.brand_channel(ch, data.get("handle"), own)
+    owner = S.brand_channel(ch, data.get("handle"), own) or S.vendor_channel(ch, data.get("handle"),
+                                                                           data.get("description_links") or ())
     if owner and not any(h["signal"] == "brand_owned_channel" and h.get("brand_owned") == "strong" for h in page):
         # The channel is the brand itself ("Bitwarden", "@1Password"), whatever the title says.
         page = [h for h in page if h["signal"] != "brand_owned_channel"]
@@ -1110,6 +1120,8 @@ def sponsor_bias(data: dict, transcript_hits: list[dict] | None = None) -> dict:
             res["roundup"] = True
             res["roundup_note"] = ("Multi-brand video: read `by_brand` (each brand's own sponsor score); the overall "
                                    "score mixes every brand's signals. `shared_score` covers signals tied to no brand.")
+    elif brands:
+        res["brands"] = brands  # one brand: the overall score is that brand's
     res["transcript_scanned"] = transcript_hits is not None
     if transcript_hits is None:
         res["confidence"] = "low"
@@ -1127,14 +1139,15 @@ _VIDEO_READY_JS = ("document.readyState === 'complete' && !!window.ytInitialPlay
 PAGES = Path(os.environ.get("YOUTUBE_TAB_PAGES", str(TRANSCRIPTS.parent / "youtube-pages"))).expanduser()
 
 
-def _score_page(data: dict) -> bool:
+def _score_page(data: dict, channel_flagged: bool = False) -> bool:
     """Link classes, listicle / Amazon-influencer flags and the page-only sponsor bias of a video page
     (in place). Shared by `video` and `rescore`. Returns whether it looks like an AI listicle."""
     data["disclosure"] = D.merge_link_classes(data.get("disclosure"), D.classify_links(
         data.get("description_links") or [], channel=data.get("channel"), description=data.get("description") or "",
         handle=data.get("handle"), brands=S.KNOWN_BRANDS))
     lst, why = S.likely_ai_listicle(data.get("title") or "", data.get("channel"), data.get("handle"),
-                                    length_s=data.get("length_s"), uploaded=S.upload_year(None, data.get("published")))
+                                    length_s=data.get("length_s"), uploaded=S.upload_year(None, data.get("published")),
+                                    channel_flagged=channel_flagged)
     data.pop("likely_ai_listicle", None), data.pop("listicle_reasons", None)
     if lst:
         data["likely_ai_listicle"], data["listicle_reasons"] = True, why
@@ -1191,7 +1204,8 @@ def video(target: str, url: str) -> dict:
         if data and data.get("stale"):
             data = None
     if data:
-        lst = _score_page(data)
+        lst = _score_page(data, bool(((_seen_load(full_id).get("channels") or {}).get(data.get("channel")) or {})
+                                     .get("listicle")))
         _save_page(data)
         _seen_add(full_id, [_video_record(data, data["sponsor_bias"])],
                   {data.get("channel"): {"listicle": True}} if lst else None)
@@ -1271,6 +1285,8 @@ def transcript(target: str, grep: list[str] | None = None, context: int = 0,
             res["saved"] = {"error": f"could not save the transcript: {e}"}
         if page and sb:
             _seen_add(full_id, [_video_record({**page, "video_id": vid}, sb, segs)])
+        if page and isinstance(res.get("saved"), dict) and res["saved"].get("json"):
+            _save_page({**page, "video_id": vid}, transcript_json=res["saved"]["json"])  # for rescore
     res["segments"] = segs
     if start or end:
         lo = _seconds(start) if start else 0
@@ -1625,7 +1641,7 @@ def channel(target: str, url: str) -> dict:
 
 
 def tally(target: str, terms: list[str], aliases: str | dict | None = None, include_transcripts: bool = True,
-          near: str | dict | None = None) -> dict:
+          near: str | dict | None = None, max_examples: int = 5, max_groups: int = 12) -> dict:
     """For each candidate name: channels and independent channels mentioning it among everything this
     window has seen (search results merged with loaded videos: titles, descriptions, links and, when read,
     transcripts). Whole-name matching (longest name wins), aliases and built-in caption garbles, a snippet
@@ -1645,7 +1661,7 @@ def tally(target: str, terms: list[str], aliases: str | dict | None = None, incl
             return T.default_independence({**r, "sponsor_score": S.score_for_term(r, term)}, 0.6)
         out = T.tally(recs, [term], aliases=aliases, group="channel", group_label="channels", separate_search=False,
                       include_transcripts=include_transcripts, independence=indep, group_flags=flags, near=near,
-                      compete=terms)
+                      compete=terms, max_examples=max_examples, max_groups=max_groups)
         for row in out["tally"]:
             row["videos"] = row.pop("threads")
             for k in ("raw_upvotes", "recommend_upvotes", "complain_upvotes"):
@@ -1839,6 +1855,9 @@ def _saved_inputs(dirs: list[Path]) -> tuple[dict[str, dict], dict[str, list[dic
         d = _load_json(p)
         if d and d.get("video_id"):
             pages[d["video_id"]] = d
+            t = _load_json(Path(d["transcript_json"])) if d.get("transcript_json") else None
+            if t and isinstance(t.get("segments"), list) and t["segments"]:
+                segs[d["video_id"]] = t["segments"]  # saved with --out-dir (a report folder)
     for d0 in [TRANSCRIPTS, *dirs]:
         if not d0.exists():
             continue
@@ -1883,7 +1902,7 @@ def rescore(topic: str, dirs: list[str] | None = None, save: bool = False) -> di
         if not page:
             missing.append(vid)
             continue
-        data = {k: v for k, v in page.items() if k not in ("sponsor_bias", "saved", "screen_data")}
+        data = {k: v for k, v in page.items() if k not in ("sponsor_bias", "saved", "screen_data", "transcript_json")}
         _score_page(data)
         tx = segs.get(vid)
         if tx:
@@ -1984,10 +2003,11 @@ def _dispatch(cmd: str, args: list[str]):
         while "--near" in args:
             near.append(str(opt(args, "--near")))
         no_tr = bool(opt(args, "--no-transcripts", False))
+        n_ex, n_gr = int(opt(args, "--examples", 5)), int(opt(args, "--groups", 12))
         if len(args) < 2:
             raise Fail('usage: tally ID NAME [NAME ...] [--alias "Name=Alt,Alt2; Other=..."] [--near "Name=word,word"] '
                        '[--no-transcripts]')
-        return tally(args[0], args[1:], "; ".join(aliases) or None, not no_tr, "; ".join(near) or None)
+        return tally(args[0], args[1:], "; ".join(aliases) or None, not no_tr, "; ".join(near) or None, n_ex, n_gr)
     if cmd == "transcript":
         ctx = int(opt(args, "--context", 0))
         frm, to, out_dir = opt(args, "--from"), opt(args, "--to"), opt(args, "--out-dir")
@@ -2070,7 +2090,8 @@ def _dispatch(cmd: str, args: list[str]):
 
 
 def _brands_cli(args: list[str]) -> dict:
-    topic, alias, everyday, common = opt(args, "--topic"), opt(args, "--alias"), opt(args, "--everyday"), opt(args, "--common")
+    topic = opt(args, "--topic")
+    alias, everyday, common = (B.multi_opt(args, f, opt) for f in ("--alias", "--everyday", "--common"))
     if not args:
         raise Fail(B.command.__doc__.split("(")[0].strip())
     try:

@@ -252,7 +252,9 @@ _BOUGHT_STRONG = re.compile(
     r"full price)|(?:i|we) (?:bought|purchased) (?:it|this|them|these|this one|mine|my own|one)\b)", re.I)
 _BOUGHT_WEAK = re.compile(r"\b(?:i|we) (?:bought|purchased|paid for)\b", re.I)
 _NOT_SPONSORED = re.compile(
-    r"\b(not (?:an? )?(?:sponsored|paid|gifted)|no(?:body| one) (?:paid|sponsored)|un-?sponsored|isn'?t (?:an? )?"
+    # "not paid" only about the video or the creator ("had not paid" for a license is not a disclosure)
+    r"\b(not (?:an? )?(?:sponsored|gifted)|not (?:an? )?paid (?:promotion|review|video|post|ad|partnership|sponsor)|"
+    r"(?:i'?m|i am|i was|we(?:'re| are| were)|this (?:video )?(?:is|was)) not (?:being )?paid|no(?:body| one) (?:paid|sponsored)|un-?sponsored|isn'?t (?:an? )?"
     r"sponsored|wasn'?t (?:an? )?(?:sponsored|paid)|no sponsors?\b|non-?sponsored|(?:we|i) (?:never|don'?t|do not) (?:accept|take|do) (?:any )?(?:sponsorships?|sponsors?|paid (?:promotions?|reviews?)))", re.I)
 _EDITORIAL = re.compile(
     r"\b((?:they|\w+) (?:did ?n'?o?t|do ?n'?o?t|never) (?:see|review|approve|preview|get to see) (?:the|this|my) "
@@ -342,6 +344,9 @@ BUILDER = re.compile(
     r"vibe-?coded|shipped|published|released|open[- ]sourced) (?:(?:an?|my own|our own|this|a little|a small|a free|an open[- ]source)\s+(?:[\w-]+\s+){0,2}?"
     + BUILT_THING + r"|one myself|(?-i:[A-Z][a-z]+[A-Z]?\w*)(?:\.\w+)?\b(?! (?:a|the|my|it)\b)|[\w-]+\.(?:app|io|sh|dev))\b"
     r"|\bended up (?:building|making|writing|coding) (?:my|our) own\b"
+    r"|\b(?:led|pushed|inspired|got|drove) (?:me|us) to (?:build|make|write|create|develop|start)\b"
+    r"|\b(?:i|we) (?:build|make|develop|wrote) (?:an?|my own|our own) (?:[\w-]+\s+){0,4}?(?:app|application|client|tool|"
+    r"companion|extension|plugin|service|frontend|front-end)\b"
     r"|\b(?:the|this) (?:thing|app|tool|system|product|plugin|course|template) (?:that )?(?:i|we)(?:'m| am|'re| are) "
     r"(?:building|making|developing|working on)\b"
     r"|\b(?:i|we) (?:also|actually) (?:built|made|developed|programmed|coded) (?:it|this|that)\b"
@@ -455,7 +460,9 @@ def scan_text(text: str, source: str, link: str | None = None, subject: str = ""
         if m and _AFFILIATE_DISCLOSURE.search(sent) and not re.search(r"\bcode\b", sent, re.I):
             m = None  # "I earn a commission if you buy through my links" is the disclosure, not a pitch
         if m:
-            service = _service_in(sent) or (None if _about(sent, toks) else _service_in(near))
+            # A line with its own link names its own store; never borrow the next line's service.
+            own_link = re.search(r"https?://", sent)
+            service = _service_in(sent) or (None if _about(sent, toks) or own_link else _service_in(near))
             if service and not _about(service, toks) and not in_category_service(service, subject):
                 add("third_party_sponsor", sent, sponsor=service, via="code")
             else:
@@ -635,6 +642,11 @@ _AFF_SUBDOMAIN = re.compile(r"//(?:www\.)?(?:affiliates?|partners?|refer(?:ral)?
                             re.I)
 
 
+_SOCIAL_SLUG = re.compile(r"(?:^|[/_.-])(?:twitter|x|mastodon|insta|instagram|ig|tiktok|discord|facebook|fb|threads|"
+                          r"bluesky|bsky|reddit|twitch|linkedin|members?|membership|join|patreon|merch|newsletter|"
+                          r"personal|podcast|yt|youtube|subscribe|socials?|contact)(?:$|[/_.-])")
+
+
 def classify_links(links: list[str], *, channel: str | None = None, description: str = "",
                    handle: str | None = None, brands=()) -> dict:
     """Sort description links into affiliate, campaign (utm), short and self-promotion links.
@@ -668,6 +680,10 @@ def classify_links(links: list[str], *, channel: str | None = None, description:
         referrer = bool(refs & (whole | ch_toks))
         own = bool(host) and not referrer and (
             by_name or (any(url in ln for ln in my_lines) and not _REF_PARAM.search(url)))
+        if _SHORT_LINK.search(url) and _SOCIAL_SLUG.search((urlparse(url).path or "").lower()):
+            # bit.ly/twitter-janecreator, bit.ly/members-janecreator: the creator's socials and memberships.
+            out["self_promotion_links"].append(url)
+            continue
         if own and _SHORT_LINK.search(url) and not by_name:
             # "Support our investigations by becoming a member: bit.ly/x": the creator's own program
             out["self_promotion_links"].append(url)

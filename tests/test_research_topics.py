@@ -217,3 +217,125 @@ def test_repeat_builder_across_threads():
     rb = next(e for e in again["evidence"] if e["signal"] == "repeat_builder")
     assert "1 other thread" in rb["text"] and again["score"] > first["score"]
 
+
+
+# --- fixes from the 2026-11-12 photo-backup live check -------------------------------
+
+def test_brand_file_folds_mutual_aliases_and_brand_beats_common(topics):
+    B.add("photo apps", ["Quillpic Photos"], aliases="Quillpic Photos=Quillpic")
+    B.add("photo apps", ["Quillpic"], aliases="Quillpic=Quillpic Photos", common="Quillpic Photos,NAS")
+    d = B.load("photo apps")
+    assert d["brands"] == ["Quillpic Photos"] and d["aliases"] == {"Quillpic Photos": ["Quillpic"]}
+    assert d["common"] == ["NAS"]
+
+
+def test_repeated_cli_flags_are_all_kept():
+    args = ["add", "--alias", "A=a1", "--alias", "B=b1", "--common", "x", "--common", "y", "Name"]
+    assert B.multi_opt(args, "--alias", C.opt) == "A=a1; B=b1"
+    assert B.multi_opt(args, "--common", C.opt) == "x,y" and args == ["add", "Name"]
+
+
+def test_reddit_brand_tokens_longest_name_units_and_stance_flair(topics):
+    B.add("photo apps", ["Google Photos", "Quillpic"])
+    R._use_topic("photo apps")
+    assert R.brand_candidates("Quillpic already surpassed Google Photos for me")[0] == {"googlephotos", "quillpic"}
+    assert R.brand_candidates("Best way to store ~2TB of family photos")[0] == set()
+    assert R.staff_flair("deGoogler", {"google"}, is_mod=True) is None
+    assert R.staff_flair("Prusa", {"prusa"}, is_mod=True)
+
+
+def test_reddit_builder_launches_and_team_voice():
+    import disclosure as D
+    assert D.BUILDER.search("the problem that led me to build Snapshelf")
+    assert D.BUILDER.search("I build a native Android companion application for it")
+    assert not D.BUILDER.search("I build a lot of furniture")
+    assert R._LAUNCH_TITLE.search("Snapshelf 6.5 - selfhosted Google Photos replacement")
+    assert not R._LAUNCH_TITLE.search("Quillpic - is there a good alternative?")
+    assert R._own_repo("janedev", ["https://github.com/janedevv/snapshelf"])
+    assert R.brand_account("janedev", None, "we halted the mobile release for now", strong={"quillpic"})["confidence"] \
+        == "possible"
+    d = {"url": "https://www.reddit.com/r/x/comments/a/b/", "title": "Photo apps?", "subreddit": "r/x", "author": "op",
+         "body": "Edit: here's a running list of the suggestions in the comments: quillpic.example",
+         "links": ["https://quillpic.example/"], "comments": []}
+    assert "op_edit_points_to_article" not in {e["signal"] for e in R.promo_bias(d)["evidence"]}
+
+
+def test_tally_tone_fixes_and_visible_truncation():
+    assert T.polarity("Piwigo. Open source, dead easy") == "recommend"
+    assert T.polarity("Quillpic. It's the best option I've found by far") == "recommend"
+    assert T.polarity("try restarting it, the app crashed") != "recommend"
+    recs = [{"id": "p", "thread": "p", "via": "post", "title": "NAS for photos", "author": "op"},
+            {"id": "c", "thread": "p", "via": "comment", "depth": 0, "author": "u",
+             "text": "I wouldn't get a Synology, look at UGreen", "score": 3}]
+    pol = {r["term"]: r["polarity"] for r in T.tally(recs, ["Synology", "UGreen"])["tally"]}
+    assert pol["Synology"]["complain"] == 1 and pol["UGreen"]["recommend"] == 1
+    assert T._NOT_ABOUT.search("Image hosting that isnt Quillpic?")
+    many = [{"id": f"c{i}", "thread": "p", "via": "comment", "author": f"u{i}", "text": "Quillpic works great"}
+            for i in range(20)]
+    row = T.tally(many, ["Quillpic"], max_groups=3)["tally"][0]
+    assert row["truncated"] == {"by_group": "3 of 20", "examples": "5 of 20"} and len(row["by_group"]) == 3
+
+
+def test_youtube_brand_overlap_and_single_brand(topics):
+    B.add("photo apps", ["Google Photos", "Quillpic"])
+    Y._use_topic("photo apps")
+    assert sorted(S.detect_brands("Quillpic is ready to replace Google Photos", "")) == ["Google Photos", "Quillpic"]
+    assert "Google" in S.detect_brands("Google Photos vs Quillpic", "Google also sells phones")
+    sb = Y.sponsor_bias({"title": "Quillpic v3 changes", "description": "", "description_links": [], "channel": "Ch"})
+    assert sb["brands"] == ["Quillpic"] and "by_brand" not in sb
+
+
+def test_youtube_standing_affiliate_block_and_social_links():
+    desc = ("Great video.\n\nAffiliates & Referral Links\n---------------\n"
+            "🛒 GearShop (Code JANE10 for 10% off): https://www.gearshop.example?aff=2\n"
+            "🛒 Some VPN: https://www.somevpn.example/pages/buy/JANE\n\nChapters\n00:00 Intro")
+    links = ["https://www.gearshop.example?aff=2", "https://www.somevpn.example/pages/buy/JANE",
+             "https://bit.ly/twitter-janecreator", "https://bit.ly/members-janecreator", "https://bit.ly/janecreator-host"]
+    data = {"title": "Quillpic review", "description": desc + "\nX: https://bit.ly/twitter-janecreator",
+            "description_links": links, "channel": "Jane Creator", "handle": "@janecreator"}
+    Y._score_page(data)
+    sig = {e["signal"]: e for e in data["sponsor_bias"]["evidence"]}
+    assert "third_party_sponsor" not in sig and "use_my_link_or_code" not in sig
+    aff = data["disclosure"]["affiliate_links"]
+    assert "https://bit.ly/twitter-janecreator" not in aff and "https://bit.ly/members-janecreator" not in aff
+    assert S.brand_upsells("Of course! Quillpic is great, VPN I use: https://vpn.example/?referred_by=9", "Quillpic") == []
+
+
+def test_youtube_vendor_channel_and_not_paid_and_workload():
+    import channel_map as CM
+    import disclosure as D
+    assert S.vendor_channel("Meshnet", "@meshnet", ["https://meshnet.com/kb/1084/sharing"]) == "meshnet.com"
+    assert S.vendor_channel("Jane Systems", "@janesystems", ["https://janesystems.com/hire-us/"]) is None
+    assert not D._NOT_SPONSORED.search("an unlicensed label for anyone who had not paid.")
+    assert D._NOT_SPONSORED.search("This is not a paid review")
+    segs = [{"text": "I brought in 55,113 photos and 2,911 videos, which takes up 323 gigs of storage."},
+            {"text": "The import took about 40 minutes on this box."}]
+    _, info = CM.video_rigor({"segments": segs, "length_s": 600})
+    assert info["hits"]["workload_test"] == 2
+
+
+def test_farm_clip_rules():
+    farm = [("Quillpic vs Snapshelf 2026: WHICH SELF-HOSTED PHOTO MANAGER WINS?", 151),
+            ("Quillpic Review 2026 | Best Google Photos Alternative? Honest Verdict", 69),
+            ("Quillpic Vs Snapshelf In 2025  Which Should You Choose", 77)]
+    for t, n in farm:
+        assert S.likely_ai_listicle(t, "Some Channel", length_s=n, uploaded=2026)[0], t
+    real = [("I Moved to Quillpic… Can It Really Replace Google Photos?", 1080),
+            ("Quillpic vs Snapshelf: which is better for families?", 900), ("Quillpic vs Snapshelf", 95)]
+    for t, n in real:
+        assert not S.likely_ai_listicle(t, "Some Channel", length_s=n, uploaded=2026)[0], t
+    assert S.likely_ai_listicle("Quillpic vs Snapshelf: Why the Newer One Is Winning (2026)", "Some Channel",
+                                length_s=533, uploaded=2026, channel_flagged=True)[0]
+
+
+def test_rescore_reads_transcripts_saved_to_a_report_folder(tmp_path, monkeypatch):
+    pages, report = tmp_path / "pages", tmp_path / "report"
+    pages.mkdir()
+    report.mkdir()
+    tj = report / "2026-11-12_ddddddddddd_transcript.json"
+    tj.write_text(json.dumps({"video_id": "ddddddddddd", "segments": [{"sec": 0, "text": "hello"}]}))
+    (pages / "ddddddddddd.json").write_text(json.dumps({"video_id": "ddddddddddd", "transcript_json": str(tj)}))
+    monkeypatch.setattr(Y, "PAGES", pages)
+    monkeypatch.setattr(Y, "TRANSCRIPTS", tmp_path / "none")
+    got_pages, segs = Y._saved_inputs([])
+    assert segs["ddddddddddd"] == [{"sec": 0, "text": "hello"}]

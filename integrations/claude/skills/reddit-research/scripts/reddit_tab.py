@@ -18,7 +18,7 @@ CLI (each command prints JSON):
                                                     results, going back to them first), read it, return
                                                     post + comments with permalinks and a promo_bias score
     reddit_tab.py back ID                           browser back (mouse back button), e.g. to the results
-    reddit_tab.py tally ID NAME [NAME ...] [--alias "Name=Alias1,Alias2; ..."] [--near "Name=word,..."] [--exclude-op]
+    reddit_tab.py tally ID NAME [NAME ...] [--alias "Name=Alias1,Alias2; ..."] [--near "Name=word,..."] [--exclude-op] [--examples N] [--groups N]
                                                     distinct users, polarity and upvotes behind each name,
                                                     among everything this window has seen (no page load)
     reddit_tab.py shot ID [--at post | --comment ID | --selector CSS] [--full] [--out-dir DIR | --out PATH]
@@ -295,6 +295,10 @@ def _reviewer_names() -> set:
     return _REVIEWERS
 
 
+# Sizes and units ("2TB", "4K", "120Hz", "65W") are never brands.
+_UNIT_TOKEN = re.compile(r"\d+(?:\.\d+)?(?:tb|gb|mb|kb|k|p|hz|khz|w|kw|wh|kwh|mah|mm|cm|in|ft|v|fps|bit|x)s?")
+
+
 def brand_candidates(title: str = "", query: str = "", flair: str = "", explicit=()) -> tuple[set, set]:
     """Brand tokens for a thread: (strong, weak). Strong: known brands, explicit --brand names, quoted
     or capitalized query words, ALLCAPS words and names followed by a model number. Weak: other
@@ -333,15 +337,20 @@ def brand_candidates(title: str = "", query: str = "", flair: str = "", explicit
             # "Rug Doctor" -> rugdoctor, "Bissel" -> bissell: known brands written as two words or misspelled.
             for m in re.finditer(r"(?:\b[A-Z][\w&+'-]*\s+)*[A-Z][\w&+'-]*\b", text):
                 ws = _WORD.findall(m.group(0))
-                for a in range(len(ws)):
-                    for b in range(a + 1, min(len(ws), a + 2) + 1):
+                a = 0
+                while a < len(ws):
+                    # Longest first: "Google Photos" is one brand token, not "google" plus "googlephotos".
+                    for b in range(min(len(ws), a + 2), a, -1):
                         t = _BRAND_FIX.get(_tok("".join(ws[a:b])), _tok("".join(ws[a:b])))
                         if t in KNOWN_BRANDS:
                             strong.add(t)
                             skip |= {_tok(w) for w in ws[a:b]}
+                            a = b - 1
+                            break
+                    a += 1
         for i, w in enumerate(words):
             t = _tok(w)
-            if len(t) < 2 or t in COMMON or t.isdigit() or t in skip:
+            if len(t) < 2 or t in COMMON or t.isdigit() or t in skip or _UNIT_TOKEN.fullmatch(t):
                 continue
             nxt = words[i + 1] if i + 1 < len(words) else ""
             if t in KNOWN_BRANDS:
@@ -552,7 +561,8 @@ def staff_flair(flair: str, brands: set, weak: set = frozenset(), *, sub_brand: 
         return f"support-team flair '{fl}' in the brand's subreddit", sub_brand
     if is_mod and team and sub_brand and len(words) <= 3:
         return f"moderator with team flair '{fl}' in the brand's subreddit", sub_brand
-    if is_mod and fb and len(_tok(norm)) <= len(fb) + 3:
+    if is_mod and fb and len(_tok(norm)) <= len(fb) + 3 and any(_tok(w).startswith(fb) for w in words):
+        # The flair leads with the brand ("Prusa", "PrusaTeam"); "deGoogler" is a stance, not staff.
         return f"moderator with brand flair '{fl}'", fb
     return None
 
@@ -610,7 +620,19 @@ def brand_account(author: str | None, flair: str | None = None, text: str = "", 
         b = name_brand(author, brands, weak)
         if b:
             return {"author": author, "reason": f"moderator whose name contains '{b}'", "brand": b, "confidence": "likely"}
+    m = _WE_SHIP.search(text or "")
+    if m and brands:
+        # Speaking as the product's team about its releases ("we halted the mobile release"): a possible
+        # developer or staff account, reported, not counted.
+        return {"author": author, "reason": f"speaks as the team: '{m.group(0)}'", "brand": sorted(brands)[0],
+                "confidence": "possible"}
     return None
+
+
+_WE_SHIP = re.compile(r"\b(?:we|our team)(?: have| had|'ve|'ll| will| just| already)? (?:halted|paused|pulled|shipped|"
+                      r"released|rolled (?:out|back)|pushed (?:out|an? update|a fix)|are (?:releasing|shipping|rolling out)|"
+                      r"will (?:release|ship)|fixed (?:it|this|the (?:bug|issue))|merged)\b(?: (?:the|a|an|this|that|v?\d)[\w. -]{0,30})?",
+                      re.I)
 
 
 # Comment selection (R8, R13) -------------------------------------------------
@@ -745,6 +767,24 @@ _BUILDER = D.BUILDER
 _BUILDER_TITLE = re.compile(r"\b(?:i|we) (?:built|made|created|wrote|developed|launched|released|vibe-?coded|"
                             r"am building|'m building)\b|^\s*\[?(?:release|launch|show reddit|showoff|self-?promo)\]?\s*[:\]-]",
                             re.I)
+# A launch-style title: "<Name> [v6.5] – (an) open-source / self-hosted <X> alternative/replacement" (the
+# product name leads; a question or a "what's the best" thread doesn't match).
+_LAUNCH_TITLE = re.compile(r"^\s*(?-i:[A-Z][\w.+-]*)(?:\s+(?-i:[A-Z][\w.+-]*))?(?:\s+v?\d[\w.]*)?\s*[–—:|-]\s*"
+                           r"(?:(?:an?|the|your|my)\s+)?(?:[\w-]+[,\s]+){0,4}?(?:alternative|replacement)\b(?!.*\?\s*$)", re.I)
+
+
+def _own_repo(author: str | None, links) -> str | None:
+    """A code-host link whose account matches the poster (github.com/janedevv/snapshelf posted by u/janedev)."""
+    a = _tok(author or "")
+    if len(a) < 4:
+        return None
+    for u in links or []:
+        m = re.match(r"https?://(?:www\.)?(?:github\.com|gitlab\.com|codeberg\.org|sr\.ht/~)/?([\w.-]+)/([\w.-]+)", u or "")
+        if m:
+            owner = _tok(m.group(1))
+            if owner == a or (min(len(owner), len(a)) >= 5 and (owner.startswith(a) or a.startswith(owner))):
+                return u
+    return None
 _DOMAIN_TEXT = re.compile(r"\b(?:[a-z0-9-]+\.)+(?:com|net|org|io|co|shop|store|us|uk|ca|de)\b", re.I)
 _PITCH = [re.compile(p, re.I) for p in (
     r"\b\d{2,3}\s?°\s?[FC]\b", r"\b\d{3,6}\s?pa\b", r"\b\d{2,4}\s?w\b(?! ?ago)", r"\bkills? (?:99|bacteria|germs)",
@@ -841,6 +881,9 @@ def content_marketing(data: dict, comments: list[dict]) -> list[dict]:
         hits.append({"signal": "partner_short_links", "weight": 0.15, "source": src, "link": link,
                      "text": f"Partner/short link: {u}" + (f" (+{len(shorts) - 1} more)" if len(shorts) > 1 else "")})
     m = _EDIT_ARTICLE.search(body)
+    if m and re.search(r"\b(?:in the comments|suggestions?|commenters?|you all|y'?all|everyone|replies)\b",
+                       body[m.start():m.end() + 160], re.I):
+        m = None  # the edit sums up what commenters suggested; it isn't an outside article
     if m and post_hosts:
         hits.append({"signal": "op_edit_points_to_article", "weight": 0.2, "source": "post", "link": url,
                      "text": f"{body[max(0, m.start() - 20):m.end() + 60].strip()} ({post_hosts[0]})"})
@@ -871,6 +914,14 @@ def content_marketing(data: dict, comments: list[dict]) -> list[dict]:
     title = data.get("title") or ""
     if _BUILDER_TITLE.search(title):
         builders.append(({"author": host, "text": title, "link": url}, _BUILDER_TITLE.search(title)))
+    else:
+        repo = _own_repo(host, (data.get("links") or []) + ([data["linked_url"]] if data.get("linked_url") else []))
+        lm = _LAUNCH_TITLE.search(title)
+        if repo or (lm and not (body or "").strip().endswith("?")):
+            # The poster links their own repository, or the title announces a product as an alternative.
+            mm = re.search(re.escape(title), title)
+            builders.append(({"author": host, "text": title + (f" (own repo: {repo})" if repo else " (launch-style title)"),
+                              "link": url}, mm))
     for c in [{"author": host, "text": body, "links": data.get("links") or [], "link": url}] + comments:
         mm = _BUILDER.search(c.get("text") or "")
         if mm and not is_utility_account(c.get("author") or ""):
@@ -955,7 +1006,9 @@ def promo_bias(data: dict, query: str = "", brands=(), prior_builders: dict | No
     subreddit counts as the brand's own only when its name is a brand (R12)."""
     sub = (data.get("subreddit") or "").removeprefix("r/")
     title = data.get("title") or ""
-    body_brands = {t for t in (_tok(w) for w in _WORD.findall(data.get("body") or "")) if t in KNOWN_BRANDS}
+    # Distinctive known brands named in the body ("Apple", "Intel" in passing are too common to count).
+    body_brands = {t for t in (_tok(w) for w in _WORD.findall(data.get("body") or ""))
+                   if t in KNOWN_BRANDS and t not in AMBIGUOUS}
     strong, weak = brand_candidates(title, query, data.get("flair") or "", set(brands) | body_brands)
     if query:
         # Query words name brands only when this thread mentions them: the last search may be about a
@@ -964,6 +1017,12 @@ def promo_bias(data: dict, query: str = "", brands=(), prior_builders: dict | No
         here = _tok(" ".join([title, data.get("body") or "", sub, data.get("flair") or ""] +
                              [c.get("text") or "" for c in data.get("comments", [])[:60]]))
         strong = {t for t in strong if t in own_strong or t in here}
+    if _TOPIC_TOKENS:
+        # The topic's products named anywhere in the thread (comments too) are weak brand tokens, so a
+        # "<product>_team" commenter is caught even when the title names another product.
+        allwords = {_tok(w) for w in _WORD.findall(" ".join([data.get("body") or ""] +
+                                                         [c.get("text") or "" for c in data.get("comments", [])]))}
+        weak |= {t for t in _TOPIC_TOKENS if t in allwords and t not in strong}
     reviewers = _reviewer_names()
     strong, weak = strong - reviewers, weak - reviewers
     sub_brand = subreddit_brand(sub, strong, weak)
@@ -1213,6 +1272,7 @@ def open_window(wait_seconds: float = 0) -> dict:
 
 
 _TOPIC = B.Overlay()
+_TOPIC_TOKENS: set = set()  # the active topic file's distinctive brand tokens (5+ letters)
 
 
 def _use_topic(topic: str | None) -> None:
@@ -1225,6 +1285,7 @@ def _use_topic(topic: str | None) -> None:
     toks = {B.flat(n) for n in data["brands"]} | {B.flat(a) for v in data["aliases"].values() for a in v}
     everyday = {B.flat(w) for v in data["everyday"].values() for w in v} | {B.flat(k) for k in data["everyday"]}
     _TOPIC.extend_set(KNOWN_BRANDS, {t for t in toks | everyday if len(t) >= 2})
+    _TOPIC.extend_set(_TOPIC_TOKENS, {t for t in toks if len(t) >= 5})
     _TOPIC.extend_set(AMBIGUOUS, {t for t in everyday if len(t) >= 2})
     _TOPIC.extend_set(COMMON, {B.flat(c) for c in data["common"]} - toks)
     _TOPIC.extend_set(TL.COMMON_WORDS, {w.lower() for v in data["everyday"].values() for w in v})
@@ -1237,6 +1298,7 @@ def _apply_topic(full_id: str) -> None:
 
 
 SITE.session_check = _session_cookie_valid
+SITE.min_width = 1200  # Reddit hides the community sidebar (and its moderator list) in narrower windows
 SITE.on_resolve = _apply_topic
 
 
@@ -1907,7 +1969,7 @@ def thread(target: str, url: str, max_comments: int = 15, replies: int = 0, expa
 # Tally ----------------------------------------------------------------------------
 
 def tally(target: str, terms: list[str], aliases: str | dict | None = None, exclude_op: bool = False,
-          near: str | dict | None = None) -> dict:
+          near: str | dict | None = None, max_examples: int = 5, max_groups: int = 12) -> dict:
     """Per name: threads, distinct users (independent = not brand accounts), polarity, and upvotes
     (raw, recommend-weighted, complaint-weighted) behind the mentions, among everything this window
     has seen, with linked snippets. Search-title-only hits are kept apart (search_only_threads); the
@@ -1917,7 +1979,8 @@ def tally(target: str, terms: list[str], aliases: str | dict | None = None, excl
     topic = _claim(full_id).get("topic")
     if topic:
         aliases = B.tally_aliases(B.load(topic), terms, TL.parse_aliases(aliases)) or None
-    res = TL.tally(seen, terms, aliases=aliases, exclude_op=exclude_op, near=near)
+    res = TL.tally(seen, terms, aliases=aliases, exclude_op=exclude_op, near=near, max_examples=max_examples,
+                   max_groups=max_groups)
     res["note"] = ("Counts come only from what this window has seen. `users`/`independent_users` and the upvotes "
                    "count loaded posts and comments; search titles and snippets are in `search_only_threads`. "
                    "Brand accounts don't count as independent. recommend_upvotes counts only mentions that read as "
@@ -2048,10 +2111,12 @@ def _dispatch(cmd: str, args: list[str]):
         alias = "; ".join(_multi(args, "--alias")) or None
         near = "; ".join(_multi(args, "--near")) or None
         exclude_op = bool(opt(args, "--exclude-op", False))
+        n_ex, n_gr = int(opt(args, "--examples", 5)), int(opt(args, "--groups", 12))
         if len(args) < 2:
             raise Fail('usage: tally ID NAME [NAME ...] [--alias "Name=A,B; Other=C"] [--near "Name=word,word"] '
                        '[--exclude-op]')
-        return tally(args[0], args[1:], aliases=alias, exclude_op=exclude_op, near=near)
+        return tally(args[0], args[1:], aliases=alias, exclude_op=exclude_op, near=near, max_examples=n_ex,
+                     max_groups=n_gr)
     if cmd == "shot":
         out, out_dir, full = opt(args, "--out"), opt(args, "--out-dir"), bool(opt(args, "--full", False))
         at, comment, selector = opt(args, "--at"), opt(args, "--comment"), opt(args, "--selector")
@@ -2063,7 +2128,8 @@ def _dispatch(cmd: str, args: list[str]):
             raise Fail('usage: topic ID "TOPIC"   (use the topic brand file in this window; "" to clear)')
         return set_topic(args[0], " ".join(args[1:]).strip() or None)
     if cmd == "brands":
-        topic, alias, every, common = opt(args, "--topic"), opt(args, "--alias"), opt(args, "--everyday"), opt(args, "--common")
+        topic = opt(args, "--topic")
+        alias, every, common = (B.multi_opt(args, f, opt) for f in ("--alias", "--everyday", "--common"))
         if not args:
             raise Fail(B.command.__doc__.split("(")[0].strip())
         s_ = lambda v: v if isinstance(v, str) else None  # noqa: E731

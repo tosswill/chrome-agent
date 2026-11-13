@@ -138,8 +138,11 @@ _VS_TITLE = re.compile(r"\bvs\.?\b(?!\s*code\b)|\bversus\b|which (?:is|one is|sh
 # SEO template fillers seen on farm comparison clips ("(2026 Guide)", "Review and Overview", "Which one
 # is better in 2026?").
 _SEO_FILLER = re.compile(r"\(\s*20\d\d\s+guide\s*\)|review and overview|which (?:one )?is better|which to choose|"
-                         r"full comparison|complete (?:guide|comparison)|everything you need to know|honest review|"
-                         r"\bin 20\d\d\??\s*$", re.I)
+                         r"full comparison|complete (?:guide|comparison)|everything you need to know|honest (?:review|verdict)|"
+                         r"\bin 20\d\d\b|\b20\d\d\s*[:|]|which (?:[\w-]+ ){0,4}?(?:wins|is (?:the )?(?:best|better|superior)|"
+                         r"should you (?:choose|pick|get|use))\b|\bbest [\w -]{0,40}alternative\?", re.I)
+# A "review" clip: "Immich Review 2026: ...", "X Review | Best Y Alternative? Honest Verdict".
+_REVIEW_TITLE = re.compile(r"\breview\b", re.I)
 _MULTI_VS = re.compile(r"\bvs\.?\b(?!\s*code\b).+\bvs\.?\b(?!\s*code\b)", re.I)
 
 
@@ -158,7 +161,8 @@ def upload_year(age: str | None = None, published: str | None = None, today: dat
 
 def likely_ai_listicle(title: str = "", channel: str | None = None, handle: str | None = None,
                        uploads: int | None = None, year: int | None = None,
-                       length_s: int | None = None, uploaded: int | None = None) -> tuple[bool, list[str]]:
+                       length_s: int | None = None, uploaded: int | None = None,
+                       channel_flagged: bool = False) -> tuple[bool, list[str]]:
     """Heuristic: future-year channel names/handles or titles, generic "Picks / Reviews Club / Top5Lab"
     channel names, "Top 10" titles, very high upload counts, how-to farm names ("Wise Explainer",
     "HelperMan"), "X vs Y" clips too short to compare anything (under 3 minutes, or under 5 with a
@@ -168,7 +172,8 @@ def likely_ai_listicle(title: str = "", channel: str | None = None, handle: str 
     strong, weak = [], []
     name = f"{channel or ''} {handle or ''}"
     t = title or ""
-    vs = bool(_VS_TITLE.search(t))
+    # "X vs Y" comparisons, and short "X Review" clips, which farms make the same way.
+    vs = bool(_VS_TITLE.search(t)) or bool(_REVIEW_TITLE.search(t) and length_s is not None and 0 < length_s < 200)
     years = [int(y) for y in _YEAR.findall(t)]
     if any(int(y) > year for y in _YEAR.findall(name)):
         strong.append("future year in channel name/handle")
@@ -186,14 +191,19 @@ def likely_ai_listicle(title: str = "", channel: str | None = None, handle: str 
         weak.append("deals channel name")
     if _FARM_NAME.search(name.replace("@", " ")) and not detect_brands(name):
         weak.append("how-to farm channel name")
-    if vs and length_s is not None and 0 < length_s < 200:
+    if vs and length_s is not None and 0 < length_s < 100 and (years or _SEO_FILLER.search(t)):
+        # Real reviewers post short clips too; a sub-100-second one with a year or SEO filler is a farm's.
+        strong.append("under-100-second 'X vs Y' or review clip with an SEO title")
+    elif vs and length_s is not None and 0 < length_s < 200:
         weak.append("under-3-minute 'X vs Y' clip")
     elif vs and length_s is not None and 0 < length_s < 300 and (years or _SEO_FILLER.search(t)):
         weak.append("under-5-minute 'X vs Y' clip")
-    if vs and (years or _SEO_FILLER.search(t)) and (_SEO_FILLER.search(t) or re.search(r"\(\s*20\d\d\s*\)", t)):
+    if vs and (_SEO_FILLER.search(t) or re.search(r"\(\s*20\d\d\s*\)", t)):
         weak.append("SEO-template 'X vs Y (year)' title")
     if _MULTI_VS.search(t) and (length_s is None or length_s < 900):
         weak.append("three-way 'X vs Y vs Z' title")
+    if channel_flagged:
+        weak.append("the channel was flagged earlier in this session")
     flagged = bool(strong) or len(weak) >= 2
     return flagged, (strong + weak) if flagged else []
 
@@ -265,6 +275,28 @@ def amazon_influencer(title: str = "", description: str = "", links=(), length_s
     # needs an Amazon-finds hashtag (or a short-clip signal) too (a 15-minute software walkthrough was flagged).
     flagged = len(reasons) >= 2 and (bool(content) or length_s is None or length_s < 300)
     return flagged, reasons if flagged else []
+
+
+_VENDOR_PATH = re.compile(r"^/(?:kb|docs?|documentation|pricing|plans|download|downloads|features|product|products|"
+                          r"changelog|release-notes|support|help|integrations|enterprise|signup|sign-up|trial|start)\b", re.I)
+
+
+def vendor_channel(channel: str | None, handle: str | None, links=()) -> str | None:
+    """A company's own channel that isn't on the brand list: its name or handle equals its own site's name
+    and it links that site's product pages (docs, pricing, downloads), as a company channel links
+    meshnet.example/kb. A reviewer's business site ("janesystems.example/hire-us") has no product pages."""
+    name = _alnum(channel or "")
+    h = _alnum((handle or "").lstrip("@"))
+    for u in links or ():
+        try:
+            pu = urlparse(u)
+        except ValueError:
+            continue
+        host = (pu.hostname or "").lower().removeprefix("www.")
+        stem = _alnum(host.rsplit(".", 1)[0].split(".")[-1]) if host else ""
+        if len(stem) >= 4 and stem in (name, h) and _VENDOR_PATH.search(pu.path or ""):
+            return host
+    return None
 
 
 def brand_channel(channel: str | None, handle: str | None = None, own_domains=()) -> str | None:
@@ -370,7 +402,10 @@ _GEAR_HEAD = re.compile(
     r"(?:\s+(?:i|we)\s+use|\s+used|\s+list)?\b[^\n]{0,30}:?\s*$|"
     r"^\W*(?:my|our) favou?rite (?:[\w-]+ ){0,2}(?:accessories|products|gadgets|gear|tech|chargers|devices)\b[^\n]{0,20}:?\s*$|"
     r"^\W*(?:what|gear|equipment|tools?)\s+(?:i|we)\s+use\b[^\n]{0,40}:?\s*$|"
-    r"^\W*(?:filmed|shot|recorded)\s+(?:with|on|using)\b", re.I)
+    r"^\W*(?:filmed|shot|recorded)\s+(?:with|on|using)\b|"
+    # a standing block of the channel's affiliate and referral links ("Affiliates & Referral Links")
+    r"^\W*(?:(?:my|our)\s+)?(?:affiliates?|referrals?|partners?)(?:\s*(?:&|and|/)\s*(?:referrals?|affiliates?|partners?))?"
+    r"(?:\s+(?:links?|codes?|programs?))?(?:\s*(?:&|and)\s*(?:discounts?|deals|codes?))?\W*:?\s*$", re.I)
 _GEAR_LINE = re.compile(r"^\W*(?:main |b-?roll |second |a-?cam |b-?cam )?(?:cameras?|lens(?:es)?|mics?|microphones?|lav(?:alier)?s?|"
                         r"lights?|lighting|tripods?|gimbals?|audio|recorder|sd cards?|monitor|drone|editing|"
                         r"computer|laptop)\s*[:\-–]", re.I)
@@ -444,6 +479,14 @@ def detect_brands(title: str = "", description: str = "", links=(), own_domains=
     for b, words in TOPIC_EVERYDAY.items():
         if b not in found and any(re.search(r"(?<![\w-])" + re.escape(w) + r"(?![\w-])", text) for w in words):
             found.append(b)
+    # A brand named only inside a longer brand ("Google" in "Google Photos", "Apple" in "Apple TV") isn't its own.
+    for short in [b for b in found if any(o != b and o.lower().startswith(b.lower() + " ") for o in found)]:
+        rest = _fold(text)
+        for o in (o for o in found if o != short and o.lower().startswith(short.lower() + " ")):
+            for n in [o] + BRAND_ALIASES.get(o, []):
+                rest = _word_re(n).sub(" ", rest)
+        if not _mentions(rest, short):
+            found.remove(short)
     gear_links = set(re.findall(r"https?://\S+", description or "")) - set(re.findall(r"https?://\S+", kept))
     own = {_alnum(d) for d in own_domains or ()}
     words = _alnum(text)
@@ -475,7 +518,7 @@ def detect_brands(title: str = "", description: str = "", links=(), own_domains=
     return found
 
 
-_UPSELL = re.compile(r"\b(?:course|system|templates?|vault|starter ?kit|kit|masterclass|cohort|workshop|bundle|"
+_UPSELL = re.compile(r"\b(?<!of )(?:course|system|templates?|vault|starter ?kit|kit|masterclass|cohort|workshop|bundle|"
                      r"toolkit|blueprint|setup|guide|ebook|bootcamp|academy)\b", re.I)
 
 
@@ -492,6 +535,8 @@ def brand_upsells(description: str, title: str = "") -> list[dict]:
         if not urls or not _UPSELL.search(ln) or all(_PLATFORM.search(((urlparse(u).hostname or "").removeprefix("www.")) + ".")
                                                      for u in urls):
             continue
+        if all(re.search(r"[?&](?:ref|referred_by|referral|aff|affiliate|via|tag|coupon|code)=", u, re.I) for u in urls):
+            continue  # a referral link for someone else's product, not something the creator sells
         named = [b for b in brands if _mentions(_URL.sub(" ", ln), b)]
         if named:
             out.append({"signal": "creator_product", "weight": D.WEIGHTS["creator_product"], "source": "description",

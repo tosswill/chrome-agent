@@ -104,6 +104,7 @@ GARBLES: dict[str, list[str]] = {
     "Insta360": ["Insta 360", "Insta three sixty"],
     "Saramonic": ["Sara Monic"],
     "EcoFlow": ["Eccoflow", "Eco Flow", "Ecoflo", "Ecoflow"],
+    "Synology": ["sonology", "Sinology", "Synalogy"],
     "Bluetti": ["blietti", "Bluety", "Blueti", "Bluetty"],
     "Jackery": ["Jackary", "Jakery"],
     "Bissell": ["Bissel", "Bisell"],
@@ -325,8 +326,10 @@ _REC_NEG = re.compile(r"\b(no (?:issues?|problems?|complaints?|regrets?)|zero (?
                       r"never (?:had|have) (?:an? )?(?:issues?|problems?)|haven'?t had (?:any|a) (?:issues?|problems?)|"
                       r"can'?t go wrong|couldn'?t be happier|not a single (?:issue|problem)|won'?t regret|"
                       r"(?:never|haven'?t|didn'?t|don'?t) regrett?(?:ed)?|zero regrets?|no regrets?|"
-                      r"can'?t recommend (?:it |them |this |\w+ )?(?:enough|highly enough))\b", re.I)
-_COMP_NEG = re.compile(r"\b(not worth|(?:don'?t|do not|never) (?:get|buy|go with|bother with)|wouldn'?t recommend|would not recommend|don'?t recommend|do not recommend|"
+                      r"can'?t recommend (?:it |them |this |\w+ )?(?:enough|highly enough)|"
+                      # "dead easy", "dead simple": praise, not "died"
+                      r"dead (?:easy|simple|quiet|silent|reliable|on|set on))\b", re.I)
+_COMP_NEG = re.compile(r"\b(not worth|(?:don'?t|do not|never|wouldn'?t|would not|won'?t|shouldn'?t) (?:get|buy|go with|bother with|use|touch)|wouldn'?t recommend|would not recommend|don'?t recommend|do not recommend|"
                        r"can'?t recommend|cannot recommend|don'?t buy|do not buy|stay away|not reliable|doesn'?t work|"
                        r"does not work|didn'?t work|stopped working|not happy|wasn'?t happy|not impressed|"
                        r"(?:not|isn'?t|wasn'?t|aren'?t) (?:that |very |so |really |super |too )?(?:great|good|"
@@ -334,7 +337,8 @@ _COMP_NEG = re.compile(r"\b(not worth|(?:don'?t|do not|never) (?:get|buy|go with
 _REC = re.compile(r"\b(recommend(?:ed)?|love (?:it|mine|my|the)|loving|great|excellent|amazing|awesome|fantastic|"
                   r"best|happy with|worth it|go with|get the|buy the|solid|reliable|rock solid|works (?:great|well|"
                   r"perfectly)|perfect|favou?rite|my pick|top pick|highly|impressed|winner|no brainer|beast|"
-                  r"is the answer|gold standard|swear by|hands down|going strong|still going|life ?saver|"
+                  r"is the answer|gold standard|swear by|hands down|best (?:option|choice|solution|one|thing) (?:i'?ve|i have|we'?ve) "
+                  r"(?:found|used|tried|seen)|by far|going strong|still going|life ?saver|"
                   r"game ?changer|can'?t live without|worth every penny|must[- ]have|holy grail|saved our|"
                   r"(?:we|i) use (?:the|a|our|my)|we have (?:the|a|two|three)|treating (?:me|us) (?:well|great|good|"
                   r"right)|been (?:great|fantastic|flawless|rock solid|solid)|never let (?:me|us) down|"
@@ -361,7 +365,7 @@ def polarity(text: str) -> str:
     t2 = _REC_NEG.sub(" ", t)  # "can't recommend it enough" is praise, not "can't recommend"
     comp = len(_COMP_NEG.findall(t2))
     rest = _COMP_NEG.sub(" ", t2)
-    rec += len(_REC.findall(rest))
+    rec += len(_REC.findall(rest)) + (1 if _POINT_TO.search(t) else 0)
     comp += len(_COMP.findall(rest))
     if rec > comp:
         return "recommend"
@@ -380,7 +384,10 @@ def _sentence_around(text: str, start: int, end: int) -> str:
 # Contrast breaks inside a sentence: "Love my Bluetti, but the EcoFlow died" is praise for one and a
 # complaint about the other.
 _CONTRAST = re.compile(r"[;]|,?\s+\b(?:but|however|whereas|while|although|though|unlike|compared to|"
-                       r"except|meanwhile)\b|,\s+(?:and\s+)?(?:the|my|our|their)\s+", re.I)
+                       r"except|meanwhile)\b|,\s+(?:and\s+)?(?:the|my|our|their)\s+|"
+                       r",\s+(?=(?:instead\s+|rather\s+)?(?:look at|check out|consider|go for|try)\b)", re.I)
+# A clause that starts by pointing elsewhere ("..., look at UGreen") recommends what it names.
+_POINT_TO = re.compile(r"^\W*(?:instead\s+|rather\s+)?(?:look at|check out|consider|go for|try)\s+(?:the\s+)?(?-i:[A-Z])", re.I)
 
 
 _UNFAMILIAR = re.compile(r"\b(?:not (?:aware of|familiar with)|never (?:used|tried|heard of)|haven'?t (?:used|tried)|"
@@ -540,7 +547,7 @@ def _parts(rec: dict, include_transcripts: bool) -> list[tuple[str, str, str | N
 
 
 # A title asking to replace or compare a product: replies there endorse something else.
-_NOT_ABOUT = re.compile(r"\b(?:vs\.?|versus|or|alternatives?|instead of|replac(?:e|ing|ement)|switch(?:ing)? (?:from|away)|"
+_NOT_ABOUT = re.compile(r"\b(?:vs\.?|versus|or|alternatives?|instead of|isn'?t|is not|aren'?t|other than|non-|replac(?:e|ing|ement)|switch(?:ing)? (?:from|away)|"
                         r"ditch(?:ing)?|leav(?:e|ing)|other than|besides|without|better than|ditched|moving (?:off|away))\b", re.I)
 
 
@@ -581,6 +588,7 @@ def tally(records: list[dict], names: list[str], *, aliases: dict | str | None =
           separate_search: bool = True, op_once: bool = True, exclude_op: bool = False,
           include_transcripts: bool = True, sponsor_threshold: float = 0.6, independence=None,
           group_flags: dict | None = None, max_examples: int = 5, near: dict | str | None = None,
+          max_groups: int = 12,
           compete: list[str] | None = None) -> dict:
     """Count mentions of `names` in `records` (see the module docstring for fields and output).
     `compete`: other names that take part in longest-match ("Proton Pass" claims its "Pass") but get
@@ -707,9 +715,13 @@ def tally(records: list[dict], names: list[str], *, aliases: dict | str | None =
                group_label: len([g for g in groups if g != "?"]), f"independent_{group_label}": len(indep_groups),
                "raw_upvotes": raw, "recommend_upvotes": rec_up, "complain_upvotes": comp_up,
                "polarity": pol_counts, "excluded": excluded,
-               "by_group": sorted(groups.values(), key=lambda e: (-e["independent"], -e["items"]))[:12],
+               "by_group": sorted(groups.values(), key=lambda e: (-e["independent"], -e["items"]))[:max_groups],
                "examples": sorted(examples, key=lambda x: (-(x["independent"]), -(x["score"] or 0),
                                                            x["polarity"] == "mention"))[:max_examples]}
+        shown = {k: f"{min(len(v), n)} of {len(v)}" for k, v, n in (("by_group", groups, max_groups),
+                                                                   ("examples", examples, max_examples)) if len(v) > n}
+        if shown:  # say so instead of cutting silently; --groups / --examples show more
+            row["truncated"] = shown
         if term.near:
             row["near"] = term.near
             row["dropped_not_near"] = near_dropped

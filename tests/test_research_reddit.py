@@ -221,7 +221,7 @@ def test_tally_wiring():
 
 def test_cli_alias_and_exclude_op(monkeypatch):
     got = {}
-    monkeypatch.setattr(R, "tally", lambda t, names, aliases=None, exclude_op=False, near=None: got.update(
+    monkeypatch.setattr(R, "tally", lambda t, names, aliases=None, exclude_op=False, near=None, **kw: got.update(
         t=t, names=names, aliases=aliases, exclude_op=exclude_op, **({"near": near} if near else {})) or {})
     R._dispatch("tally", ["ID", "Core One", "MK4S", "--alias", "Core One=C1,Core 1", "--alias", "MK4S=MK 4S",
                           "--exclude-op"])
