@@ -408,20 +408,55 @@ class Site:
                 f"{self.prefix}_AEROSPACE_WORKSPACE, or run fewer windows at once); don't resize it yourself.")
         return out
 
+    IDLE_TITLE = "research-idle"
+
+    def _mark_idle_tabs(self) -> None:
+        """Title unclaimed tabs (the root tab commands go through) so aerospace can tell their windows
+        apart from claimed ones; a reused tab drops the mark when it is claimed."""
+        try:
+            claimed = set(self.claims())
+            for t in self.targets():
+                mark = t["full_id"] not in claimed
+                js = (f"document.title = {json.dumps(self.IDLE_TITLE)}" if mark else
+                      f"if (document.title === {json.dumps(self.IDLE_TITLE)}) document.title = ''")
+                try:
+                    self.evaluate(t["full_id"], js, timeout=5)
+                except Fail:
+                    pass
+        except Fail:
+            pass
+
     def place_windows(self) -> dict | None:
+        """Move this browser's claimed windows to the research workspace, and its idle windows (unclaimed
+        tabs) to RESEARCH_AEROSPACE_PARK when set, so they don't take tiling space. Moving a window never
+        changes which workspace is focused or shown."""
         ws = self.workspace()
         if not ws or not shutil.which("aerospace"):
             return None
         pid = self._browser_pid()
         if not pid:
             return {"workspace": ws, "error": "browser process not found"}
-        listing = self._aerospace("list-windows", "--all", "--format", "%{window-id}|%{app-pid}|%{workspace}") or ""
-        moved = 0
+        park = os.environ.get("RESEARCH_AEROSPACE_PARK", "").strip()
+        if park == ws:
+            park = ""
+        if park:
+            self._mark_idle_tabs()
+            pause(0.3)  # let the window title follow the page title
+        listing = self._aerospace("list-windows", "--all", "--format",
+                                  "%{window-id}|%{app-pid}|%{workspace}|%{window-title}") or ""
+        moved = parked = 0
         for line in listing.splitlines():
-            parts = line.split("|")
-            if len(parts) == 3 and parts[1].strip() == str(pid) and parts[2].strip() != ws:
-                if self._aerospace("move-node-to-workspace", "--window-id", parts[0].strip(), ws) is not None:
+            parts = line.split("|", 3)
+            if len(parts) < 3 or parts[1].strip() != str(pid):
+                continue
+            wid, cur = parts[0].strip(), parts[2].strip()
+            title = parts[3].strip() if len(parts) > 3 else ""
+            dest = park if park and title.startswith(self.IDLE_TITLE) else ws
+            if cur != dest and self._aerospace("move-node-to-workspace", "--window-id", wid, dest) is not None:
+                if dest == ws:
                     moved += 1
+                else:
+                    parked += 1
         visible = (self._aerospace("list-workspaces", "--monitor", "all", "--visible") or "").split()
         shown = False
         if ws not in visible:
@@ -432,7 +467,10 @@ class Site:
             shown = True
         if moved or shown:
             pause(0.8)  # let Chrome notice it is visible again
-        return {"workspace": ws, "moved": moved, "shown": shown}
+        out = {"workspace": ws, "moved": moved, "shown": shown}
+        if park:
+            out.update(park=park, parked=parked)
+        return out
 
     SCREEN_MSG = ("the screen is {why}, so Chrome treats every research window as hidden. Ask the user to "
                   "wake and unlock the computer (with the research monitor on), then retry.")

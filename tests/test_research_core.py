@@ -91,6 +91,7 @@ def test_place_windows_moves_only_own_browser(monkeypatch):
             return "1\n4\n9\n"
         return ""
     monkeypatch.setenv("RESEARCH_AEROSPACE_WORKSPACE", "9")
+    monkeypatch.delenv("RESEARCH_AEROSPACE_PARK", raising=False)
     monkeypatch.setattr(C.shutil, "which", lambda name: "/bin/" + name)
     monkeypatch.setattr(C.Site, "_aerospace", fake)
     monkeypatch.setattr(C.Site, "_browser_pid", lambda self: 500)
@@ -100,6 +101,34 @@ def test_place_windows_moves_only_own_browser(monkeypatch):
     moves = [c for c in calls if c[0] == "move-node-to-workspace"]
     assert moves == [("move-node-to-workspace", "--window-id", "11", "9")]  # never 13 (the user's Chrome)
     assert not any(c[0] == "workspace" for c in calls)  # already visible: no focus change
+
+
+def test_place_windows_parks_idle_windows_without_switching(monkeypatch):
+    import research_core as C
+    site = C.Site.__new__(C.Site)
+    calls = []
+
+    def fake(self, *args):
+        calls.append(args)
+        if args[0] == "list-windows":
+            return ("11|500|9|research-idle - Google Chrome\n12|500|4|Some video - YouTube - Google Chrome\n"
+                    "13|500|8|research-idle - Google Chrome\n14|777|9|research-idle - Google Chrome\n")
+        if args[:2] == ("list-workspaces", "--monitor"):
+            return "1\n5\n9\n"
+        return ""
+    monkeypatch.setenv("RESEARCH_AEROSPACE_WORKSPACE", "9")
+    monkeypatch.setenv("RESEARCH_AEROSPACE_PARK", "8")
+    monkeypatch.setattr(C.shutil, "which", lambda name: "/bin/" + name)
+    monkeypatch.setattr(C.Site, "_aerospace", fake)
+    monkeypatch.setattr(C.Site, "_browser_pid", lambda self: 500)
+    monkeypatch.setattr(C.Site, "_mark_idle_tabs", lambda self: None)
+    monkeypatch.setattr(C, "pause", lambda *a, **k: None)
+    res = site.place_windows()
+    assert res == {"workspace": "9", "moved": 1, "shown": False, "park": "8", "parked": 1}
+    moves = sorted(c for c in calls if c[0] == "move-node-to-workspace")
+    assert moves == [("move-node-to-workspace", "--window-id", "11", "8"),
+                     ("move-node-to-workspace", "--window-id", "12", "9")]  # 13 already parked; 14 isn't ours
+    assert not any(c[0] == "workspace" for c in calls)  # never switches workspaces
 
 
 def test_place_windows_off_without_setting(monkeypatch):

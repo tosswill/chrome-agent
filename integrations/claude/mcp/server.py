@@ -247,7 +247,7 @@ def reddit_close(target: str) -> str:
 
 @mcp.tool()
 def reddit_tally(target: str, names: list[str], alias: str | None = None, exclude_op: bool = False,
-                 near: str | None = None) -> str:
+                 near: str | None = None, max_examples: int = 5, max_groups: int = 12) -> str:
     """For each product name, among everything this window has seen (no page load): items, threads,
     users and independent_users (brand accounts excluded), polarity counts (recommend / complain /
     question / mention / mixed), raw_upvotes, recommend_upvotes and complain_upvotes, and linked
@@ -262,7 +262,8 @@ def reddit_tally(target: str, names: list[str], alias: str | None = None, exclud
     get a `warning`; near="pass=gpg,gopass,password-store" counts a mention only with one of those words
     close by. 1-3 letter names written lowercase match lowercase only ("op" is not "OP").
     `repeat_promoters`: users recommending it in 3+ threads. Use it in a landscape pass."""
-    return _reddit(reddit_tab.tally, target, names, aliases=alias, exclude_op=exclude_op, near=near)
+    return _reddit(reddit_tab.tally, target, names, aliases=alias, exclude_op=exclude_op, near=near,
+                   max_examples=max_examples, max_groups=max_groups)
 
 
 @mcp.tool()
@@ -404,7 +405,8 @@ def youtube_channel(target: str, url: str) -> str:
 
 @mcp.tool()
 def youtube_tally(target: str, names: list[str], aliases: str | None = None,
-                  include_transcripts: bool = True, near: str | None = None) -> str:
+                  include_transcripts: bool = True, near: str | None = None, max_examples: int = 5,
+                  max_groups: int = 12) -> str:
     """For each candidate product name: channels and independent channels mentioning it among everything
     this window has seen. Search results are merged with loaded videos (title, description, links) and,
     when read, their transcripts. Whole names only (the longest name wins: "Core One" doesn't count
@@ -414,7 +416,7 @@ def youtube_tally(target: str, names: list[str], aliases: str | None = None,
     an AI-listicle / Amazon-influencer channel. Each row has examples with snippets and links.
     near="pass=gpg,gopass" requires one of those words near each mention (for names that are everyday words).
     No page load. Use it to pick the top products in a landscape pass."""
-    return _reddit(youtube_tab.tally, target, names, aliases, include_transcripts, near)
+    return _reddit(youtube_tab.tally, target, names, aliases, include_transcripts, near, max_examples, max_groups)
 
 
 @mcp.tool()

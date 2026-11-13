@@ -14,8 +14,10 @@ for every later command (brand detection, sponsor isolation, brand subreddits, t
   only when the thread or query names them on Reddit).
 - common: category words that look like names but are never a brand ("Widevine", "HDR").
 """
+import fcntl
 import json
 import os
+from contextlib import contextmanager
 import re
 from datetime import date
 from pathlib import Path
@@ -50,7 +52,7 @@ def load(topic: str | None) -> dict:
     out.update({k: data.get(k) or out[k] for k in ("brands", "aliases", "everyday", "common")})
     if data.get("updated"):
         out["updated"] = data["updated"]
-    return out
+    return normalize(out)
 
 
 def _uniq(items) -> list[str]:
@@ -76,8 +78,25 @@ def parse_map(raw: str | dict | None) -> dict[str, list[str]]:
     return out
 
 
+@contextmanager
+def _locked():
+    """Agents researching one topic on both sites add to the same file at once: serialize the writes."""
+    TOPICS.mkdir(parents=True, exist_ok=True)
+    with open(TOPICS / ".lock", "w") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
+
+
 def add(topic: str, brands=(), aliases=None, everyday=None, common=()) -> dict:
     """Merge names into the topic's file and save it. Returns the saved file plus `path`."""
+    with _locked():
+        return _add(topic, brands, aliases, everyday, common)
+
+
+def _add(topic, brands, aliases, everyday, common) -> dict:
     data = load(topic)
     brands = [brands] if isinstance(brands, str) else brands
     common = [common] if isinstance(common, str) else common
@@ -90,6 +109,7 @@ def add(topic: str, brands=(), aliases=None, everyday=None, common=()) -> dict:
                 data["brands"] = _uniq(data["brands"] + [k])
         data[key] = cur
     data["common"] = _uniq(list(data["common"]) + [c for x in common or () for c in str(x).split(",")])
+    data = normalize(data)
     data["updated"] = date.today().isoformat()
     TOPICS.mkdir(parents=True, exist_ok=True)
     p = path(topic)
@@ -100,6 +120,11 @@ def add(topic: str, brands=(), aliases=None, everyday=None, common=()) -> dict:
 
 
 def remove(topic: str, names=()) -> dict:
+    with _locked():
+        return _remove(topic, names)
+
+
+def _remove(topic: str, names=()) -> dict:
     data = load(topic)
     drop = {n.lower() for n in names}
     data["brands"] = [b for b in data["brands"] if b.lower() not in drop]
@@ -122,6 +147,39 @@ def listing() -> list[dict]:
         out.append({"topic": d.get("topic"), "brands": len(d.get("brands") or []), "updated": d.get("updated"),
                     "path": str(p)})
     return out
+
+
+def multi_opt(args: list[str], name: str, opt) -> str | None:
+    """Every `--name value` in args (the flag may repeat), joined with "; " (aliases) or "," (common)."""
+    vals = []
+    while name in args:
+        v = opt(args, name)
+        if isinstance(v, str):
+            vals.append(v)
+    if not vals:
+        return None
+    return ",".join(vals) if name == "--common" else "; ".join(vals)
+
+
+def normalize(data: dict) -> dict:
+    """One brand per product: a name that is another brand's alias is folded into it (concurrent adds of
+    "Ente Photos=Ente" and "Ente=Ente Photos" keep the first-listed name), and a brand never doubles as a
+    category word."""
+    brands = list(data.get("brands") or [])
+    aliases = {k: list(v) for k, v in (data.get("aliases") or {}).items()}
+    order = {b.lower(): i for i, b in enumerate(brands)}
+    for k in sorted(aliases, key=lambda k: order.get(k.lower(), 1e9)):
+        if k not in aliases:
+            continue
+        for a in list(aliases[k]):
+            other = next((o for o in aliases if o.lower() == a.lower() and o != k), None)
+            if other:  # a mutual alias: fold the later brand into this one
+                aliases[k] = _uniq(aliases[k] + [other] + [x for x in aliases.pop(other) if x.lower() != k.lower()])
+    alias_names = {a.lower(): k for k, v in aliases.items() for a in v}
+    brands = [b for b in brands if b.lower() not in alias_names or alias_names[b.lower()].lower() == b.lower()]
+    flat_brands = {flat(b) for b in brands} | {flat(a) for a in alias_names}
+    common = [c for c in data.get("common") or [] if flat(c) not in flat_brands]
+    return {**data, "brands": brands, "aliases": aliases, "common": common}
 
 
 def flat(name: str) -> str:

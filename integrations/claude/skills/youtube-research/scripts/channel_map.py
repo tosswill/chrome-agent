@@ -65,6 +65,15 @@ _UNIT = (r"(?:%|percent|degrees?|°|psi|watts?|amps?|volts?|mah|wh|kwh|db|decibe
          r"minutes?|mins?|hours?|rpm|cfm|air ?watts|pa\b|kpa|lux|nits|fps|mph)")
 _MEASURE = re.compile(r"\b\d+(?:[.,]\d+)?\s*" + _UNIT, re.I)
 _PATTERNS = {
+    # A real workload measured on the creator's own setup: "I brought in 55,113 photos and 2,911 videos, which
+    # takes up 323 gigs", "the import took about 40 minutes" (software has no lab, but this is measured).
+    "workload_test": re.compile(
+        r"\b\d[\d,.]*\s*(?:photos|videos|files|images|pictures|items|songs|tracks|documents|notes|emails)\b[^.]{0,90}?"
+        r"\b(?:took|takes|take up|takes up|took up|uses?|used|in|of|is|was)\b[^.]{0,30}?\b\d[\d,.]*\s*"
+        r"(?:gigs?|gigabytes?|gb|tb|terabytes?|mb|megabytes?|minutes?|mins?|hours?|seconds?|secs?|days?)\b"
+        r"|\b(?:(?:it|the (?:import|upload|sync|scan|backup|migration|indexing|transfer))\s+)(?:took|takes|finished in|"
+        r"completed in)\s+(?:about |around |roughly |under |less than |over |just )?(?:an? |\d[\d,.]*\s*)"
+        r"(?:hours?|minutes?|mins?|seconds?|secs?|days?)\b", re.I),
     "controlled_test": re.compile(
         r"\b(?:side[- ]by[- ]side|same (?:amount|stain|carpet|conditions|test|spot)|each (?:machine|one|unit|"
         r"model) (?:got|gets|was)|control(?:led)? (?:test|sample|group)|three (?:passes|runs|trials)|"
@@ -245,7 +254,7 @@ def video_rigor(rec: dict) -> tuple[float | None, dict]:
     minutes = (rec.get("length_s") or 0) / 60 or max(1.0, len(text.split()) / 150)  # ~150 spoken words/min
     per10 = {k: v * 10 / minutes for k, v in hits.items()}
     measured = (hits["measurement"] + hits["named_test"] + hits["controlled_test"] + hits["instrument"]
-                + hits["network_test"])
+                + hits["network_test"] + hits["workload_test"])
     # "I tested 6" with nothing measured or shown is a claim: it counts only a little.
     tl_cap = 1.2 if measured >= 3 or hits["demo"] >= 2 else 0.3
     analysis = (min(0.8, hits["audit_or_incident"] * 0.15) + min(0.8, per10["design_analysis"] * 0.1)
@@ -256,6 +265,7 @@ def video_rigor(rec: dict) -> tuple[float | None, dict]:
              + min(1.0, hits["claim_check"] * 0.5) + min(1.0, per10["comparative"] * 0.3)
              + (0.6 if hits["data_table"] else 0) + min(0.6, hits["method"] * 0.3) + (0.6 if hits["instrument"] else 0)
              + (0.4 if hits["long_term"] else 0) + min(1.5, hits["network_test"] * 0.3)
+             + min(1.0, hits["workload_test"] * 0.4)
              - min(1.0, per10["spec_sheet"] * 0.3))
     score += screen
     hits["on_screen_table"] = 1 if screen else 0
