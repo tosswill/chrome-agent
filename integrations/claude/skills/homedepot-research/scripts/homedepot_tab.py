@@ -11,6 +11,14 @@ CLI (each command prints JSON):
                        open (`page.via`: typed), else the search URL is loaded (one page load either way).
                        Returns the product cards: id, url, brand, title, price, rating, reviews, sponsored, badges.
                        Home Depot often redirects a search to a category page (`page.url`).
+    homedepot_tab.py product ID URL               a product page: facts, price, details, highlights, specs, rating
+                       histogram, recommend %, AI review summary, first reviews with flags, Q&A count (1 load;
+                       clicked from the current results when listed there)
+    homedepot_tab.py reviews ID URL [--sort helpful|newest|oldest|highest|lowest|photo] [--verified] [--stars N]
+                       [--page N] [--pages N]   30 reviews a page with verified / incentivized / promotion /
+                       syndicated-from-brand-site / other-variant flags (1 load a page)
+    homedepot_tab.py qa ID URL [--page N] [--max N]   questions with their answers opened; brand answers flagged
+                       (1 load)
     homedepot_tab.py nav ID URL                   paced page load on homedepot.com
     homedepot_tab.py shot ID [--out PATH]         screenshot of the window
     homedepot_tab.py eval ID JS                   read something off the page
@@ -19,7 +27,10 @@ CLI (each command prints JSON):
 Environment (HOMEDEPOT_TAB_*): INSTANCE (homedepot-research-01), MAX (3 windows), GAP (5 s between loads),
 MAX_LOADS (40), STATE (/tmp/chrome-agent-homedepot).
 """
+import json
 import os
+import random
+import re
 import sys
 import time
 from pathlib import Path
@@ -146,6 +157,191 @@ def search(target: str, query: str) -> dict:
                     "which include syndicated reviews from the brand's site."}
 
 
+
+def _js(name: str) -> str:
+    return (HERE / "js" / name).read_text()
+
+
+def _product_path(url: str) -> tuple[str, str]:
+    """(slug, id) of a product, review or question URL."""
+    m = re.search(r"/p/(?:reviews/|questions/)?([^/?#]+)/(\d{6,})", url or "")
+    if not m:
+        raise Fail(f"not a Home Depot product URL: {url!r} (expected https://www.homedepot.com/p/<name>/<id>)")
+    return m.group(1), m.group(2)
+
+
+def _open_sections(full_id: str, which=("overview", "key-feat", "rr")) -> list[str]:
+    """Open the product page's collapsed sections the way a reader does: scroll to each title and click it."""
+    opened = []
+    comps = {"overview": "product-overview", "key-feat": "specifications", "rr": "ratings-and-reviews",
+             "qa": "questions-and-answers"}
+    for sec in which:
+        sel = f"#product-section-{sec} [data-component^={comps[sec]}]"
+        tall = SITE.evaluate(full_id, f"(document.querySelector('#product-section-{sec}')?.getBoundingClientRect().height || 0)")
+        if not tall:
+            continue
+        if tall < 140 and SITE.click_on(full_id, sel, look=random.uniform(0.4, 1.0)):
+            opened.append(sec)
+            pause(random.uniform(1.5, 2.5))
+    return opened
+
+
+def _click_result(full_id: str, pid: str) -> bool:
+    """Open a product from the current search results by clicking its card, when it's there."""
+    sel = f'[data-product-id="{pid}"] [data-testid=product-header] a'
+    if not SITE.evaluate(full_id, f"!!document.querySelector({json.dumps(sel)})"):
+        return False
+    before = SITE.evaluate(full_id, "location.href")
+    if not SITE.click_on(full_id, sel, look=random.uniform(0.5, 1.2)):
+        return False
+    return SITE.wait_for(full_id, f"location.href !== {json.dumps(before)} && location.pathname.includes('/p/') "
+                                  "&& document.readyState === 'complete'", timeout=20, settle=SITE.settle)
+
+
+def product(target: str, url: str) -> dict:
+    """A product page: facts, price, details, highlights, specifications, the reviews summary (histogram,
+    recommend %, Home Depot's AI summary) and the first reviews, plus the Q&A count. One page load (a click
+    from the current results when the product is listed there)."""
+    full_id = SITE.resolve(target)
+    SITE.ensure_visible(full_id)
+    slug, pid = _product_path(url)
+    opened = "url"
+    loads = SITE._count_load(full_id)
+    with timed("pace_wait"):
+        SITE._pace()
+    if _click_result(full_id, pid):
+        opened = "clicked"
+        page = SITE.evaluate(full_id, PAGE_STATE_JS) or {}
+        page["loads"] = loads
+    else:
+        SITE.uncount_load(full_id)
+        page = SITE.nav(target, f"https://www.homedepot.com/p/{slug}/{pid}")
+    page["opened"] = opened
+    if _stop_reason(page, SITE):
+        page["stop"] = _stop_reason(page, SITE)
+        return {"page": page, "product": None}
+    SITE.read_pause(full_id, random.uniform(2, 4))
+    opened_secs = _open_sections(full_id)
+    data = SITE.evaluate(full_id, _js("product.js")) or {}
+    if data.get("unavailable"):
+        return {"page": page, "product": None, "note": "Home Depot says this product isn't currently available."}
+    rv = SITE.evaluate(full_id, _js("reviews.js")) or {}
+    data["first_reviews"] = rv.get("reviews", [])
+    data["review_flags"] = _review_flags(rv.get("reviews", []))
+    data["reviews_url"] = f"https://www.homedepot.com/p/reviews/{slug}/{pid}/1"
+    data["questions_url"] = f"https://www.homedepot.com/p/questions/{slug}/{pid}/1"
+    SITE.scroll_to_top(full_id)
+    return {"page": page, "product": data, "sections_opened": opened_secs,
+            "note": ("rating/review_count include reviews syndicated from the brand's own site and incentivized "
+                     "ones (see review_flags). Use `reviews` for more (30 a page, sortable) and `qa` for answers.")}
+
+
+def _review_flags(revs: list[dict]) -> dict:
+    n = len(revs)
+    syn: dict[str, int] = {}
+    for r in revs:
+        if r.get("syndicated_from"):
+            syn[r["syndicated_from"]] = syn.get(r["syndicated_from"], 0) + 1
+    return {"read": n, "verified_purchase": sum(1 for r in revs if r.get("verified_purchase")),
+            "incentivized": sum(1 for r in revs if r.get("incentivized")),
+            "promotion": sum(1 for r in revs if r.get("promotion")), "syndicated": syn,
+            "other_variant": sum(1 for r in revs if r.get("variant")), "no_text": sum(1 for r in revs if r.get("no_text"))}
+
+
+SORTS = {"helpful": "mosthelpfull", "newest": "newest", "oldest": "oldest", "highest": "highestrating",
+         "lowest": "lowestrating", "photo": "photoreview"}
+
+_SET_SORT_JS = """((v) => { const s = document.querySelector('select.drop-down__select'); if (!s) return null;
+  if (s.value === v) return v;
+  Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set.call(s, v);
+  s.dispatchEvent(new Event('change', {bubbles: true})); return s.value; })(%s)"""
+
+
+def reviews(target: str, url: str, sort: str | None = None, verified: bool = False, stars: int | None = None,
+            page: int = 1, pages: int = 1) -> dict:
+    """Reviews from the product's review pages (30 a page): optional sort, Verified-only and star filters
+    (the page's own controls), `pages` consecutive pages from `page`. One page load per page."""
+    full_id = SITE.resolve(target)
+    slug, pid = _product_path(url)
+    if sort and sort not in SORTS:
+        raise Fail(f"sort must be one of {', '.join(SORTS)}")
+    out, pages_read, state = [], [], {}
+    for n in range(page, page + max(1, pages)):
+        state = SITE.nav(target, f"https://www.homedepot.com/p/reviews/{slug}/{pid}/{n}")
+        if state.get("stop"):
+            return {"page": state, "reviews": out}
+        SITE.wait_for(full_id, "document.querySelectorAll('.review-content__date').length > 0", timeout=10)
+        SITE.read_pause(full_id, random.uniform(1.5, 3))
+        if sort:
+            SITE.scroll_into_view(full_id, "select.drop-down__select")
+            pause(random.uniform(0.5, 1.2))
+            SITE.evaluate(full_id, _SET_SORT_JS % json.dumps(SORTS[sort]))
+            pause(3)
+        for flt in (["verified"] if verified else []) + ([str(stars)] if stars else []):
+            sel = f'button[name="filter-button-{flt}"]'
+            if SITE.click_on(full_id, sel, look=random.uniform(0.4, 0.9)):
+                pause(3)
+        rv = SITE.evaluate(full_id, _js("reviews.js")) or {}
+        out += rv.get("reviews", [])
+        pages_read.append({"page": n, "showing": rv.get("showing"), "sort": rv.get("sort")})
+        if not rv.get("reviews"):
+            break
+    return {"page": state, "pages": pages_read, "reviews": out, "flags": _review_flags(out),
+            "note": ("`syndicated_from` reviews were collected on the brand's own site; `incentivized` and "
+                     "`promotion` reviews were written in exchange for a reward. Weigh verified, unrewarded "
+                     "reviews more. Sorting or filtering past page 1 applies to that page only.")}
+
+
+_ANSWER_TOGGLES_JS = r"""(() => {
+  const out = [];
+  for (const d of document.querySelectorAll("div")) {
+    const tn = [...d.childNodes].find(n => n.nodeType === 3 && /^\s*\d+ Answers?\s*$/.test(n.textContent));
+    if (!tn) continue;
+    d.setAttribute("data-hd-toggle", String(out.length));
+    out.push(out.length);
+  }
+  return out.length;
+})()"""
+
+_TOGGLE_POINT_JS = r"""((i) => {
+  const d = document.querySelector(`[data-hd-toggle="${i}"]`); if (!d) return null;
+  d.scrollIntoView({block: "center"});
+  const tn = [...d.childNodes].find(n => n.nodeType === 3 && /\d+ Answers?/.test(n.textContent));
+  const r = document.createRange(); r.selectNodeContents(tn); const b = r.getBoundingClientRect();
+  return {x: b.x + b.width * (0.25 + Math.random() * 0.5), y: b.y + b.height / 2};
+})(%s)"""
+
+
+def qa(target: str, url: str, page: int = 1, max_open: int = 8) -> dict:
+    """Questions and answers from the product's Q&A page (8 questions a page): opens each question's answers
+    like a reader (up to `max_open`). Answers by the brand itself are flagged. One page load."""
+    full_id = SITE.resolve(target)
+    slug, pid = _product_path(url)
+    state = SITE.nav(target, f"https://www.homedepot.com/p/questions/{slug}/{pid}/{page}")
+    if state.get("stop"):
+        return {"page": state, "questions": []}
+    SITE.wait_for(full_id, "document.querySelectorAll('[data-testid=question-title]').length > 0", timeout=10)
+    SITE.read_pause(full_id, random.uniform(1.5, 3))
+    n = SITE.evaluate(full_id, _ANSWER_TOGGLES_JS) or 0
+    for i in range(min(n, max_open)):
+        pt = SITE.evaluate(full_id, _TOGGLE_POINT_JS % i)
+        if pt:
+            pause(random.uniform(0.6, 1.4))
+            SITE.click(full_id, pt["x"], pt["y"])
+            pause(random.uniform(1.2, 2.2))
+    data = SITE.evaluate(full_id, _js("qa.js")) or {}
+    brand = (SITE.evaluate(full_id, r"(document.body.innerText.match(/\nby\s*\n+\s*([^\n]+)\n/) || [])[1] || ''") or "").strip()
+    bt = re.sub(r"[^a-z0-9]", "", brand.lower())
+    for q in data.get("questions", []):
+        for a in q["answers"]:
+            who = re.sub(r"[^a-z0-9]", "", (a.get("by") or "").lower())
+            a["brand_answer"] = bool(bt and who and (who == bt or who.startswith(bt) or bt.startswith(who))) or \
+                any(re.search(r"manufacturer|brand|company|staff|associate", b, re.I) for b in a.get("badges") or [])
+    qs = data.get("questions", [])
+    return {"page": state, "brand": brand or None, "viewing": data.get("viewing"), "total": data.get("total"),
+            "questions": qs, "brand_answers": sum(1 for q in qs for a in q["answers"] if a["brand_answer"]),
+            "note": "Brand answers (`brand_answer`) are the manufacturer speaking: accurate on specs, not independent."}
+
 def shot(target: str, out: str | None = None) -> dict:
     full_id = SITE.resolve(target)
     path = Path(out or SITE.state / "shots" / f"{int(time.time())}.jpg")
@@ -158,6 +354,21 @@ def _dispatch(cmd: str, args: list[str]):
         if len(args) < 2:
             raise Fail("usage: search ID QUERY")
         return search(args[0], " ".join(args[1:]))
+    if cmd == "product" and len(args) == 2:
+        return product(*args)
+    if cmd == "reviews":
+        sort, verified, stars = opt(args, "--sort"), bool(opt(args, "--verified", False)), opt(args, "--stars")
+        pg, pages = int(opt(args, "--page", 1)), int(opt(args, "--pages", 1))
+        if len(args) != 2:
+            raise Fail("usage: reviews ID PRODUCT_URL [--sort helpful|newest|oldest|highest|lowest|photo] [--verified] "
+                       "[--stars N] [--page N] [--pages N]")
+        return reviews(args[0], args[1], sort if isinstance(sort, str) else None, verified,
+                       int(stars) if isinstance(stars, str) else None, pg, pages)
+    if cmd == "qa":
+        pg, mx = int(opt(args, "--page", 1)), int(opt(args, "--max", 8))
+        if len(args) != 2:
+            raise Fail("usage: qa ID PRODUCT_URL [--page N] [--max N]")
+        return qa(args[0], args[1], pg, mx)
     if cmd == "shot" and args:
         out = opt(args, "--out")
         return shot(args[0], out if isinstance(out, str) else None)
