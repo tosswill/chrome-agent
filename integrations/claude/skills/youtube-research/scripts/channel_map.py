@@ -444,6 +444,9 @@ def rate_channel(name: str, recs: list[dict], info: dict | None = None, topic: s
         "axes": axes, "authority": authority(axes["rigor"], trust, fcs),
         "rank_score": _rank(authority(axes["rigor"], trust, fcs), conf, info.get("subscribers"), axes["independence"]),
         "context": {"subscribers": info.get("subscribers"), "focus": fcs, "trust_citations": trust,
+                    **({"focus_note": ("no recent upload titles: the channel page wasn't read in this window (run "
+                                       "`channel` on it)" if "recent_titles" not in info else
+                                       "the channel page listed no recent uploads")} if fcs is None else {}),
                     "affiliate_share": aff_share, "multi_vendor_affiliate_share": vendor_share,
                     "recent_uploads_seen": len(info.get("recent_titles") or [])},
         "sample": {"videos": len(recs), "with_transcript": with_tx}, "confidence": conf,
@@ -664,6 +667,8 @@ def registry_put(data: dict, rating: dict) -> None:
                                v.get("transcript"), v, handle=row.get("handle"))
     slim = {k: rating[k] for k in ("date", "axes", "authority", "context", "sample", "confidence", "reasons", "notes")}
     slim["videos"] = [v["url"] for v in rating["videos"]]
+    if rating.get("quadrant"):
+        slim["quadrant"] = rating["quadrant"]  # so a later rescore can show the label it replaces
     slim["cumulative"] = cumulative_axes(row, topic)  # this session's videos plus earlier ones on the topic
     row["topics"][topic] = slim
 

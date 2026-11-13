@@ -54,6 +54,11 @@ CLI (each command prints JSON):
                        (list --topic also matches channels whose covers tags fit the topic)
                        saved channel ratings (YOUTUBE_TAB_CHANNELS, default
                        ~/.local/share/chrome-agent-research/youtube-channels.json) and the user's pins
+    youtube_tab.py topic ID "TOPIC"                        use the topic's brand file in this window (no load)
+    youtube_tab.py brands list | show --topic T | add --topic T NAME ... [--alias "A=x,y"] [--everyday "Bear Notes=Bear"]
+                       [--common word,word] | remove --topic T NAME ...   topic brand files, shared with reddit_tab
+    youtube_tab.py rescore --topic "TOPIC" [--dir DIR ...] [--save]   re-rate a topic's channels from saved pages
+                       and transcripts with the current heuristics; shows what changed (no browser)
     youtube_tab.py nav ID URL | eval ID JS|@file.js        escape hatches (paced load / run JS)
     youtube_tab.py close ID | list | gc                    release window / show / clean up claims
 
@@ -82,6 +87,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parents[2] / "lib"))
 sys.path.insert(0, str(HERE))
 from research_core import Fail, Site, common_cli, intersect, opt, pause, run_cli  # noqa: E402
+import brands as B  # noqa: E402
 import disclosure as D  # noqa: E402
 import tally as T  # noqa: E402
 import youtube_signals as S  # noqa: E402
@@ -147,6 +153,50 @@ SITE = Site(
     ad_selectors=AD_SELECTORS,
 )
 INSTANCE = SITE.instance
+
+
+def _yt_session(site: Site) -> bool | None:
+    """Signed in to YouTube? From the browser's cookies (CDP, invisible to the page; no load). False only
+    when no Google session cookie is there at all; None when it can't be checked."""
+    try:
+        tabs = site.targets()
+        if not tabs:
+            return None
+        res = site.cdp(tabs[0]["id"], "Network.getCookies", {"urls": ["https://www.youtube.com/"]})
+    except (Fail, KeyError, ValueError):
+        return None
+    now = time.time()
+    names = {c.get("name") for c in res.get("cookies", []) if c.get("expires", -1) <= 0 or c["expires"] > now}
+    return bool(names & {"LOGIN_INFO", "SID", "__Secure-1PSID", "__Secure-3PSID"})
+
+
+_TOPIC = B.Overlay()
+
+
+def _use_topic(topic: str | None) -> None:
+    """Add a topic brand file's names to the brand lists (and drop a previous topic's)."""
+    _TOPIC.reset()
+    if not topic:
+        return
+    data = B.load(topic)
+    _TOPIC.topic = topic
+    _TOPIC.extend_list(S.KNOWN_BRANDS, [n for n in data["brands"] if n not in data["everyday"]])
+    _TOPIC.extend_map(S.BRAND_ALIASES, data["aliases"])
+    _TOPIC.extend_map(S.TOPIC_EVERYDAY, data["everyday"])
+    names = list(data["brands"]) + list(data["everyday"])
+    _TOPIC.extend_set(_KNOWN_FLAT, {B.flat(n) for n in names} | {B.flat(a) for v in data["aliases"].values() for a in v})
+
+
+def _apply_topic(full_id: str) -> None:
+    """The window's topic (`topic ID "TOPIC"`) applies to every command run on it."""
+    topic = (SITE.claims().get(full_id) or {}).get("topic")
+    if topic != _TOPIC.topic:
+        _use_topic(topic)
+
+
+SITE.session_check = _yt_session
+SITE.min_width = S.THEATER_MIN_WIDTH + 20  # a theater-mode player needs about this much window
+SITE.on_resolve = _apply_topic
 SHOTS = Path(os.environ.get("YOUTUBE_TAB_SHOTS", SITE.state / "shots"))
 
 
@@ -1074,6 +1124,49 @@ _VIDEO_READY_JS = ("document.readyState === 'complete' && !!window.ytInitialPlay
                    "!!document.querySelector('#movie_player') && !!document.querySelector('ytd-watch-metadata #title h1')")
 
 
+PAGES = Path(os.environ.get("YOUTUBE_TAB_PAGES", str(TRANSCRIPTS.parent / "youtube-pages"))).expanduser()
+
+
+def _score_page(data: dict) -> bool:
+    """Link classes, listicle / Amazon-influencer flags and the page-only sponsor bias of a video page
+    (in place). Shared by `video` and `rescore`. Returns whether it looks like an AI listicle."""
+    data["disclosure"] = D.merge_link_classes(data.get("disclosure"), D.classify_links(
+        data.get("description_links") or [], channel=data.get("channel"), description=data.get("description") or "",
+        handle=data.get("handle"), brands=S.KNOWN_BRANDS))
+    lst, why = S.likely_ai_listicle(data.get("title") or "", data.get("channel"), data.get("handle"),
+                                    length_s=data.get("length_s"), uploaded=S.upload_year(None, data.get("published")))
+    data.pop("likely_ai_listicle", None), data.pop("listicle_reasons", None)
+    if lst:
+        data["likely_ai_listicle"], data["listicle_reasons"] = True, why
+    amz, why = S.amazon_influencer(data.get("title") or "", data.get("description") or "",
+                                   data.get("description_links") or [], data.get("length_s"), data.get("views"),
+                                   data.get("subscribers"))
+    data.pop("amazon_influencer", None), data.pop("amazon_reasons", None)
+    if amz:
+        data["amazon_influencer"], data["amazon_reasons"] = True, why
+    data["sponsor_bias"] = sponsor_bias(data)
+    return bool(lst)
+
+
+def _save_page(data: dict, **extra) -> None:
+    """Keep the video page's data (YOUTUBE_TAB_PAGES/<id>.json) so `rescore` can re-rate it after a fix
+    without loading it again. Best effort."""
+    vid = data.get("video_id")
+    if not vid:
+        return
+    p = PAGES / f"{vid}.json"
+    try:
+        PAGES.mkdir(parents=True, exist_ok=True)
+        try:
+            prev = json.loads(p.read_text())
+        except (OSError, ValueError):
+            prev = {}
+        doc = {**prev, **{k: v for k, v in data.items() if k != "sponsor_bias"}, **extra, "saved": _now()}
+        p.write_text(json.dumps(doc, ensure_ascii=False))
+    except OSError:
+        pass
+
+
 @_quiet_after
 def video(target: str, url: str) -> dict:
     vid = video_id_of(url)
@@ -1098,19 +1191,8 @@ def video(target: str, url: str) -> dict:
         if data and data.get("stale"):
             data = None
     if data:
-        data["disclosure"] = D.merge_link_classes(data.get("disclosure"), D.classify_links(
-            data.get("description_links") or [], channel=data.get("channel"), description=data.get("description") or "",
-            handle=data.get("handle"), brands=S.KNOWN_BRANDS))
-        lst, why = S.likely_ai_listicle(data.get("title") or "", data.get("channel"), data.get("handle"),
-                                        length_s=data.get("length_s"), uploaded=S.upload_year(None, data.get("published")))
-        if lst:
-            data["likely_ai_listicle"], data["listicle_reasons"] = True, why
-        amz, why = S.amazon_influencer(data.get("title") or "", data.get("description") or "",
-                                       data.get("description_links") or [], data.get("length_s"), data.get("views"),
-                                       data.get("subscribers"))
-        if amz:
-            data["amazon_influencer"], data["amazon_reasons"] = True, why
-        data["sponsor_bias"] = sponsor_bias(data)
+        lst = _score_page(data)
+        _save_page(data)
         _seen_add(full_id, [_video_record(data, data["sponsor_bias"])],
                   {data.get("channel"): {"listicle": True}} if lst else None)
         _remember(full_id, {k: data.get(k) for k in (
@@ -1126,6 +1208,7 @@ def video(target: str, url: str) -> dict:
         data["disclosure"] = (_recall(full_id, data["video_id"]) or {}).get("disclosure") or data.get("disclosure")
         data["sponsor_bias"] = sponsor_bias(data)
         data["paid_promotion_seen_after_ad"] = True
+        _save_page(data)
         _seen_add(full_id, [_video_record(data, data["sponsor_bias"])])
     return {"page": page, "video": data, "ad_playing": bool(st.get("ad")),
             "ad_state": {"ad": bool(st.get("ad")), "checked_at": st.get("checked_at"),
@@ -1211,6 +1294,10 @@ def transcript(target: str, grep: list[str] | None = None, context: int = 0,
                 sg["context"] = True
             out.append(sg)
         res = {**res, "matched_segments": len(hit_idx), "returned_segments": len(out), "segments": out}
+    if start or end or grep:
+        res["segments_note"] = (f"`segments` holds only the {'--grep matches' if grep else 'time window'} "
+                                f"({len(res['segments'])} of {res['total_segments']}), out of context; the full "
+                                "transcript is in `saved`. Don't judge the transcript's quality, or rescore, from this.")
     return res
 
 
@@ -1510,6 +1597,19 @@ def channel(target: str, url: str) -> dict:
     full_id = SITE.resolve(target)
     SITE.ensure_visible(full_id)  # fail fast in a hidden window
     ch = SITE.evaluate(full_id, _js("channel.js"))
+    if ch and not ch.get("recent_uploads"):
+        # The uploads grid renders after the header (focus came back null when it hadn't yet).
+        if SITE.wait_for(full_id, "document.querySelectorAll('ytd-rich-item-renderer').length > 0", timeout=8):
+            ch = SITE.evaluate(full_id, _js("channel.js")) or ch
+        if not ch.get("recent_uploads"):
+            empty = SITE.evaluate(full_id, "/doesn't have any content|no videos|isn't available/i.test("
+                                  "(document.querySelector('ytd-browse[page-subtype=\"channels\"]')?.innerText || '')"
+                                  ".slice(0, 4000))")
+            ch["recent_uploads_note"] = (
+                "The channel's Videos tab lists no uploads (it may post only Shorts or live streams); focus "
+                "can't be computed." if empty else
+                "The uploads grid didn't render within 8 s (slow or hidden window), so focus can't be computed; "
+                "loading the channel again may help.")
     if ch:
         _seen_add(full_id, [], {ch.get("name"): {
             "handle": ch.get("handle"), "subscribers": ch.get("subscribers"), "channel_url": ch.get("url"),
@@ -1533,6 +1633,9 @@ def tally(target: str, terms: list[str], aliases: str | dict | None = None, incl
     scores >= 0.6 sponsor bias (in a multi-brand video: that brand's score), or it is strongly brand-owned,
     or a likely AI listicle / Amazon-influencer channel. No page loads."""
     full_id = SITE.resolve(target)
+    topic = (SITE.claims().get(full_id) or {}).get("topic")
+    if topic:
+        aliases = B.tally_aliases(B.load(topic), terms, T.parse_aliases(aliases)) or None
     seen = _seen_load(full_id)
     recs = seen["items"]
     flags = {ch: {"listicle": True} for ch, f in seen["channels"].items() if f.get("listicle")}
@@ -1711,9 +1814,142 @@ def screen_text(target: str, paths: list[str]) -> dict:
         if (best["table_like"], best["numbers"]) >= (prev.get("table_like", False), prev.get("numbers", 0)):
             data["screen"][vid] = best
             _seen_save(full_id, data)
+            page = _recall(full_id, vid)
+            if page:
+                _save_page({**page, "video_id": vid}, screen_data=best)
     return {"video_id": vid, "frames": frames, "best": best,
             "note": "OCR text from the images; check the image before quoting a number. Results tables count "
                     "toward the channel map's rigor for this video."}
+
+
+def _load_json(p: Path) -> dict | None:
+    try:
+        d = json.loads(p.read_text())
+    except (OSError, ValueError):
+        return None
+    return d if isinstance(d, dict) else None
+
+
+def _saved_inputs(dirs: list[Path]) -> tuple[dict[str, dict], dict[str, list[dict]]]:
+    """Video pages and full transcripts saved by earlier runs: the page store, the transcript folder and any
+    --dir (a report's youtube/ folder, or raw JSON an agent kept: {"video": {...}} or a transcript file)."""
+    pages: dict[str, dict] = {}
+    segs: dict[str, list[dict]] = {}
+    for p in sorted(PAGES.glob("*.json")) if PAGES.exists() else []:
+        d = _load_json(p)
+        if d and d.get("video_id"):
+            pages[d["video_id"]] = d
+    for d0 in [TRANSCRIPTS, *dirs]:
+        if not d0.exists():
+            continue
+        for p in sorted(d0.rglob("*.json")):
+            d = _load_json(p)
+            if not d:
+                continue
+            v = d.get("video") if isinstance(d.get("video"), dict) else None
+            if v and v.get("video_id"):
+                pages.setdefault(v["video_id"], v)  # the page store is newer than an agent's raw copy
+            if d.get("video_id") and isinstance(d.get("segments"), list) and d["segments"]:
+                if len(d["segments"]) > len(segs.get(d["video_id"]) or []):
+                    segs[d["video_id"]] = d["segments"]
+    return pages, segs
+
+
+def rescore(topic: str, dirs: list[str] | None = None, save: bool = False) -> dict:
+    """Re-rate a topic's channels from saved video pages and transcripts with the current heuristics (after a
+    fix), and show what changed against the registry. No browser, no page load. --save writes the new ratings
+    (the registry is backed up first)."""
+    reg = CM.registry_load(CHANNELS)
+    key = topic.lower()
+    tf = B.load(topic) if B.path(topic).exists() else None
+    _use_topic(topic if tf else None)  # the brand file applies, as in the window that read these videos
+    wanted: dict[str, tuple[str, dict]] = {}
+    for rk, row in reg["channels"].items():
+        t = (row.get("topics") or {}).get(key)
+        if not t:
+            continue
+        for u in t.get("videos") or []:
+            v = video_id_of(u if isinstance(u, str) else (u or {}).get("url") or "")
+            if v:
+                wanted[v] = (rk, row)
+    if not wanted:
+        known = sorted({t for row in reg["channels"].values() for t in (row.get("topics") or {})})
+        raise Fail(f"no channel in the registry has a rating for topic {topic!r}. Topics: {', '.join(known)}")
+    pages, segs = _saved_inputs([Path(d).expanduser() for d in dirs or []])
+    groups: dict[str, list[dict]] = {}
+    missing = []
+    for vid, (rk, row) in wanted.items():
+        page = pages.get(vid)
+        if not page:
+            missing.append(vid)
+            continue
+        data = {k: v for k, v in page.items() if k not in ("sponsor_bias", "saved", "screen_data")}
+        _score_page(data)
+        tx = segs.get(vid)
+        if tx:
+            subject = " ".join([data.get("title") or ""] + list(data.get("keywords") or [])[:8])
+            mentions = D.dedupe_hits(D.scan_segments(tx, subject, channel=data.get("channel"),
+                                                     own_domains=(data.get("disclosure") or {}).get("own_domains") or ()))
+            sb = sponsor_bias(data, mentions)
+        else:
+            sb = data["sponsor_bias"]
+        rec = _video_record(data, sb, tx)
+        if page.get("screen_data"):
+            rec["screen_data"] = page["screen_data"]
+        groups.setdefault(rk, []).append(rec)
+    rows, changed = [], 0
+    for rk, recs in groups.items():
+        row = reg["channels"][rk]
+        old = dict((row.get("topics") or {}).get(key) or {})
+        cited = ({row.get("name"): old["context"]["trust_citations"]}
+                 if (old.get("context") or {}).get("trust_citations") else None)
+        name = row.get("name") or recs[0].get("channel")
+        r = CM.rate_channel(name, recs, {"handle": row.get("handle") or recs[0].get("handle"),
+                                         "subscribers": row.get("subscribers") or recs[0].get("subscribers")},
+                            topic, cited)
+        r["quadrant"] = CM.quadrant(r)
+        was = {"axes": old.get("axes"), "quadrant": old.get("quadrant") or (
+            CM.quadrant({**old, "channel": name, "videos": []}) + " (recomputed from saved axes)" if old.get("axes") else None)}
+        diff = {a: [(old.get("axes") or {}).get(a), r["axes"][a]] for a in r["axes"]
+                if (old.get("axes") or {}).get(a) != r["axes"][a]}
+        # A label recomputed from saved axes alone can't see video titles (roundups): compare stored labels only.
+        moved = (old["quadrant"] != r["quadrant"]) if old.get("quadrant") else None
+        changed += bool(diff or moved)
+        rows.append({"channel": name, "videos": len(recs), "was": was,
+                     "now": {"axes": r["axes"], "quadrant": r["quadrant"], "rank_score": r.get("rank_score")},
+                     "axes_changed": diff, "label_changed": moved, "_rating": r})
+    rows.sort(key=lambda x: -(x["now"].get("rank_score") or 0))
+    backup = None
+    if save and rows:
+        backup = CHANNELS.with_name(f"{CHANNELS.stem}.bak-{time.strftime('%Y%m%d-%H%M%S')}.json")
+        try:
+            backup.write_text(CHANNELS.read_text())
+        except OSError:
+            backup = None
+        for x in rows:
+            CM.registry_put(reg, x["_rating"])
+        CM.registry_save(CHANNELS, reg)
+    for x in rows:
+        x.pop("_rating")
+    return {"topic": topic, "topic_file": str(B.path(topic)) if tf else None, "channels": rows,
+            "changed": changed, "videos_rescored": sum(len(v) for v in groups.values()),
+            "missing_pages": missing, "saved": bool(save and rows), "backup": str(backup) if backup else None,
+            "note": ("Re-rated from saved pages and transcripts with the current heuristics; nothing was loaded. "
+                     "missing_pages are videos read before pages were kept (pass the run's raw JSON folder with "
+                     "--dir). The old label is recomputed from the saved axes, so a pin or a manual note isn't shown; "
+                     "check `registry show` before quoting.")}
+
+
+def set_topic(target: str, topic: str | None) -> dict:
+    """Use the topic's brand file in this window from now on (and in tally aliases). No page load."""
+    full_id = SITE.resolve(target)
+    _claim_set(full_id, topic=topic or None)
+    _use_topic(topic or None)
+    data = B.load(topic) if topic else {}
+    return {"topic": topic, "brands": data.get("brands", []), "aliases": data.get("aliases", {}),
+            "everyday": data.get("everyday", {}), "path": str(B.path(topic)) if topic else None,
+            "exists": bool(topic) and B.path(topic).exists(),
+            "note": "Add the landscape's products with `brands add --topic ...`; both sites read the same file."}
 
 
 def close(target: str) -> dict:
@@ -1814,9 +2050,35 @@ def _dispatch(cmd: str, args: list[str]):
             return registry("describe", " ".join(rest) or None, None, str(covers or ""),
                             tags if isinstance(tags, str) else None)
         return registry(action, " ".join(rest) or None, None, str(note or ""), topic if isinstance(topic, str) else None)
+    if cmd == "topic":
+        if len(args) < 1:
+            raise Fail('usage: topic ID "TOPIC"   (use the topic brand file in this window; "" to clear)')
+        return set_topic(args[0], " ".join(args[1:]).strip() or None)
+    if cmd == "brands":
+        return _brands_cli(args)
+    if cmd == "rescore":
+        topic, save = opt(args, "--topic"), bool(opt(args, "--save", False))
+        dirs = []
+        while "--dir" in args:
+            dirs.append(str(opt(args, "--dir")))
+        if not isinstance(topic, str) or args:
+            raise Fail('usage: rescore --topic "TOPIC" [--dir RAW_OR_REPORT_DIR ...] [--save]')
+        return rescore(topic, dirs, save)
     if cmd == "close" and len(args) == 1:
         return close(args[0])
     return common_cli(SITE, cmd, args)
+
+
+def _brands_cli(args: list[str]) -> dict:
+    topic, alias, everyday, common = opt(args, "--topic"), opt(args, "--alias"), opt(args, "--everyday"), opt(args, "--common")
+    if not args:
+        raise Fail(B.command.__doc__.split("(")[0].strip())
+    try:
+        return B.command(args[0], topic if isinstance(topic, str) else None, args[1:],
+                         alias if isinstance(alias, str) else None, everyday if isinstance(everyday, str) else None,
+                         common if isinstance(common, str) else None)
+    except ValueError as e:
+        raise Fail(str(e))
 
 
 if __name__ == "__main__":

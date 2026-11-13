@@ -15,7 +15,7 @@ R=~/.claude/skills/reddit-research/scripts/reddit_tab.py
 
 1. **Use `$R` only.** Not WebFetch, the built-in browser, Claude in Chrome, or a new or headless chrome-agent launch. Never touch another agent's window or send raw CDP commands to the shared browser.
 2. **Read-only.** Never post, comment, vote, join, message, or change settings.
-3. **Never solve CAPTCHAs or type credentials.** Never run `chrome-agent save`, restart or stop the browser yourself, even when a `stop` message mentions it: that is for the user. A sign-in `stop` only fires when the page shows a log-in button and no session cookie is present.
+3. **Never solve CAPTCHAs or type credentials.** Never run `chrome-agent save`, restart or stop the browser yourself, even when a `stop` message mentions it: that is for the user. A sign-in `stop` fires at `open` when the browser has no `reddit_session` cookie (before any load), or later when a page shows a log-in button and no session cookie is present.
 4. **If a result contains `stop`, stop and tell the user why.** This covers block pages, CAPTCHAs, and signed-out sessions. Never retry another way, and never use Reddit's JSON/API endpoints (the helper refuses them). See **Errors** below for which errors the user must fix and which you may retry once.
 5. **Budget:** 25 page loads for a Reddit-focused task, 10 when Reddit is one source among several, **12–15 for the middle case** (a light pass plus complaints, or named products plus a landscape check), and about 20 for a category or landscape question. A user-given cap wins. Each result reports `loads`. Ask before exceeding the budget.
 6. **Always `$R close` your window** when done, even after errors. Never stop the browser itself.
@@ -23,7 +23,9 @@ R=~/.claude/skills/reddit-research/scripts/reddit_tab.py
 ## Commands
 
 ```bash
-$R open --wait                                       # -> {"target": "<ID>"}
+$R open --wait                                       # -> {"target": "<ID>"} (`stop` when signed out)
+$R topic <ID> "smart kettles"                        # use the topic's brand file in this window (no load)
+$R brands add --topic "smart kettles" Quillo "Brew Zen" --alias "Brew Zen=BrewZen" --everyday "Tavi Kettle=Tavi" --common gooseneck
 $R search <ID> '"Even G2"'                           # typed into the search box when the window is on Reddit (Reddit's defaults: relevance, all time)
 $R search <ID> '"Even G2"' --sort new --time month   # filters (or --time year) -> loads the search URL
 $R search <ID> '"Bambu P2S" problems' --sub BambuLab
@@ -60,7 +62,7 @@ Use a **full landscape pass** when the user names no products, asks what the opt
 
 1. **Search for decision threads, use case first:** `best <category> for <task>`, `which <category> for <task>`, `which <category> should I buy`, `"<product>" vs`, `"<product>" alternative`. A bare `<product> for <task>` tends to return "things to make with it" posts. Run them site-wide and in the category's main subreddits (e.g. r/3Dprinting, r/AR_MR_XR), not only brand subreddits.
 2. **Read 3–5 recommendation or comparison threads** with many comments (check `comments` in the results), several from the same search.
-3. **Tally** with `$R tally <ID> <name> ... [--alias ...]` (see below). Upvoted recommendations from several unrelated users carry the weight; one enthusiastic user repeated across threads doesn't.
+3. **Record the field, then tally.** `$R brands add --topic "<topic>" <name> ...` with the products the decision threads name (`--alias` for spellings, `--everyday` for names that are ordinary words, `--common` for category words that look like names but aren't brands, e.g. `--common "Widevine,HDR"`), and `$R topic <ID> "<topic>"`: brand tokens, brand subreddits and tally aliases then include them. The YouTube helper reads the same file (`brands show --topic ...`). Then `$R tally <ID> <name> ... [--alias ...]` (see below). Upvoted recommendations from several unrelated users carry the weight; one enthusiastic user repeated across threads doesn't.
 4. **Pick the top 4–6** and list the notable products left out, with reasons.
 5. **Find the 3–5 dividing lines:** the trade-offs owners actually argue about ("if you need X, get Y"). Separate them from table stakes and marketing-only differences. Reddit is good at this because owners debate trade-offs directly.
 6. **Position each product,** then continue with the workflow. If the field is really two categories, say so, make that the main dividing line, and rank within each.
@@ -103,7 +105,7 @@ If a thread is removed or deleted, or `thread` returns `null`, note it (with its
   - the community's moderators include brand accounts (`brand_moderated_subreddit`, e.g. XREAL staff moderating r/Xreal, or staff flair like "EcoFlow | Ryan" or "CS_Team_EU" in the brand's own subreddit; utility bots and mod tools like AutoModerator or `*Bot` never count, nor does flair that merely mentions a brand), or the subreddit is named after the brand (`brand_subreddit`, e.g. r/dji; never a category sub like r/podcasting or r/CarpetCleaning)
   - referral or affiliate links and discount codes in the post or comments, including partner short links (`partner_short_links`: ebay.io, a.co, amzn.eu, bit.ly ...)
   - an affiliate or deals community: the sidebar says the community earns commissions ("As an Amazon Associate…") or allows self-promotion (`affiliate_community`)
-  - content marketing: the same outside site linked again and again or a listicle-shaped post (`repeated_external_links`), an OP edit pointing to a "helpful article" (`op_edit_points_to_article`), comments pointing to "this roundup/breakdown" with no link left (`dangling_roundup_reference`), a comment written like ad copy (`spec_sheet_pitch`), "I'm a bit biased" plus a store (`self_declared_bias`), and a product's own author or builder pitching it ("I'm the author of X", "Disclosure: I make X", "I'm the dev", "I built X", "(my project)", "DM me for a key", or a launch-post title like "I built a Markdown editor": `builder_self_promotion`, no link needed; stronger when several builders plug their own apps in one thread). AutoModerator and bot comments never count
+  - content marketing: the same outside site linked again and again or a listicle-shaped post (`repeated_external_links`), an OP edit pointing to a "helpful article" (`op_edit_points_to_article`), comments pointing to "this roundup/breakdown" with no link left (`dangling_roundup_reference`), a comment written like ad copy (`spec_sheet_pitch`), "I'm a bit biased" plus a store (`self_declared_bias`), and a product's own author or builder pitching it ("I'm the author of X", "Disclosure: I make X", "I'm the dev", "I built X", "(my project)", "DM me for a key", or a launch-post title like "I built a Markdown editor": `builder_self_promotion`, no link needed; stronger when several builders plug their own apps in one thread; `repeat_builder` when the same account already pitched its own product in another thread this window read). AutoModerator and bot comments never count
   - sponsor or review-unit mentions
   - content marketing: an OP edit pointing to an article, repeated outside links, partner short links, unlinked guide plugs ("the Newborn Sound Machine Guide"), ad-copy comments, and `coordinated_links` (3+ different users linking the same uncommon site, a sign of a seeded thread; App Store, Play, Flathub and code-host links count per app page, so four users linking four different apps isn't coordination). Chat invites (discord.gg, t.me) are never affiliate links
   - "not sponsored" or "I bought it myself" claims, which lower it
@@ -120,6 +122,7 @@ If a thread is removed or deleted, or `thread` returns `null`, note it (with its
   - `polarity` (recommend / complain / question / mention / mixed, heuristic), `raw_upvotes`, `recommend_upvotes` and `complain_upvotes`: a passing mention in a 300-upvote comment adds to `raw_upvotes` only.
   - `examples`: linked snippets around each mention. Read them before quoting a count. Each row's name is in `term`.
   - Polarity is read on the clause around each mention ("Love my Bluetti, but the EcoFlow died" is praise for one and a complaint about the other).
+  - **Bare suggestions:** in a thread whose title asks for a pick ("Best X for Y?", "alternatives", "which ..."), a short top-level reply that leads with the name and no tone words ("RaspberryPi with Kodi") counts as a recommendation.
   - `implied`: top-level replies that read as a recommendation without naming the product ("Love mine. No regrets."), in threads whose title names only that product. Kept apart from the counts; quote them as "replies to a <product> thread".
 
 ## Screenshots

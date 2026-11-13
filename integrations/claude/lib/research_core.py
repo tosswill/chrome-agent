@@ -171,6 +171,10 @@ class Site:
     default_max_loads: int = 40
     settle: float = 2.5              # extra wait after ready, for late-rendering components
     on_open: Callable[["Site", str], None] | None = None
+    # Whether the browser holds a signed-in session (read over CDP, no page load). None: can't tell.
+    session_check: Callable[["Site"], bool | None] | None = None
+    min_width: int = 0               # CSS px the reading window needs (0: no check)
+    on_resolve: Callable[[str], None] | None = None  # called with the full target id on every resolve
     content_js: str | None = None    # returns the reading column's viewport rect {x, y, width, height}
     ad_selectors: tuple[str, ...] = ()  # CSS selectors of ad units, for ads_in_view in captures
     instance: str = field(init=False)
@@ -372,8 +376,40 @@ class Site:
             return None
         return int(out[0]) if out else None
 
+    def workspace(self) -> str:
+        """The aerospace workspace for this site's windows: <PREFIX>_AEROSPACE_WORKSPACE (e.g. YouTube on its own
+        monitor), else RESEARCH_AEROSPACE_WORKSPACE."""
+        return (os.environ.get(f"{getattr(self, 'prefix', 'RESEARCH')}_AEROSPACE_WORKSPACE", "").strip()
+                or os.environ.get("RESEARCH_AEROSPACE_WORKSPACE", "").strip())
+
+    def window_check(self, full_id: str) -> dict | None:
+        """The window's CSS width, and a warning when it is narrower than min_width (a tiling window manager
+        splits one workspace between every research window)."""
+        if not self.min_width:
+            return None
+        try:
+            w = self.evaluate(full_id, "innerWidth")
+        except Fail:
+            return None
+        if not isinstance(w, (int, float)):
+            return None
+        out = {"width": int(w)}
+        if w < self.min_width:
+            ws = self.workspace()
+            shared = None
+            if ws and shutil.which("aerospace"):
+                listing = self._aerospace("list-windows", "--workspace", ws, "--format", "%{app-name}") or ""
+                shared = sum(1 for ln in listing.splitlines() if "chrom" in ln.lower()) or None
+            out["warning"] = (
+                f"This window is only {int(w)} px wide (needs {self.min_width})"
+                + (f"; {shared} browser windows share aerospace workspace {ws} and are tiled side by side" if shared
+                   and shared > 1 else "")
+                + ". Tell the user (e.g. give this site its own workspace with "
+                f"{self.prefix}_AEROSPACE_WORKSPACE, or run fewer windows at once); don't resize it yourself.")
+        return out
+
     def place_windows(self) -> dict | None:
-        ws = os.environ.get("RESEARCH_AEROSPACE_WORKSPACE", "").strip()
+        ws = self.workspace()
         if not ws or not shutil.which("aerospace"):
             return None
         pid = self._browser_pid()
@@ -689,6 +725,8 @@ class Site:
         if len(hits) != 1:
             raise Fail(f"no window of yours matches {target!r}. Claim one with open "
                        "(or run list to see active claims).")
+        if self.on_resolve:
+            self.on_resolve(hits[0])
         return hits[0]
 
     def touch(self, full_id: str) -> None:
@@ -828,6 +866,15 @@ class Site:
         res = {"target": full_id, "slots_in_use": busy + 1, "max_slots": self.max_claims}
         if placed:
             res["placement"] = placed
+        # Signed out? Say so now, before any page load is spent (seen 2026-11-12).
+        if self.session_check and self.session_check(self) is False:
+            self.close(full_id)
+            res = {"target": None, "stop": self.stop_reason({"loggedIn": False}, self)
+                   or f"{self.instance} is not signed in. Ask the user to sign in and save the session."}
+            return res
+        win = self.window_check(full_id)
+        if win:
+            res["window"] = win
         return res
 
     def check_url(self, url: str) -> None:

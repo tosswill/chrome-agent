@@ -23,6 +23,9 @@ CLI (each command prints JSON):
                                                     among everything this window has seen (no page load)
     reddit_tab.py shot ID [--at post | --comment ID | --selector CSS] [--full] [--out-dir DIR | --out PATH]
                                                     visible page content, or one element scrolled into view
+    reddit_tab.py topic ID "TOPIC"                  use the topic's brand file in this window (no load)
+    reddit_tab.py brands list | show --topic T | add --topic T NAME ... [--alias "A=x,y"] [--everyday "Bear Notes=Bear"]
+                         [--common word,word] | remove --topic T NAME ...   topic brand files, shared with youtube_tab
     reddit_tab.py nav ID URL                        paced load, page state only
     reddit_tab.py eval ID JS|@file.js               run JS in your tab (escape hatch)
     reddit_tab.py close ID                          release the window
@@ -49,6 +52,7 @@ from urllib.parse import parse_qs, quote, urlencode, urlparse
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parents[2] / "lib"))
 from research_core import Fail, Site, common_cli, opt, pause, run_cli  # noqa: E402
+import brands as B  # noqa: E402
 import disclosure as D  # noqa: E402
 import tally as TL  # noqa: E402
 
@@ -879,7 +883,7 @@ def content_marketing(data: dict, comments: list[dict]) -> list[dict]:
         hits.append({"signal": "builder_self_promotion",
                      "weight": min(0.4, (0.25 if c.get("link") == url else 0.2) + 0.05 * (len(users) - 1)),
                      "source": "post" if c.get("link") == url else f"comment by u/{c.get('author')}",
-                     "link": c.get("link"),
+                     "link": c.get("link"), "users": sorted(u for u in users if u),
                      "text": t[max(0, mm.start() - 30):mm.end() + 60].strip() + (f" (+{n - 1} more users)" if n > 1 else "")})
     for c in comments + [{"author": host, "text": body, "links": data.get("links") or [], "link": url}]:
         t = c.get("text") or ""
@@ -928,7 +932,21 @@ _SIDEBAR_BAN_AFTER = re.compile(r"^[^.\n]{0,15}\b(?:are|is|will be|get)?\s*(?:no
                                 r"prohibited|banned|forbidden|removed|disallowed)\b", re.I)
 
 
-def promo_bias(data: dict, query: str = "", brands=()) -> dict:
+def repeat_builders(hits: list[dict], url: str, prior: dict | None) -> list[dict]:
+    """Builders in this thread who already pitched their own product in another thread this window read:
+    one account working several threads (the 3-thread repeat_promoters bar is too high for this)."""
+    users = next((h.get("users") or [] for h in hits if h.get("signal") == "builder_self_promotion"), [])
+    out = []
+    for u in users:
+        others = [t for t in (prior or {}).get(u, []) if t != url]
+        if others:
+            out.append({"signal": "repeat_builder", "weight": 0.15, "source": f"u/{u}", "link": others[0],
+                        "text": f"u/{u} also pitched their own product in {len(others)} other thread(s) read in this "
+                                f"session: " + ", ".join(others[:3])})
+    return out
+
+
+def promo_bias(data: dict, query: str = "", brands=(), prior_builders: dict | None = None) -> dict:
     """0.0-1.0 likelihood that a thread is brand promotion or astroturf, with evidence. Page-only:
     account age and karma aren't checked (that would cost a profile load per user).
 
@@ -1016,7 +1034,8 @@ def promo_bias(data: dict, query: str = "", brands=()) -> dict:
         for h in ([] if is_utility_account(a or "", c.get("flair")) else D.link_hits(D.classify_links(c.get("links") or []))):
             if h["signal"] == "affiliate_links":
                 extra.append({**h, "source": f"comment by u/{a}", "link": c.get("link")})
-    extra += content_marketing(data, data.get("comments", []))
+    cm = content_marketing(data, data.get("comments", []))
+    extra += cm + repeat_builders(cm, data.get("url") or "", prior_builders)
     side = affiliate_community(data.get("sidebar_text") or "")
     if side:
         extra.append({"signal": "affiliate_community", "weight": 0.25, "source": "sidebar",
@@ -1191,6 +1210,49 @@ def _select_all(full_id: str) -> None:
 
 def open_window(wait_seconds: float = 0) -> dict:
     return SITE.open_window(wait_seconds)
+
+
+_TOPIC = B.Overlay()
+
+
+def _use_topic(topic: str | None) -> None:
+    """Add a topic brand file's names to the brand tokens (and drop a previous topic's)."""
+    _TOPIC.reset()
+    if not topic:
+        return
+    data = B.load(topic)
+    _TOPIC.topic = topic
+    toks = {B.flat(n) for n in data["brands"]} | {B.flat(a) for v in data["aliases"].values() for a in v}
+    everyday = {B.flat(w) for v in data["everyday"].values() for w in v} | {B.flat(k) for k in data["everyday"]}
+    _TOPIC.extend_set(KNOWN_BRANDS, {t for t in toks | everyday if len(t) >= 2})
+    _TOPIC.extend_set(AMBIGUOUS, {t for t in everyday if len(t) >= 2})
+    _TOPIC.extend_set(COMMON, {B.flat(c) for c in data["common"]} - toks)
+    _TOPIC.extend_set(TL.COMMON_WORDS, {w.lower() for v in data["everyday"].values() for w in v})
+
+
+def _apply_topic(full_id: str) -> None:
+    topic = (SITE.claims().get(full_id) or {}).get("topic")
+    if topic != _TOPIC.topic:
+        _use_topic(topic)
+
+
+SITE.session_check = _session_cookie_valid
+SITE.on_resolve = _apply_topic
+
+
+def set_topic(target: str, topic: str | None) -> dict:
+    """Use the topic's brand file in this window from now on (brand tokens, brand subreddits, tally aliases)."""
+    full_id = SITE.resolve(target)
+    c = SITE.claims().get(full_id)
+    if c is not None:
+        c["topic"] = topic or None
+        SITE._write_claim(full_id, c)
+    _use_topic(topic or None)
+    data = B.load(topic) if topic else {}
+    return {"topic": topic, "brands": data.get("brands", []), "aliases": data.get("aliases", {}),
+            "everyday": data.get("everyday", {}), "common": data.get("common", []),
+            "path": str(B.path(topic)) if topic else None, "exists": bool(topic) and B.path(topic).exists(),
+            "note": "Add the landscape's products with `brands add --topic ...`; both sites read the same file."}
 
 
 def nav(target: str, url: str) -> dict:
@@ -1784,7 +1846,17 @@ def thread(target: str, url: str, max_comments: int = 15, replies: int = 0, expa
         counts["collapsed_not_reached"] = beyond  # below where this read stopped: raise --max to reach them
     last = _claim(full_id).get("last_search") or {}
     readable = [c for c in all_comments if (c.get("top") or 0) <= reading["read_bottom"]]
-    data["promo_bias"] = promo_bias({**data, "comments": readable}, query=last.get("query", ""), brands=brands or ())
+    prior = _claim(full_id).get("builders") or {}
+    data["promo_bias"] = promo_bias({**data, "comments": readable}, query=last.get("query", ""), brands=brands or (),
+                                    prior_builders=prior)
+    built = next((e.get("users") for e in data["promo_bias"].get("evidence") or []
+                  if e.get("signal") == "builder_self_promotion"), None)
+    if built:  # remember who pitched their own product where, for repeat_builder in later threads
+        for u in built:
+            prior.setdefault(u, [])
+            if data.get("url") and data["url"] not in prior[u]:
+                prior[u].append(data["url"])
+        _update_claim(full_id, builders=prior)
     mods, skipped = clean_moderators(data.get("moderators") or [])
     data["moderators"] = mods
     if skipped:
@@ -1842,6 +1914,9 @@ def tally(target: str, terms: list[str], aliases: str | dict | None = None, excl
     OP counts once per thread (cross-posts collapse), and an OP's question isn't an endorsement."""
     full_id = SITE.resolve(target)
     seen = _claim(full_id).get("seen", [])
+    topic = _claim(full_id).get("topic")
+    if topic:
+        aliases = B.tally_aliases(B.load(topic), terms, TL.parse_aliases(aliases)) or None
     res = TL.tally(seen, terms, aliases=aliases, exclude_op=exclude_op, near=near)
     res["note"] = ("Counts come only from what this window has seen. `users`/`independent_users` and the upvotes "
                    "count loaded posts and comments; search titles and snippets are in `search_only_threads`. "
@@ -1983,6 +2058,19 @@ def _dispatch(cmd: str, args: list[str]):
         if len(args) != 1:
             raise Fail("usage: shot ID [--at post | --comment ID | --selector CSS] [--full] [--out-dir DIR | --out PATH]")
         return shot(args[0], out, out_dir, full, at=at, comment=comment, selector=selector)
+    if cmd == "topic":
+        if not args:
+            raise Fail('usage: topic ID "TOPIC"   (use the topic brand file in this window; "" to clear)')
+        return set_topic(args[0], " ".join(args[1:]).strip() or None)
+    if cmd == "brands":
+        topic, alias, every, common = opt(args, "--topic"), opt(args, "--alias"), opt(args, "--everyday"), opt(args, "--common")
+        if not args:
+            raise Fail(B.command.__doc__.split("(")[0].strip())
+        s_ = lambda v: v if isinstance(v, str) else None  # noqa: E731
+        try:
+            return B.command(args[0], s_(topic), args[1:], s_(alias), s_(every), s_(common))
+        except ValueError as e:
+            raise Fail(str(e))
     return common_cli(SITE, cmd, args)
 
 

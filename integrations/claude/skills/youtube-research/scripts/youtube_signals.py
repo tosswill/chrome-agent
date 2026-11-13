@@ -63,6 +63,30 @@ def transcript_coverage(segments: list[dict], length_s: int | None = None) -> di
            "complete": not gaps and (tail is None or tail <= 60) and secs[0] <= 60}
     if tail is not None and tail > 60:
         out["missing_tail_s"] = tail
+    out.update(transcript_quality(segments, length_s))
+    # `complete` is about coverage (it decides whether to scroll for more); `usable` adds the text check.
+    out["usable"] = not out.get("quality_warning")
+    return out
+
+
+def transcript_quality(segments: list[dict], length_s: int | None = None) -> dict:
+    """Words per minute and repetition: a transcript can span the whole video and still be unusable
+    (auto-captions that only caught fragments, or one line repeated). Speech runs about 100-180 wpm;
+    under 40 over 3+ minutes, or under half the lines distinct, gets a quality_warning."""
+    texts = [re.sub(r"\s+", " ", s.get("text") or "").strip().lower() for s in segments or []]
+    texts = [t for t in texts if t]
+    words = sum(len(t.split()) for t in texts)
+    out: dict = {"words": words}
+    if length_s and length_s > 0:
+        out["words_per_minute"] = round(words / (length_s / 60), 1)
+    warn = []
+    if length_s and length_s >= 180 and out.get("words_per_minute", 999) < 40:
+        warn.append(f"only {out['words_per_minute']} words per minute (speech is usually 100-180): the captions "
+                    "may be fragments, or the video is mostly music or b-roll")
+    if len(texts) >= 20 and len(set(texts)) < 0.5 * len(texts):
+        warn.append(f"only {len(set(texts))} of {len(texts)} caption lines are distinct (repeated text)")
+    if warn:
+        out["quality_warning"] = "; ".join(warn) + ". Check the saved transcript before relying on it."
     return out
 
 
@@ -318,6 +342,8 @@ _NONCOMMERCIAL = re.compile(r"\.org$|(^|\.)(bazzite\.gg|kodi\.tv|jellyfin\.\w+|l
 # their category (detect_brands' service topic).
 CONTEXT_ALIASES = {"Bear Notes": ["Bear"], "Craft Docs": ["Craft"], "Drafts": ["Drafts"], "Things": ["Things 3"],
                    "Day One": ["Day One"], "Agenda": ["Agenda"], "Reflect": ["Reflect"], "Mem": ["Mem"]}
+# The active topic file's everyday-word names (brands.py): case-sensitive, in any video of that topic's window.
+TOPIC_EVERYDAY: dict[str, list[str]] = {}
 # Hosts that never name a reviewed brand.
 _PLATFORM = re.compile(r"(^|\.)(youtube|youtu|google|goo|amazon|amzn|instagram|facebook|fb|twitter|x|tiktok|"
                        r"threads|discord|patreon|ko-fi|buymeacoffee|linktr|bit|tinyurl|geni|da|is|cutt|t|ow|"
@@ -415,6 +441,9 @@ def detect_brands(title: str = "", description: str = "", links=(), own_domains=
         for b, words in CONTEXT_ALIASES.items():
             if b not in found and any(re.search(r"(?<![\w-])" + w + r"(?![\w-])", text) for w in words):
                 found.append(b)
+    for b, words in TOPIC_EVERYDAY.items():
+        if b not in found and any(re.search(r"(?<![\w-])" + re.escape(w) + r"(?![\w-])", text) for w in words):
+            found.append(b)
     gear_links = set(re.findall(r"https?://\S+", description or "")) - set(re.findall(r"https?://\S+", kept))
     own = {_alnum(d) for d in own_domains or ()}
     words = _alnum(text)
