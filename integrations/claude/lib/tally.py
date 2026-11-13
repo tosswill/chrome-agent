@@ -426,6 +426,29 @@ def _short_answer_polarity(text: str, start: int, end: int) -> str | None:
     return p if p in ("recommend", "complain") else None
 
 
+# Post titles that ask for a pick: a short top-level reply naming a product there is a suggestion.
+_ASK_TITLE = re.compile(r"\?\s*$|\b(?:best|which|recommend\w*|suggest\w*|alternatives?|looking for|options?|"
+                        r"what (?:should|would|do|to|is the best|are (?:you|the best|good))|"
+                        r"help (?:me )?(?:choose|pick|decide)|should i (?:get|buy|use|go)|instead of|replace(?:ment)?)\b", re.I)
+
+
+def _bare_suggestion(rec: dict, text: str, start: int, ask_threads: set) -> bool:
+    """A short top-level reply to a "what should I use?" post whose first sentence names the product with
+    no tone words ("RaspberryPi with Kodi", "Apple TV, and never connect the TV"): it answers the question,
+    so it counts as a recommendation."""
+    if rec.get("via") != "comment" or rec.get("is_op") or (rec.get("depth") or 0) != 0:
+        return False
+    if str(rec.get("thread")) not in ask_threads:
+        return False
+    if len(re.findall(r"\w+", text)) > 20 or _UNFAMILIAR.search(text) or polarity(text) in ("question", "complain"):
+        return False
+    first_end = min([i for i in (text.find(c) for c in ".!?\n") if i != -1] or [len(text)])
+    # The answer leads: the name within the first three words of a short first sentence (not "I designed
+    # these parts on my X", a passing mention in an ask thread).
+    return (start <= first_end and len(re.findall(r"\w+", text[:first_end])) <= 8
+            and len(re.findall(r"\w+", text[:start])) <= 2)
+
+
 # -------------------------------------------------------------------------
 # Records
 # -------------------------------------------------------------------------
@@ -595,6 +618,9 @@ def tally(records: list[dict], names: list[str], *, aliases: dict | str | None =
                 reason = default_independence({k: v}, sponsor_threshold) or k
                 wide.setdefault(g, set()).add(reason)
 
+    ask_threads = {str(r.get("thread") or r.get("id")) for r in recs
+                   if r.get("via") == "post" and _ASK_TITLE.search(r.get("title") or "")}
+
     rows = []
     mention_cache: dict = {}
     for term in terms:
@@ -614,6 +640,8 @@ def tally(records: list[dict], names: list[str], *, aliases: dict | str | None =
                     pol = polarity(_clause_around(txt, s, e, others))
                     if pol == "mention":
                         pol = _short_answer_polarity(txt, s, e) or pol
+                    if pol == "mention" and fld == "text" and _bare_suggestion(r, txt, s, ask_threads):
+                        pol = "recommend"
                     pols.append(pol)
                     if first is None or (first[0] == "mention" and pol != "mention"):
                         first = (pol, snippet(txt, s, e), link, fld)

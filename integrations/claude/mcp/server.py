@@ -27,6 +27,7 @@ sys.path.insert(0, str(HERE.parent / "skills" / "youtube-research" / "scripts"))
 import reddit_tab  # noqa: E402
 from research_core import attach_timings, timings_reset  # noqa: E402
 import youtube_tab  # noqa: E402
+import brands as research_brands  # noqa: E402
 
 BIN = shutil.which("chrome-agent") or str(Path.home() / ".local/bin/chrome-agent")
 EVENT_DIR = Path(tempfile.gettempdir()) / "chrome-agent-mcp"
@@ -282,6 +283,28 @@ def reddit_list() -> str:
     return _reddit(reddit_tab.list_claims)
 
 
+@mcp.tool()
+def reddit_topic(target: str, topic: str | None = None) -> str:
+    """Use the topic's brand file (research_brands) in this window from now on: its product names count
+    as brand tokens (brand subreddits, brand accounts) and its aliases apply in reddit_tally. No page load.
+    An empty topic clears it."""
+    return _reddit(reddit_tab.set_topic, target, topic or None)
+
+
+@mcp.tool()
+def research_brands(action: str, topic: str | None = None, names: list[str] | None = None,
+                    alias: str | None = None, everyday: str | None = None, common: str | None = None) -> str:
+    """Topic brand files shared by the Reddit and YouTube tools (no browser). action: "list", "show"
+    (topic), "add" (topic + names, the products a landscape pass found; alias "Fire TV=Firestick,Fire Stick;
+    ..."; everyday "Bear Notes=Bear" for names that are ordinary words; common "widevine,hdr" for category
+    words that are never brands) or "remove" (topic + names). Then call reddit_topic / youtube_topic."""
+    try:
+        return json.dumps(research_brands.command(action, topic, names or [], alias, everyday, common),
+                          ensure_ascii=False)
+    except ValueError as e:
+        return json.dumps({"error": str(e)})
+
+
 # -------------------------------------------------------------------------
 # YouTube research tools (shared implementation with the Claude Code skill)
 # -------------------------------------------------------------------------
@@ -433,6 +456,22 @@ def youtube_registry(action: str, channel: str | None = None, verdict: str | Non
     if action == "observe":
         return _reddit(youtube_tab.registry, "observe", channel, None, note, topic)
     return _reddit(youtube_tab.registry, action, channel, verdict, note, topic)
+
+
+@mcp.tool()
+def youtube_topic(target: str, topic: str | None = None) -> str:
+    """Use the topic's brand file (research_brands) in this window from now on: brand detection, per-brand
+    sponsor scores and youtube_tally aliases include its names. No page load. An empty topic clears it."""
+    return _reddit(youtube_tab.set_topic, target, topic or None)
+
+
+@mcp.tool()
+def youtube_rescore(topic: str, dirs: list[str] | None = None, save: bool = False) -> str:
+    """Re-rate a topic's channels from saved video pages and full transcripts with the current heuristics
+    (after a fix), and show which axes and labels changed against the registry. No browser, no page load.
+    dirs: extra folders with a run's raw JSON or a report's youtube/ folder. save=true writes the ratings
+    (the registry is backed up first); only save when the user asks."""
+    return _reddit(youtube_tab.rescore, topic, dirs or [], save)
 
 
 @mcp.tool()
