@@ -136,6 +136,7 @@ Write a plan and rough page-load estimate. Choose the angles that fit:
 - **Comparisons and alternatives:** `"<product>" vs`, `"<product>" alternatives`, `best <category> <year>`.
 - **Official:** the brand's own channel or launch video, for claimed features and specs.
 - **Setup friction:** `setup`, `how to`, `fix`. Tutorials reveal pain points reviews skip.
+- **Reserve 2–3 loads (about 15% of the budget) for step 5,** verifying claims.
 
 ### 2. Triage from search results
 
@@ -170,7 +171,15 @@ Always start with `video`: disclosure signals, chapters, description, metadata. 
 - **Screenshots of pages** (`shot`): `ads_in_view` lists ads in the image (search "Sponsored" units, masthead ads, a video ad in the player). Caption them as ads, or scroll and retake. `--selector <css>` captures one element (e.g. `#description`). The signed-in account's name or avatar appearing in a shot is fine.
 - **Busy or moving moments** (a demo, a chart that animates in, a slide that changes): use `--burst 5`. The video lands, plays on muted, and a candidate is captured every second with the controls hidden. Look at the candidates, keep the best, and delete the rest. This beats jumping repeatedly, which looks odd. Frames land within about ±2.5 s, since YouTube can snap a click to a chapter start, so a burst also covers that.
 
-### 5. Close
+### 5. Verify the claims your conclusion rests on
+
+Before writing, list the claims your findings depend on and try to break them. Reviewers repeat each other and brand talking points, so several videos saying the same thing is not independent confirmation; prefer a tutorial or demo that shows the opposite on screen.
+
+- **What to check:** the 3–6 claims the conclusion rests on. Absolute and negative claims come first: "can't", "no way to", "doesn't support", "locked", "only", "never", "every", plus a missing feature, a price, or a verdict like "not worth it". One complaint thread saying a feature is missing is a lead, not a fact; owners often missed a setting, a workaround or a later update.
+- **How:** for each claim, run one search built to *disprove* it: the feature plus `how to`, `setup`, `workaround`, `custom` or `finally`, worded as someone who got it working would phrase it, plus a recency pass. Open the best hit. Read replies under the claim itself too; corrections often sit there.
+- **Label each claim** in the report as **confirmed** (2+ independent sources, or the vendor), **single-source**, **contradicted** (state the correction and link it), or **unchecked** (out of budget). Never state an unchecked absolute claim as fact; write "one owner says…".
+
+### 6. Close
 
 `$Y close <ID>`.
 
@@ -218,9 +227,10 @@ Always start with `video`: disclosure signals, chapters, description, metadata. 
 1. **Key findings:** features shown, recurring praise and complaints, alternatives raised, each with timestamped links. Frames inline where they add something.
 2. **Interest read:** what volume, velocity, views, and engagement suggest, with the sample.
 3. **Sources table:** video (linked), channel and subscribers, type (official, large, small, Short), published date, views, sponsor bias (final score and the main reasons), one-line takeaway.
-4. **Caveats:** sponsorship or affiliate dependence, embargo clustering, preliminary information, dates spanned.
-5. **Sample size:** videos read, transcripts used (and how many were unavailable), frames captured (and any `ad_timeout`), page loads used (searches vs videos).
-6. **Saved transcripts:** the `saved` JSON/`.md` paths, listed with the sources.
+4. **Key claims check:** a table of the claims checked in step 5, with their label and the timestamped link that confirms or contradicts each.
+5. **Caveats:** sponsorship or affiliate dependence, embargo clustering, preliminary information, dates spanned.
+6. **Sample size:** videos read, transcripts used (and how many were unavailable), frames captured (and any `ad_timeout`), page loads used (searches vs videos).
+7. **Saved transcripts:** the `saved` JSON/`.md` paths, listed with the sources.
 
 **When a channel map was made**, add the channel table and the who-to-trust sentences (see *Channel map*) before the sources table.
 

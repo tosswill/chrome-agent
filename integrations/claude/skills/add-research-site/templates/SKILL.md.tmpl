@@ -21,6 +21,10 @@ H=~/.claude/skills/{{SLUG}}-research/scripts/{{SLUG}}_tab.py
 
 TODO: document the readers once they exist (`open`, `nav`, `shot`, `eval`, `close` and `log` work now). Open product pages by clicking them in search results, not by URL: cold product-URL loads look like a bot.
 
+## Using what you find
+
+- **Absence claims** ("not sold here", "no model has X", "only one option under $Y") need a second search with different wording, or a category browse, before they go in a report. Check a spec claim from a listing title against the product page's spec table.
+
 ## Action log
 
 Every command is logged per window in `~/.local/state/chrome-agent-research/logs/<site>/` (`$H log [<ID>] [--since 2h]`); a `stop` saves a screenshot (`stop_shot`) and the rule that matched (`blocked_by`).
