@@ -81,6 +81,7 @@ Write a short plan and count page loads against the budget:
 - Per product or topic: **one site-wide search**, **one recency search** (`--sort new --time month`), and, if it has its own subreddit, **one in-subreddit issues search** (`"<brand> <model>" problems`, or `died`/`returned`, with `--sub`).
 - Then **2–3 threads per product**, favoring high engagement and a spread of dates and communities.
 - When Reddit is one source among several, trim this to what matters most.
+- **Reserve 2–3 loads (about 15% of the budget) for step 5,** verifying claims.
 - **Splitting a budget:** about a third searches, the rest threads, 2–3 threads per search (going back to the results is free). For 12–15 loads: about 4 searches (decision threads, a second angle or subreddit, a recency search, a complaints search) and 8–10 threads. For 10: 3 searches and 7 threads.
 
 ### 3. Search, then open threads from the results
@@ -91,7 +92,15 @@ Search first and open threads from the result list, several per search. `thread`
 
 If a thread is removed or deleted, or `thread` returns `null`, note it (with its `note`) and move on to the next candidate. Don't retry the same URL. On `stop`, end the research and tell the user. If a click on a result misses, the helper first checks for a covering pop-up (a login or app nag) and dismisses it with its own close button before the second try.
 
-### 5. Close
+### 5. Verify the claims your conclusion rests on
+
+Before writing, list the claims your findings depend on and try to break them.
+
+- **What to check:** the 3–6 claims the conclusion rests on. Absolute and negative claims come first: "can't", "no way to", "doesn't support", "locked", "only", "never", "every", plus a missing feature, a price, or a verdict like "not worth it". One complaint thread saying a feature is missing is a lead, not a fact; owners often missed a setting, a workaround or a later update.
+- **How:** for each claim, run one search built to *disprove* it: the feature plus `how to`, `setup`, `workaround`, `custom` or `finally`, worded as someone who got it working would phrase it, plus a recency pass. Open the best hit. Read replies under the claim itself too; corrections often sit there.
+- **Label each claim** in the report as **confirmed** (2+ independent sources, or the vendor), **single-source**, **contradicted** (state the correction and link it), or **unchecked** (out of budget). Never state an unchecked absolute claim as fact; write "one owner says…".
+
+### 6. Close
 
 `$R close <ID>`.
 
@@ -139,8 +148,9 @@ Use it sparingly: a highly upvoted answer, a comparison table, a moderator list.
 
 1. **Key findings:** themes and recurring complaints or praise, each linked to the supporting comment or post (`link`).
 2. **Sources table:** thread title (linked), subreddit, date, score, comment count (and how many were read, from `counts`), promo bias (score and main reasons), one-line takeaway.
-3. **Caveats:** dates spanned, brand involvement (brand accounts, brand-moderated communities), anything unverified.
-4. **Sample size:** threads read and page loads used. It's signal, not statistics.
+3. **Key claims check:** a table of the claims checked in step 5, with their label and the link that confirms or contradicts each.
+4. **Caveats:** dates spanned, brand involvement (brand accounts, brand-moderated communities), anything unverified.
+5. **Sample size:** threads read and page loads used. It's signal, not statistics.
 
 **When a landscape pass was done**, add before the key findings:
 

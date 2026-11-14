@@ -55,6 +55,7 @@ and average rating, not for opinion bias the way YouTube or Reddit are; promoted
   so check before quoting it as this product's spec.
 - **Prices** change constantly and vary by store (the browser's store is set by Home Depot from location);
   give the date.
+- **Absence claims** ("not sold here", "no model has X", "only one option under $Y") need a second search with different wording, or a category browse, before they go in a report. Check a spec claim from a listing title against the product page's spec table.
 
 ## Action log
 
