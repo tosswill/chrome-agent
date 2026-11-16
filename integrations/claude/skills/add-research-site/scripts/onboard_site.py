@@ -133,7 +133,8 @@ def clone(site: str, source: str | None = None) -> dict:
     signed in by the user once, in this browser: copying Google cookies from another browser doesn't carry
     the sign-in and can make Google sign the original browser out."""
     inst = instance_of(site)
-    status = json.loads(_ca("status"))
+    raw = _ca("status").strip()
+    status = json.loads(raw) if raw.startswith(("[", "{")) else []  # "No instances registered." is plain text
     if any(i.get("name") == inst and i.get("alive") for i in status):
         return {"instance": inst, "already_running": True}
     d = PROFILES / site

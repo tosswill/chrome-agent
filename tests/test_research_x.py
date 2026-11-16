@@ -1,0 +1,55 @@
+"""X (Twitter) research helper (generated scaffold). No browser."""
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1] / "integrations" / "claude"
+sys.path.insert(0, str(ROOT / "lib"))
+sys.path.insert(0, str(ROOT / "skills" / "x-research" / "scripts"))
+import x_tab as H  # noqa: E402
+
+
+def test_only_the_site_loads():
+    import pytest
+    H.SITE.check_url("https://www.x.com/")
+    with pytest.raises(H.Fail):
+        H.SITE.check_url("https://example.com/")
+
+
+def test_block_page_stops():
+    assert H._stop_reason({"blocked": True}, H.SITE)
+    assert H._stop_reason({"loggedIn": True}, H.SITE) is None
+
+
+def test_forbidden_paths():
+    import pytest
+    for u in ("https://x.com/i/api/graphql/abc", "https://x.com/compose/post", "https://x.com/i/flow/login",
+              "https://x.com/settings/account", "https://x.com/messages"):
+        with pytest.raises(H.Fail):
+            H.SITE.check_url(u)
+    H.SITE.check_url("https://x.com/search?q=sony&src=typed_query")
+
+
+def test_status_ids_and_handles():
+    import pytest
+    assert H._status_id("https://x.com/feni_book/status/2105507899988672858") == "2105507899988672858"
+    assert H._status_id("https://twitter.com/a/status/123/photo/1") == "123"
+    with pytest.raises(H.Fail):
+        H._status_id("https://x.com/feni_book")
+    assert H._handle("@SonyAlphaLab") == "SonyAlphaLab"
+    assert H._handle("https://x.com/SonyAlphaLab/") == "SonyAlphaLab"
+    with pytest.raises(H.Fail):
+        H._handle("not a handle!")
+
+
+def test_wall_stops_and_merge_dedupes():
+    assert "rate limit" in H._stop_reason({"blocked": True, "blocked_by": "X rate limit"}, H.SITE)
+    seen = {}
+    assert H._merge(seen, [{"url": "https://x.com/a/status/1"}, {"url": "https://x.com/a/status/1"}]) == 1
+    assert H._merge(seen, [{"url": "https://x.com/a/status/2"}, {"url": "https://x.com/a/status/1"}]) == 1
+
+
+def test_summary():
+    s = H._summary([{"handle": "@a", "verified": True, "date": "2026-11-02", "promoted": True},
+                    {"handle": "@b", "date": "2026-10-01", "community_note": True}, {"handle": "@a"}])
+    assert s == {"posts": 3, "authors": 2, "verified_authors": 1, "promoted": 1, "with_community_note": 1,
+                 "oldest": "2026-10-01", "newest": "2026-11-02"}
