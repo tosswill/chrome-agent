@@ -72,3 +72,8 @@ ordinary traffic), else sign up by email with a generated password.
 - **Home Depot (2026-11-12):** no Google sign-in; email sign-up asks for a phone number ("My phone number will
   be … for recovering account") before the password step. Not created: the browser is set up and signed in to
   Google; research there runs signed out unless the user provides a phone number.
+
+- **X / Twitter (2026-11-16):** browser `x`; the user signed in to x.com by hand in that window (Google
+  sign-in, persona's name). Signed-in check: `[data-testid=SideNav_AccountSwitcher_Button]`; cookie
+  `auth_token` (httpOnly). Walls: `/i/flow/login`, `/account/access`, "Rate limit exceeded".
+  `clone` used to crash when no chrome-agent browsers were running (`status` prints plain text then); fixed.
