@@ -1246,16 +1246,7 @@ _SEARCH_FOCUSED = """(() => { let a = document.activeElement; if (!a || a.tagNam
 def _type_text(full_id: str, text: str) -> None:
     """Type like a person: per-key delays, a little slower after spaces and punctuation, an
     occasional short hesitation. Callers check focus before typing and the value afterwards."""
-    for ch in text:
-        SITE.cdp(full_id, "Input.dispatchKeyEvent", {"type": "keyDown", "key": ch, "text": ch, "unmodifiedText": ch})
-        time.sleep(random.uniform(0.02, 0.06))
-        SITE.cdp(full_id, "Input.dispatchKeyEvent", {"type": "keyUp", "key": ch})
-        gap = random.uniform(0.06, 0.19)
-        if ch in ' "()':
-            gap += random.uniform(0.05, 0.2)
-        if random.random() < 0.05:
-            gap += random.uniform(0.3, 0.8)
-        time.sleep(gap)
+    SITE.type_text(full_id, text)  # keystrokes in one burst, human timing (research_core.key_plan)
 
 
 def _select_all(full_id: str) -> None:
