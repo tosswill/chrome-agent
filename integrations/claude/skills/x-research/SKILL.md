@@ -21,6 +21,9 @@ H=~/.claude/skills/x-research/scripts/x_tab.py
 
 ## Commands
 
+`search`, `post` and `profile` each take 1–3 minutes (pacing, reading and scrolling): run them with a 10-minute
+Bash timeout (`timeout: 600000`) or in the background. A run killed by a timeout still spends its load.
+
 ```bash
 $H open --wait                                   # -> {"target": "<ID>"}
 $H search <ID> "sony a7c ii" [--latest] [--max 40]   # typed into the search box (1 load), then scrolls
@@ -33,19 +36,26 @@ $H log [<ID>] [--since 2h] [--last N] [--raw]    # action log (no page load)
 
 - **`search`** takes X's search operators in the query: `"exact phrase"`, `from:handle`, `to:handle`, `lang:en`,
   `since:2026-10-01 until:2026-11-01`, `min_faves:20`, `min_replies:5`, `-filter:replies`, `filter:links`,
-  `-is:retweet`, `OR`. Top (default) ranks by engagement; `--latest` is newest first. Each post: `url`, `name`,
-  `handle`, `verified`, `date`, `text`, `lang`, `replies`, `reposts`, `likes`, `bookmarks`, `views`, `media`,
+  `-is:retweet`, `OR`. Hyphenated words are quoted for you (`MS-01` → `"MS-01"`; unquoted, X reads the hyphen as
+  NOT) and listed in `quoted_terms`. Top (default) ranks by engagement; `--latest` is newest first; `tab` says which
+  one the results came from. `ended` says why collecting stopped: `limit`, or `no_more` (X showed nothing further:
+  the search is small). Each post: `url`, `name`, `handle`, `verified`, `badge` (blue = paid Premium, which brands
+  also buy; gold = verified organization; grey = government), `name_matches_query` (the account is named after a
+  search term: often the brand itself), `grok` (an @grok auto-reply), `date`, `text`, `lang`, `replies`, `reposts`, `likes`, `bookmarks`, `views`, `media`,
   `quoted`, `reposted_by`, `promoted`, `truncated` (long post: open it with `post` for the full text),
   `community_note`. `summary` gives post/author counts, verified authors, promoted, and the date range.
 - **`post`** clicks the post in the current page when it's listed there (pick from a search rather than pasting URLs).
-  Returns `thread_above`, `post`, `replies` (X's ranking) and `hidden_reply_sections` (low-quality/probable-spam
-  replies X folds away; not read).
+  Returns `thread_above`, `post`, `thread_below` (the author's own continuation), `replies` (others, in X's
+  ranking), `self_replies` (author replies further down) and `hidden_reply_sections` (low-quality/probable-spam
+  replies X folds away; not read). Don't count `thread_below` or self-replies as discussion.
 - **`profile`** is for judging a voice: `followers`, `following`, `joined`, `verified` / `verified_kind`
   (blue = paid Premium, gold = organization, grey = government), `affiliation`, `bio`, and recent posts with
   `own_posts` vs `reposts`.
 
 ## Using what you find
 
+- **Brand accounts:** search with the brand's name in the query so `name_matches_query` flags its accounts
+  (e.g. @Hi_MINISFORUM, @Minisforum_JP); a blue check doesn't distinguish them.
 - **Verified ≠ credible.** Blue checks are paid (Premium) and Premium replies are ranked higher. Don't treat a
   check mark or reply position as authority; use followers, history (`profile`), and what the account does.
 - **Promotion:** flag `promoted` posts, brand and affiliate accounts, creators posting launch-day praise with

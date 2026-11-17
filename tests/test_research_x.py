@@ -52,4 +52,25 @@ def test_summary():
     s = H._summary([{"handle": "@a", "verified": True, "date": "2026-11-02", "promoted": True},
                     {"handle": "@b", "date": "2026-10-01", "community_note": True}, {"handle": "@a"}])
     assert s == {"posts": 3, "authors": 2, "verified_authors": 1, "promoted": 1, "with_community_note": 1,
-                 "oldest": "2026-10-01", "newest": "2026-11-02"}
+                 "name_matches_query": 0, "grok": 0, "oldest": "2026-10-01", "newest": "2026-11-02"}
+
+
+def test_hyphenated_terms_are_quoted():
+    assert H._quote_hyphenated("MS-01 homelab") == ('"MS-01" homelab', ["MS-01"])
+    q, done = H._quote_hyphenated('"MS-A2" N150 since:2025-06-01 -filter:replies Wi-Fi')
+    assert q == '"MS-A2" N150 since:2025-06-01 -filter:replies "Wi-Fi"' and done == ["Wi-Fi"]
+    assert H._quote_hyphenated("mini pc -is:retweet") == ("mini pc -is:retweet", [])
+
+
+def test_query_terms_and_name_matches():
+    assert H._query_terms('minisforum "MS-01" homelab since:2025-06-01 -filter:replies') == ["minisforum"]
+    posts = [{"handle": "@Hi_MINISFORUM", "name": "MINISFORUM"}, {"handle": "@rapterron", "name": "R"}]
+    H._flag_name_matches(posts, ["minisforum"])
+    assert posts[0]["name_matches_query"] == "minisforum" and "name_matches_query" not in posts[1]
+
+
+def test_thread_split():
+    main = {"handle": "@a"}
+    below, replies = H._split_thread(main, [{"handle": "@a"}, {"handle": "@a"}, {"handle": "@b"}, {"handle": "@a"}])
+    assert [p["handle"] for p in below] == ["@a", "@a"] and [p["handle"] for p in replies] == ["@b", "@a"]
+    assert H._split_thread(None, [{"handle": "@b"}]) == ([], [{"handle": "@b"}])
