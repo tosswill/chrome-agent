@@ -359,7 +359,7 @@ def youtube_transcript(target: str, grep: list[str] | None = None, context: int 
     with total_segments. With grep, only segments matching any term (case-insensitive), plus `context`
     neighboring segments each side. start/end (e.g. "4:00", "6:30") limit it to a time window.
     The FULL transcript is always saved as YYYY-MM-DD_<id>_transcript.json and .md in out_dir (the
-    report folder), else ~/.local/share/chrome-agent-research/youtube-transcripts/; `saved` gives the
+    report folder), else the run raw folder or /tmp; `saved` gives the
     paths (an existing file is reused unless this read is fuller). List saved transcripts in the report's
     sources. `coverage` gives first/last/gaps/complete; when the first read falls short the list is
     scrolled and collected. Remaining gaps are silent stretches or a creator caption track that skips sections (coverage.note).

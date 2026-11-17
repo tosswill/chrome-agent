@@ -21,7 +21,7 @@ CLI (each command prints JSON):
     youtube_tab.py transcript ID [--from T] [--to T] [--context N] [--grep TERM ...] [--out-dir DIR]
                        segments ({at, sec, text, link}; `sec` is the start in seconds), deduplicated, with
                        total_segments. The FULL transcript is always saved as JSON + .md (`saved`) in
-                       --out-dir, else ~/.local/share/chrome-agent-research/youtube-transcripts/.
+                       --out-dir, else the run's raw/youtube/transcripts/ (RESEARCH_RAW_DIR), else /tmp.
                        --from/--to limit the output to a time window; --grep: case-insensitive
                        plain-text substrings, any of them (not regex).
     youtube_tab.py comments ID [--max N]                   top comments of the loaded video (default 20)
@@ -86,7 +86,7 @@ from urllib.parse import parse_qs, quote, urlencode, urlparse
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parents[2] / "lib"))
 sys.path.insert(0, str(HERE))
-from research_core import Fail, Site, common_cli, intersect, opt, pause, run_cli  # noqa: E402
+from research_core import Fail, Site, common_cli, intersect, opt, pause, raw_dir, run_cli  # noqa: E402
 import brands as B  # noqa: E402
 import disclosure as D  # noqa: E402
 import tally as T  # noqa: E402
@@ -97,8 +97,13 @@ SORTS = {"relevance": None, "views": 3}
 UPLOADS = {"hour": 1, "today": 2, "week": 3, "month": 4, "year": 5}
 MIN_PLAYER_WIDTH = S.MIN_PLAYER_WIDTH  # CSS px; smaller frames are hard to read
 AD_TIMEOUT = float(os.environ.get("YOUTUBE_TAB_AD_TIMEOUT", "60"))
-TRANSCRIPTS = Path(os.environ.get("YOUTUBE_TAB_TRANSCRIPTS", str(S.DEFAULT_TRANSCRIPTS))).expanduser()
-CHANNELS = Path(os.environ.get("YOUTUBE_TAB_CHANNELS", str(S.DEFAULT_TRANSCRIPTS.parent / "youtube-channels.json"))).expanduser()
+# Transcripts (and frames, below) go to the run's raw folder (RESEARCH_RAW_DIR -> raw/youtube/), else a temp
+# folder; --out-dir overrides. The channel registry and page cache stay in the long-lived data folder.
+_DATA = S.DEFAULT_TRANSCRIPTS.parent.expanduser()
+_RAW = raw_dir("youtube")
+TRANSCRIPTS = Path(os.environ.get("YOUTUBE_TAB_TRANSCRIPTS", "") or (
+    _RAW / "transcripts" if _RAW else Path(os.environ.get("YOUTUBE_TAB_STATE", "/tmp/chrome-agent-youtube")) / "transcripts")).expanduser()
+CHANNELS = Path(os.environ.get("YOUTUBE_TAB_CHANNELS", str(_DATA / "youtube-channels.json"))).expanduser()
 
 
 def _js(name: str) -> str:
@@ -197,7 +202,7 @@ def _apply_topic(full_id: str) -> None:
 SITE.session_check = _yt_session
 SITE.min_width = S.THEATER_MIN_WIDTH + 20  # a theater-mode player needs about this much window
 SITE.on_resolve = _apply_topic
-SHOTS = Path(os.environ.get("YOUTUBE_TAB_SHOTS", SITE.state / "shots"))
+SHOTS = Path(os.environ.get("YOUTUBE_TAB_SHOTS", "") or (_RAW / "frames" if _RAW else SITE.state / "shots"))
 
 
 # -------------------------------------------------------------------------
@@ -1120,7 +1125,7 @@ _VIDEO_READY_JS = ("document.readyState === 'complete' && !!window.ytInitialPlay
                    "!!document.querySelector('#movie_player') && !!document.querySelector('ytd-watch-metadata #title h1')")
 
 
-PAGES = Path(os.environ.get("YOUTUBE_TAB_PAGES", str(TRANSCRIPTS.parent / "youtube-pages"))).expanduser()
+PAGES = Path(os.environ.get("YOUTUBE_TAB_PAGES", str(_DATA / "youtube-pages"))).expanduser()
 
 
 def _score_page(data: dict, channel_flagged: bool = False) -> bool:

@@ -16,6 +16,7 @@ import base64
 import fcntl
 import functools
 import json
+import re
 import math
 import os
 import random
@@ -1470,6 +1471,103 @@ def common_cli(site: Site, cmd: str, args: list[str]):
     return NotImplemented
 
 
+# --- per-run raw results: RESEARCH_RAW_DIR=<report>/raw saves every result to raw/<site>/ ----------------
+# Each command's full result goes to raw/<site>/<NNN>_<HHMMSS>_<cmd>.json, with one line per command in
+# raw/<site>/index.jsonl (cmd, args, file, url, ok, partial). The record is complete by construction, so a
+# verifier can check claims against exactly what was read; research_signals.py computes metrics from it.
+_PARTIAL_KEYS = ("truncated", "hidden_reply_sections", "moderators_truncated", "ended")
+
+
+def raw_dir(site: str | None = None) -> Path | None:
+    root = os.environ.get("RESEARCH_RAW_DIR")
+    if not root:
+        return None
+    site = site or getattr(_LOG, "site", None)
+    return Path(root).expanduser() / site if site else None
+
+
+def _raw_index(d: Path) -> list[dict]:
+    try:
+        return [json.loads(l) for l in (d / "index.jsonl").read_text().splitlines() if l.strip()]
+    except (OSError, ValueError):
+        return []
+
+
+def _norm_args(args: list) -> list[str]:
+    """A command's arguments minus the window ID (first argument), whitespace and case folded."""
+    rest = [str(a) for a in args[1:]] if args else []
+    out, skip = [], False
+    for a in rest:  # --max N only changes how much is read, not what's searched
+        if skip:
+            skip = False
+            continue
+        if a in ("--max", "--max-results"):
+            skip = True
+            continue
+        out.append(" ".join(a.lower().split()))
+    return out
+
+
+def repeat_search(cmd: str, args: list) -> dict | None:
+    """The earlier index entry when this exact search already ran in this run (any agent)."""
+    d = raw_dir()
+    if d is None or cmd not in ("search",) or len(args) < 2:
+        return None
+    want = _norm_args(args)
+    # A verification pass (RESEARCH_RAW_DIR=<report>/raw/verify) also checks the research agents' own searches.
+    dirs = [d] + ([d.parent.parent / d.name] if d.parent.name == "verify" else [])
+    for dd in dirs:
+        hit = next((e for e in _raw_index(dd) if e.get("cmd") == cmd and e.get("ok") and e.get("nargs") == want), None)
+        if hit:
+            return {**hit, "file": str(dd.relative_to(d.parent.parent) / hit["file"]) if dd != d else hit["file"]}
+    return None
+
+
+def _partial_flags(result) -> list[str]:
+    flags = set()
+
+    def walk(o, depth=0):
+        if depth > 3:
+            return
+        if isinstance(o, dict):
+            for k, v in o.items():
+                if k in _PARTIAL_KEYS and v and not (k == "ended" and v in ("no_more", "end_marker")):
+                    flags.add(k if k != "ended" else f"ended:{v}")
+                walk(v, depth + 1)
+        elif isinstance(o, list):
+            for v in o[:200]:
+                walk(v, depth + 1)
+    walk(result)
+    return sorted(flags)
+
+
+def save_raw(cmd: str, args: list, result) -> str | None:
+    """Save a command's result in the run's raw folder (never raises). Returns the file name."""
+    d = raw_dir()
+    if d is None or cmd in ("log", "list", "gc", "close", "eval", "open") or not isinstance(result, dict):
+        return None
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+        n = len(_raw_index(d)) + 1
+        ok = "error" not in result
+        name = f"{n:03d}_{time.strftime('%H%M%S')}_{re.sub(r'[^a-z0-9_]+', '-', cmd.lower())}.json" if ok else None
+        if name:
+            (d / name).write_text(json.dumps({"cmd": cmd, "args": [str(a) for a in args],
+                                              "saved_at": time.strftime("%Y-%m-%dT%H:%M:%S"), "result": result},
+                                             ensure_ascii=False, indent=1, default=str))
+        page = result.get("page") if isinstance(result.get("page"), dict) else {}
+        entry = {"n": n, "t": time.strftime("%Y-%m-%dT%H:%M:%S"), "cmd": cmd, "args": [str(a)[:300] for a in args],
+                 "nargs": _norm_args(args), "ok": ok, "file": name, "url": page.get("url"),
+                 "partial": _partial_flags(result)}
+        if not ok:
+            entry["error"] = str(result.get("error"))[:300]
+        with open(d / "index.jsonl", "a") as fh:
+            fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        return name
+    except Exception:  # noqa: BLE001 - saving must never break research
+        return None
+
+
 def begin_command(cmd: str, args: list) -> None:
     """Start a command's log context (CLI and MCP)."""
     _LOG.cmd, _LOG.target, _LOG.stop_logged, _LOG.sel = cmd, None, False, None
@@ -1506,14 +1604,22 @@ def run_cli(doc: str, dispatch: Callable[[str, list[str]], object], argv: list[s
     cmd = argv[1]
     begin_command(cmd, argv[2:])
     try:
+        prior = repeat_search(cmd, argv[2:])
+        if prior:
+            raise Fail(f"this exact search already ran in this run (raw file {prior.get('file')}): read that "
+                       "file, or search with different wording")
         result = dispatch(cmd, argv[2:])
         if result is NotImplemented:
             raise Fail(doc.strip())
         end_command(attach_timings(result))
+        saved = save_raw(cmd, argv[2:], result)
+        if saved:
+            result["raw_file"] = saved
         print(json.dumps(result, indent=2, ensure_ascii=False))
         return 0
     except Fail as e:
         out = attach_timings({"error": str(e)})
         end_command(out)
+        save_raw(cmd, argv[2:], out)
         print(json.dumps(out, ensure_ascii=False))
         return 1
