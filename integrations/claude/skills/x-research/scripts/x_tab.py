@@ -178,7 +178,8 @@ def _collect(full_id: str, limit: int, stop_js: str | None = None) -> tuple[list
             SITE.wheel(full_id, random.uniform(350, 700))
             pause(random.uniform(0.25, 0.6))
         scrolls += 1
-        pause(random.uniform(1.0, 1.8))  # let X fetch the next page of posts
+        with timed("fetch_wait"):
+            pause(random.uniform(1.0, 1.8))  # let X fetch the next page of posts
         if random.random() < 0.12:
             SITE.wheel(full_id, -random.uniform(120, 300))  # glance back up
             pause(0.6)

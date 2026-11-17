@@ -23,8 +23,9 @@ CLI (each command prints JSON):
     onboard_site.py login-record SITE --method google|email [--email E]   record the account in the logins file
     onboard_site.py tidy SITE --keep DOMAIN                  close every tab not on DOMAIN (one tab stays)
     onboard_site.py save SITE                                chrome-agent save SITE --overwrite
-    onboard_site.py scaffold SITE --domain D [--name "Home Depot"]   generate the site's research helper,
-                       SKILL.md stub and a test from the template (refuses to overwrite)
+    onboard_site.py scaffold SITE --domain D [--name "Home Depot"] [--account-selector CSS] [--session-cookie NAME]
+                       generate the site's research helper (signed-in checks filled in from step 6, a typed
+                       `search` stub), SKILL.md stub and a test from the template (refuses to overwrite)
     onboard_site.py close ID
 
 Local files, never in version control (RESEARCH_CONFIG, default ~/.config/chrome-agent-research):
@@ -376,7 +377,8 @@ def login_record(site: str, method: str, email: str | None = None) -> dict:
 
 # --- scaffold ---------------------------------------------------------------------------------------
 
-def scaffold(site: str, domain: str, name: str | None = None) -> dict:
+def scaffold(site: str, domain: str, name: str | None = None, account_selector: str | None = None,
+             session_cookie: str | None = None) -> dict:
     """Generate skills/<site>-research/ (helper, SKILL.md stub) and tests/test_research_<site>.py from the
     template. Never overwrites."""
     slug = re.sub(r"[^a-z0-9]", "", site.lower())
@@ -385,7 +387,8 @@ def scaffold(site: str, domain: str, name: str | None = None) -> dict:
     skill = ROOT / "skills" / f"{slug}-research"
     test = ROOT.parents[1] / "tests" / f"test_research_{slug}.py"
     out = {}
-    subs = {"{{SLUG}}": slug, "{{NAME}}": name, "{{DOMAIN}}": domain, "{{PREFIX}}": slug.upper() + "_TAB"}
+    subs = {"{{SLUG}}": slug, "{{NAME}}": name, "{{DOMAIN}}": domain, "{{PREFIX}}": slug.upper() + "_TAB",
+            "{{ACCOUNT_SELECTOR}}": repr(account_selector), "{{SESSION_COOKIE}}": repr(session_cookie)}
     for src, dst in ((tdir / "site_tab.py.tmpl", skill / "scripts" / f"{slug}_tab.py"),
                      (tdir / "SKILL.md.tmpl", skill / "SKILL.md"), (tdir / "test_site.py.tmpl", test)):
         if dst.exists():
@@ -462,9 +465,12 @@ def _dispatch(cmd: str, args: list[str]):
         return save(args[0])
     if cmd == "scaffold":
         domain, name = opt(args, "--domain"), opt(args, "--name")
+        acct, cookie = opt(args, "--account-selector"), opt(args, "--session-cookie")
         if len(args) != 1 or not isinstance(domain, str):
-            raise Fail('usage: scaffold SITE --domain DOMAIN [--name "Site Name"]')
-        return scaffold(args[0], domain, name if isinstance(name, str) else None)
+            raise Fail('usage: scaffold SITE --domain DOMAIN [--name "Site Name"] [--account-selector CSS] '
+                       '[--session-cookie NAME]')
+        s = lambda v: v if isinstance(v, str) else None  # noqa: E731
+        return scaffold(args[0], domain, s(name), s(acct), s(cookie))
     if cmd == "close" and len(args) == 1:
         return close(args[0])
     raise Fail(f"unknown command or arguments: {cmd} {' '.join(args)}")

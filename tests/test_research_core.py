@@ -206,3 +206,72 @@ def test_run_cli_adds_timings_on_failure(capsys):
     assert C.run_cli("doc", dispatch, ["x", "open"]) == 1
     out = json.loads(capsys.readouterr().out)
     assert out["error"] == "hidden" and "visibility_check" in out["timings"]["steps"]
+
+
+def test_nested_timings_not_double_counted():
+    import time as _t
+    import research_core as rc
+    rc.timings_reset()
+    with rc.timed("scroll_to"):
+        with rc.timed("wheel"):
+            _t.sleep(0.05)
+    out = rc.attach_timings({})["timings"]
+    assert out["steps"]["scroll_to"]["n"] == 1 and out["steps"]["wheel"]["n"] == 1
+    assert out["other_s"] < 0.04  # the wheel is inside scroll_to, counted once
+
+
+def test_raw_save_index_and_repeat_guard(tmp_path, monkeypatch):
+    import json as _j
+    import research_core as rc
+    monkeypatch.setenv("RESEARCH_RAW_DIR", str(tmp_path))
+    monkeypatch.setattr(rc._LOG, "site", "demo", raising=False)
+    name = rc.save_raw("search", ["ABCD1234", "Mini  PC homelab"], {"page": {"url": "https://x.com/s"}, "posts": [{"truncated": True}]})
+    assert name and (tmp_path / "demo" / name).exists()
+    rc.save_raw("search", ["ABCD1234", "other"], {"error": "boom"})
+    idx = [_j.loads(l) for l in (tmp_path / "demo" / "index.jsonl").read_text().splitlines()]
+    assert idx[0]["partial"] == ["truncated"] and idx[0]["url"] == "https://x.com/s"
+    assert idx[1]["ok"] is False and idx[1]["file"] is None
+    # same search from another window, different spacing/case: refused; a new wording or command isn't
+    assert rc.repeat_search("search", ["ZZZZ9999", "mini pc  HOMELAB"])["file"] == name
+    assert rc.repeat_search("search", ["ZZZZ9999", "mini pc proxmox"]) is None
+    assert rc.repeat_search("thread", ["ZZZZ9999", "mini pc homelab"]) is None
+    assert rc.save_raw("close", ["ABCD1234"], {"closed": "x"}) is None
+
+
+def test_no_raw_dir_saves_nothing(monkeypatch):
+    import research_core as rc
+    monkeypatch.delenv("RESEARCH_RAW_DIR", raising=False)
+    assert rc.save_raw("search", ["A", "q"], {"posts": []}) is None and rc.repeat_search("search", ["A", "q"]) is None
+
+
+def test_verify_pass_sees_research_searches(tmp_path, monkeypatch):
+    import research_core as rc
+    monkeypatch.setattr(rc._LOG, "site", "x", raising=False)
+    monkeypatch.setenv("RESEARCH_RAW_DIR", str(tmp_path))
+    name = rc.save_raw("search", ["A", "mini pc homelab"], {"posts": []})
+    monkeypatch.setenv("RESEARCH_RAW_DIR", str(tmp_path / "verify"))
+    hit = rc.repeat_search("search", ["B", "mini pc homelab"])
+    assert hit and hit["file"] == f"x/{name}"
+    assert rc.repeat_search("search", ["B", "mini pc homelab measured watts"]) is None
+
+
+def test_repeat_guard_ignores_max(tmp_path, monkeypatch):
+    import research_core as rc
+    monkeypatch.setattr(rc._LOG, "site", "x", raising=False)
+    monkeypatch.setenv("RESEARCH_RAW_DIR", str(tmp_path))
+    rc.save_raw("search", ["A", "q", "--max", "10"], {"posts": []})
+    assert rc.repeat_search("search", ["B", "q", "--max", "40"])
+    assert rc.repeat_search("search", ["B", "q", "--latest"]) is None
+    assert rc.save_raw("open", ["--wait"], {"target": "A"}) is None
+
+
+def test_repeat_guard_scope_and_override(tmp_path, monkeypatch):
+    import research_core as rc
+    monkeypatch.setattr(rc._LOG, "site", "reddit", raising=False)
+    monkeypatch.setenv("RESEARCH_RAW_DIR", str(tmp_path))
+    rc.save_raw("search", ["A", "mini pc", "--sub", "homelab"], {"posts": []})
+    assert rc.repeat_search("search", ["A", "mini pc", "--sub", "selfhosted"]) is None
+    assert rc.repeat_search("search", ["A", "mini pc", "--sub", "homelab", "--sort", "new"]) is None
+    assert rc.repeat_search("search", ["A", "mini pc", "--sub", "homelab"])
+    monkeypatch.setenv("RESEARCH_ALLOW_REPEAT", "1")
+    assert rc.repeat_search("search", ["A", "mini pc", "--sub", "homelab"]) is None

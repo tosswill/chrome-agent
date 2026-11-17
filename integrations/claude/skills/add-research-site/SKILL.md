@@ -6,7 +6,7 @@ description: Add a new research site (e.g. a retailer such as Home Depot or Newe
 # Add a research site
 
 ```bash
-O=~/.claude/skills/add-research-site/scripts/onboard_site.py
+O=~/.claude/skills/add-research-site/scripts/onboard_site.py   # executable; or run it with python3
 ```
 
 The site gets its own browser (named after the site: `homedepot`, `newegg`) and profile, so research there never disturbs the
@@ -56,9 +56,10 @@ ordinary traffic), else sign up by email with a generated password.
 7. **Tidy and save:** with a tab on the site, `$O tidy <site> --keep <domain>` (closes every other tab: Gmail,
    popups, the new-tab page, and releases the windows; don't `close` the site's tab first), then `$O save <site>`
    (`chrome-agent save <site> --overwrite`). Check `tabs` after: one tab, on the site.
-8. **Helper:** `$O scaffold <site> --domain <domain> --name "<Site Name>"` creates
-   `skills/<site>-research/` (helper with pacing, window claims, stop rules; SKILL.md stub) and a test. Fill in
-   the signed-in check from step 6, then the readers the research needs (search, product page, reviews, Q&A),
+8. **Helper:** `$O scaffold <site> --domain <domain> --name "<Site Name>" --account-selector '<css>'
+   --session-cookie <name>` (both from step 6) creates `skills/<site>-research/` (helper with pacing, window
+   claims, stop rules, signed-in checks, a `search` stub built on `Site.typed_search`; SKILL.md stub) and a test.
+   Set `SEARCH_BOX` / `SEARCH_URL`, then write the readers the research needs (search, product page, reviews, Q&A),
    add tests, and add the site to the Desktop MCP server if it should be available there. For retail sites,
    read the landscape, specs, price, popularity and average rating; promoted placements don't need flags,
    but note when an average rating is pooled across variants.

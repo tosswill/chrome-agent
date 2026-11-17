@@ -19,6 +19,14 @@ H=~/.claude/skills/{{SLUG}}-research/scripts/{{SLUG}}_tab.py
 
 ## Commands
 
+Commands that load a page take 1–3 minutes: pacing sometimes adds a 20–60 s break before a load, then the
+helper reads and scrolls like a person. Run them with a 10-minute Bash timeout (`timeout: 600000`) or in the
+background, never the 120 s default: a command killed by a timeout still spends its page load.
+
+When the run has a report folder, set `RESEARCH_RAW_DIR=<report folder>/raw` on every command: each result is
+saved in `raw/<site>/` (`raw_file` in the result, listed in `index.jsonl`), and an exact repeat of a search
+already in the run is refused (read the saved file instead, or search with different wording; `RESEARCH_ALLOW_REPEAT=1` repeats one on purpose).
+
 TODO: document the readers once they exist (`open`, `nav`, `shot`, `eval`, `close` and `log` work now). Open product pages by clicking them in search results, not by URL: cold product-URL loads look like a bot.
 
 ## Using what you find

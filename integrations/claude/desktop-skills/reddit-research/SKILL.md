@@ -1,6 +1,6 @@
 ---
 name: reddit-research
-description: Research Reddit discussions by reading real Reddit pages in the user's signed-in Chrome through the chrome-agent connector's reddit_* tools, then report what users say with linked sources and a read on brand promotion. Use whenever the user asks for Reddit research, asks what Reddit/redditors/subreddits say about something, or wants Reddit included among other sources (e.g. "check Reddit too", "include Reddit and forums", "what are users saying online"). Also use for owner experience, complaints, comparisons, alternatives or landscape ("what should I buy", "best X") research that lists Reddit as a source. Read-only; never posts, votes, or messages.
+description: Claude Desktop only (needs the chrome-agent connector's reddit_* tools; in Claude Code use the local reddit-research skill instead). Research Reddit discussions by reading real Reddit pages in the user's signed-in Chrome through the chrome-agent connector's reddit_* tools, then report what users say with linked sources and a read on brand promotion. Use whenever the user asks for Reddit research, asks what Reddit/redditors/subreddits say about something, or wants Reddit included among other sources (e.g. "check Reddit too", "include Reddit and forums", "what are users saying online"). Also use for owner experience, complaints, comparisons, alternatives or landscape ("what should I buy", "best X") research that lists Reddit as a source. Read-only; never posts, votes, or messages.
 ---
 
 # Reddit Research

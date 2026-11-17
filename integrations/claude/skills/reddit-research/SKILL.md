@@ -22,6 +22,14 @@ R=~/.claude/skills/reddit-research/scripts/reddit_tab.py
 
 ## Commands
 
+Commands that load a page take 1–3 minutes: pacing sometimes adds a 20–60 s break before a load, then the
+helper reads and scrolls like a person. Run them with a 10-minute Bash timeout (`timeout: 600000`) or in the
+background, never the 120 s default: a command killed by a timeout still spends its page load.
+
+When the run has a report folder, set `RESEARCH_RAW_DIR=<report folder>/raw` on every command: each result is
+saved in `raw/<site>/` (`raw_file` in the result, listed in `index.jsonl`), and an exact repeat of a search
+already in the run is refused (read the saved file instead, or search with different wording; `RESEARCH_ALLOW_REPEAT=1` repeats one on purpose).
+
 ```bash
 $R open --wait                                       # -> {"target": "<ID>"} (`stop` when signed out; `window.warning` under 1,200 px, when the sidebar and moderators hide)
 $R topic <ID> "smart kettles"                        # use the topic's brand file in this window (no load)
@@ -39,7 +47,7 @@ $R list | gc                                         # active windows across age
 $R nav <ID> '<reddit url>' | eval <ID> '<js>'        # escape hatches: paced load / read something the commands don't return
 ```
 
-- **Long threads:** `thread` on a thread with hundreds of comments reads for up to about 150 s, so run it with a Bash timeout of 300000 ms (or in the background) rather than the 120 s default.
+- **Long threads:** `thread` on a thread with hundreds of comments reads for up to about 150 s, so the 10-minute timeout above matters most there.
 - **Costs:** `search`, `thread` and `nav` are one page load each. `open`, `back` (in-app restore), `list`, `tally` and `shot` cost nothing. If `back` ever has to fetch the page again it says so (`restored`) and counts it.
 - **Errors** are JSON (`{"error": "..."}`) with exit code 1. Quote URLs and queries, and wrap product names in double quotes for an exact match.
   - **Need the user (stop and tell them, don't retry):** the screen is locked or asleep, the research window is hidden, a `stop` (sign-in, CAPTCHA, block or bot check), or `open` failing to restore the browser.

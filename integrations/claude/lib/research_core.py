@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import base64
 import fcntl
+import functools
 import json
+import re
 import math
 import os
 import random
@@ -157,28 +159,50 @@ _TIMINGS = threading.local()
 def timings_reset() -> None:
     _TIMINGS.t0 = time.monotonic()
     _TIMINGS.steps = {}
+    _TIMINGS.depth = 0
+    _TIMINGS.accounted = 0.0
 
 
 @contextmanager
 def timed(step: str):
-    """Add the wall time of the block to `step` (summed, with a count, when repeated)."""
+    """Add the wall time of the block to `step` (summed, with a count, when repeated). Steps can nest (a
+    wheel inside scroll_to): only the outermost counts toward `accounted`, so `other_s` (total minus
+    accounted: evaluation, waits for the page, fixed pauses) never double-counts."""
     t = time.monotonic()
+    _TIMINGS.depth = getattr(_TIMINGS, "depth", 0) + 1
     try:
         yield
     finally:
+        _TIMINGS.depth -= 1
+        dt = time.monotonic() - t
         steps = getattr(_TIMINGS, "steps", None)
         if steps is not None:
             s, n = steps.get(step, (0.0, 0))
-            steps[step] = (s + time.monotonic() - t, n + 1)
+            steps[step] = (s + dt, n + 1)
+            if _TIMINGS.depth == 0:
+                _TIMINGS.accounted = getattr(_TIMINGS, "accounted", 0.0) + dt
+
+
+def timed_step(step: str):
+    """Decorator form of timed()."""
+    def deco(fn):
+        @functools.wraps(fn)
+        def wrapper(*a, **kw):
+            with timed(step):
+                return fn(*a, **kw)
+        return wrapper
+    return deco
 
 
 def attach_timings(obj):
     """Add {"timings": {"total_s", "steps": {step: {"s", "n"}}}} to a dict result."""
     t0 = getattr(_TIMINGS, "t0", None)
     if isinstance(obj, dict) and t0 is not None:
-        obj["timings"] = {"total_s": round(time.monotonic() - t0, 2),
+        total = time.monotonic() - t0
+        obj["timings"] = {"total_s": round(total, 2),
                           "steps": {k: {"s": round(v[0], 2), "n": v[1]}
-                                    for k, v in _TIMINGS.steps.items()}}
+                                    for k, v in _TIMINGS.steps.items()},
+                          "other_s": round(max(0.0, total - getattr(_TIMINGS, "accounted", 0.0)), 2)}
     return obj
 
 
@@ -487,6 +511,7 @@ class Site:
         pause(random.uniform(0.15, 0.4), fuzz=0)
         return (x, y)
 
+    @timed_step("wheel")
     def wheel(self, target: str, dy: float, x: float | None = None, y: float | None = None,
               area: dict | None = None) -> None:
         """Scroll with the mouse wheel at the pointer's current (persisted) position, as a person would.
@@ -718,6 +743,7 @@ class Site:
             time.sleep(random.uniform(0.03, 0.12))
         self._save_mouse(target, x, y)
 
+    @timed_step("read_pause")
     def read_pause(self, target: str, seconds: float, drift_p: float = 0.35, area: dict | None = None) -> None:
         """Pause about `seconds` (+/-10%) as if reading; sometimes drift the pointer a little midway."""
         total = seconds * random.uniform(0.9, 1.1)
@@ -744,6 +770,7 @@ class Site:
               f" return {{x: r.x, y: r.y, width: r.width, height: r.height, vh: innerHeight, vw: innerWidth, pinned}}; }})()")
         return self.evaluate(target, js)
 
+    @timed_step("scroll_to")
     def scroll_into_view(self, target: str, selector: str, max_steps: int = 25,
                          area: dict | None = None) -> dict | None:
         """Wheel-scroll (at the pointer, inside `area` if given) until the element is comfortably inside
@@ -767,6 +794,7 @@ class Site:
             pause(0.35)
         return self.rect(target, selector)
 
+    @timed_step("scroll_to")
     def scroll_to_top(self, target: str, max_steps: int = 40, area: dict | None = None) -> None:
         for _ in range(max_steps):
             if (self.evaluate(target, "window.scrollY") or 0) <= 0:
@@ -818,7 +846,8 @@ class Site:
         t0 = time.monotonic()
         _LOG.typing = True
         try:
-            self._type_keys(target, text)
+            with timed("typing"):
+                self._type_keys(target, text)
         finally:
             _LOG.typing = False
             log_event("type", target=target, text="<redacted>" if secret else text[:200], chars=len(text),
@@ -1244,6 +1273,60 @@ class Site:
             self.log_page(state)
         return state
 
+    def cookie_present(self, urls: list[str], name: str) -> bool | None:
+        """Whether the browser holds an unexpired cookie `name` for `urls` (over CDP; httpOnly cookies
+        included; no page load). None when it can't be checked."""
+        try:
+            tabs = self.targets()
+            if not tabs:
+                return None
+            res = self.cdp(tabs[0]["id"], "Network.getCookies", {"urls": urls})
+        except (Fail, KeyError, ValueError):
+            return None
+        now = time.time()
+        return any(c.get("name") == name and (c.get("expires", -1) <= 0 or c["expires"] > now)
+                   for c in res.get("cookies", []))
+
+    def typed_search(self, target: str, box: str, query: str, fallback_url: str,
+                     changed_js: str | None = None) -> dict:
+        """Search like a person: click the site's search box (`box`, a CSS selector), replace what's in it,
+        type the query and press Enter; when the box isn't on the page, load `fallback_url` instead. One
+        counted, paced load either way. Returns the page state with `via` (typed / url) and `stop` when a
+        wall or sign-out shows. `changed_js` overrides the "results are showing" check (default: the URL
+        changed and the page finished loading)."""
+        full_id = self.resolve(target)
+        self.ensure_visible(full_id)
+        host = self.evaluate(full_id, "location.hostname") or ""
+        on_site = any(host == h or host.endswith("." + h) for h in self.hosts)
+        if not (on_site and self.evaluate(full_id, f"!!document.querySelector({json.dumps(box)})")):
+            page = self.nav(target, fallback_url)
+            page["via"] = "url"
+            return page
+        loads = self._count_load(full_id)
+        with timed("pace_wait"):
+            self._pace()
+        before = self.evaluate(full_id, "location.href")
+        if not self.click_on(full_id, box, look=random.uniform(0.3, 0.7)):
+            self.uncount_load(full_id)
+            raise Fail("the search box isn't visible")
+        pause(0.4)
+        self.evaluate(full_id, f"(() => {{ const i = document.querySelector({json.dumps(box)}); if (i && i.value) i.select(); }})()")
+        self.type_text(full_id, query)
+        pause(random.uniform(0.5, 1.0))
+        self.key(full_id, "Enter")
+        with timed("page_load"):
+            self.wait_for(full_id, changed_js or f"location.href !== {json.dumps(before)} && document.readyState === 'complete'",
+                          timeout=25, settle=self.settle)
+        page = self.evaluate(full_id, self.page_state_js) or {}
+        page.update(loads=loads, via="typed")
+        reason = self.stop_reason(page, self)
+        if reason:
+            page["stop"] = reason
+            self.record_stop(full_id, page)
+        else:
+            self.log_page(page)
+        return page
+
     def log_page(self, state: dict, **extra) -> None:
         """Log the page a load landed on (url, title, signed-in and block state)."""
         log_event("page", **{k: state.get(k) for k in ("url", "title", "loggedIn", "blocked", "blocked_by",
@@ -1388,6 +1471,103 @@ def common_cli(site: Site, cmd: str, args: list[str]):
     return NotImplemented
 
 
+# --- per-run raw results: RESEARCH_RAW_DIR=<report>/raw saves every result to raw/<site>/ ----------------
+# Each command's full result goes to raw/<site>/<NNN>_<HHMMSS>_<cmd>.json, with one line per command in
+# raw/<site>/index.jsonl (cmd, args, file, url, ok, partial). The record is complete by construction, so a
+# verifier can check claims against exactly what was read; research_signals.py computes metrics from it.
+_PARTIAL_KEYS = ("truncated", "hidden_reply_sections", "moderators_truncated", "ended")
+
+
+def raw_dir(site: str | None = None) -> Path | None:
+    root = os.environ.get("RESEARCH_RAW_DIR")
+    if not root:
+        return None
+    site = site or getattr(_LOG, "site", None)
+    return Path(root).expanduser() / site if site else None
+
+
+def _raw_index(d: Path) -> list[dict]:
+    try:
+        return [json.loads(l) for l in (d / "index.jsonl").read_text().splitlines() if l.strip()]
+    except (OSError, ValueError):
+        return []
+
+
+def _norm_args(args: list) -> list[str]:
+    """A command's arguments minus the window ID (first argument), whitespace and case folded."""
+    rest = [str(a) for a in args[1:]] if args else []
+    out, skip = [], False
+    for a in rest:  # --max N only changes how much is read, not what's searched
+        if skip:
+            skip = False
+            continue
+        if a in ("--max", "--max-results"):
+            skip = True
+            continue
+        out.append(" ".join(a.lower().split()))
+    return out
+
+
+def repeat_search(cmd: str, args: list) -> dict | None:
+    """The earlier index entry when this exact search already ran in this run (any agent)."""
+    d = raw_dir()
+    if d is None or cmd not in ("search",) or len(args) < 2 or os.environ.get("RESEARCH_ALLOW_REPEAT") == "1":
+        return None
+    want = _norm_args(args)
+    # A verification pass (RESEARCH_RAW_DIR=<report>/raw/verify) also checks the research agents' own searches.
+    dirs = [d] + ([d.parent.parent / d.name] if d.parent.name == "verify" else [])
+    for dd in dirs:
+        hit = next((e for e in _raw_index(dd) if e.get("cmd") == cmd and e.get("ok") and e.get("nargs") == want), None)
+        if hit:
+            return {**hit, "file": str(dd.relative_to(d.parent.parent) / hit["file"]) if dd != d else hit["file"]}
+    return None
+
+
+def _partial_flags(result) -> list[str]:
+    flags = set()
+
+    def walk(o, depth=0):
+        if depth > 3:
+            return
+        if isinstance(o, dict):
+            for k, v in o.items():
+                if k in _PARTIAL_KEYS and v and not (k == "ended" and v in ("no_more", "end_marker")):
+                    flags.add(k if k != "ended" else f"ended:{v}")
+                walk(v, depth + 1)
+        elif isinstance(o, list):
+            for v in o[:200]:
+                walk(v, depth + 1)
+    walk(result)
+    return sorted(flags)
+
+
+def save_raw(cmd: str, args: list, result) -> str | None:
+    """Save a command's result in the run's raw folder (never raises). Returns the file name."""
+    d = raw_dir()
+    if d is None or cmd in ("log", "list", "gc", "close", "eval", "open") or not isinstance(result, dict):
+        return None
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+        n = len(_raw_index(d)) + 1
+        ok = "error" not in result
+        name = f"{n:03d}_{time.strftime('%H%M%S')}_{re.sub(r'[^a-z0-9_]+', '-', cmd.lower())}.json" if ok else None
+        if name:
+            (d / name).write_text(json.dumps({"cmd": cmd, "args": [str(a) for a in args],
+                                              "saved_at": time.strftime("%Y-%m-%dT%H:%M:%S"), "result": result},
+                                             ensure_ascii=False, indent=1, default=str))
+        page = result.get("page") if isinstance(result.get("page"), dict) else {}
+        entry = {"n": n, "t": time.strftime("%Y-%m-%dT%H:%M:%S"), "cmd": cmd, "args": [str(a)[:300] for a in args],
+                 "nargs": _norm_args(args), "ok": ok, "file": name, "url": page.get("url"),
+                 "partial": _partial_flags(result)}
+        if not ok:
+            entry["error"] = str(result.get("error"))[:300]
+        with open(d / "index.jsonl", "a") as fh:
+            fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        return name
+    except Exception:  # noqa: BLE001 - saving must never break research
+        return None
+
+
 def begin_command(cmd: str, args: list) -> None:
     """Start a command's log context (CLI and MCP)."""
     _LOG.cmd, _LOG.target, _LOG.stop_logged, _LOG.sel = cmd, None, False, None
@@ -1424,14 +1604,23 @@ def run_cli(doc: str, dispatch: Callable[[str, list[str]], object], argv: list[s
     cmd = argv[1]
     begin_command(cmd, argv[2:])
     try:
+        prior = repeat_search(cmd, argv[2:])
+        if prior:
+            raise Fail(f"this exact search already ran in this run (raw file {prior.get('file')}): read that "
+                       "file, or search with different wording. To repeat it on purpose (e.g. a later Latest "
+                       "search for new posts), set RESEARCH_ALLOW_REPEAT=1 on this command.")
         result = dispatch(cmd, argv[2:])
         if result is NotImplemented:
             raise Fail(doc.strip())
         end_command(attach_timings(result))
+        saved = save_raw(cmd, argv[2:], result)
+        if saved:
+            result["raw_file"] = saved
         print(json.dumps(result, indent=2, ensure_ascii=False))
         return 0
     except Fail as e:
         out = attach_timings({"error": str(e)})
         end_command(out)
+        save_raw(cmd, argv[2:], out)
         print(json.dumps(out, ensure_ascii=False))
         return 1

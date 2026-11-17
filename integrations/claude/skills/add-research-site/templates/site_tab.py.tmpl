@@ -7,6 +7,7 @@ this site's research needs (search results, product pages, reviews, Q&A) and kee
 CLI (each command prints JSON):
 
     {{SLUG}}_tab.py open [--wait [SECONDS]]      claim a window -> {"target": ID} (`stop` when signed out)
+    {{SLUG}}_tab.py search ID QUERY             typed into the search box on {{DOMAIN}}, else by URL (1 load)
     {{SLUG}}_tab.py nav ID URL                   paced page load on {{DOMAIN}}
     {{SLUG}}_tab.py shot ID [--out PATH]         screenshot of the window
     {{SLUG}}_tab.py eval ID JS                   read something off the page
@@ -15,27 +16,35 @@ CLI (each command prints JSON):
 Environment ({{PREFIX}}_*): INSTANCE ({{SLUG}}), MAX (3 windows), GAP (5 s between loads),
 MAX_LOADS (40), STATE (/tmp/chrome-agent-{{SLUG}}).
 """
-import os
+import json
+import random
 import sys
 import time
 from pathlib import Path
+from urllib.parse import quote_plus
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parents[2] / "lib"))
 from research_core import BLOCK_CHECK_JS, Fail, Site, common_cli, opt, run_cli  # noqa: E402
 
+# Signed-in checks from onboarding step 6 (scaffold --account-selector / --session-cookie fill these in).
+ACCOUNT_SELECTOR = {{ACCOUNT_SELECTOR}}  # an element only a signed-in page shows (the account menu), or None
+SESSION_COOKIE = {{SESSION_COOKIE}}      # the site's signed-in cookie (httpOnly is fine), or None
+SEARCH_BOX = None        # TODO: CSS selector of the site's search input
+SEARCH_URL = "https://www.{{DOMAIN}}/search?q={q}"  # TODO: the site's search URL (fallback when the box isn't there)
+
 # Where the tab is, whether the site shows the signed-in account, and whether a wall is up.
-# TODO: replace the signed-in selectors with the site's own account menu / sign-in link.
 PAGE_STATE_JS = r"""(() => {
+  const acct = """ + json.dumps(ACCOUNT_SELECTOR) + r""";
   const header = (document.querySelector("header")?.innerText || "").toLowerCase();
-  const loggedIn = /\bsign in\b|\blog in\b/.test(header) ? false : null;
+  const loggedIn = (acct && document.querySelector(acct)) ? true : (/\bsign in\b|\blog in\b/.test(header) ? false : null);
   return Object.assign({url: location.href, title: document.title, loggedIn}, """ + BLOCK_CHECK_JS + r""");
 })()"""
 
 
 def _cookie_session(site: Site) -> bool | None:
-    """Signed in? From the browser's cookies (no page load). TODO: name the site's session cookie."""
-    return None
+    """Signed in? From the browser's cookies (no page load); None when no cookie is named."""
+    return site.cookie_present(["https://www.{{DOMAIN}}/", "https://{{DOMAIN}}/"], SESSION_COOKIE) if SESSION_COOKIE else None
 
 
 def _stop_reason(state: dict, site: Site) -> str | None:
@@ -62,6 +71,18 @@ SITE.min_width = 1200
 INSTANCE = SITE.instance
 
 
+def search(target: str, query: str) -> dict:
+    """Typed into the search box like a person (pinned headers are handled), else by URL. TODO: read the
+    results with a js/search_results.js reader and return them."""
+    if not SEARCH_BOX:
+        raise Fail("search isn't set up yet: fill in SEARCH_BOX and SEARCH_URL")
+    page = SITE.typed_search(target, SEARCH_BOX, query, SEARCH_URL.format(q=quote_plus(query)))
+    if "stop" in page:
+        return {"page": page, "results": []}
+    SITE.read_pause(SITE.resolve(target), random.uniform(1.5, 3))
+    return {"page": page, "results": [], "note": "TODO: results reader"}
+
+
 def shot(target: str, out: str | None = None) -> dict:
     full_id = SITE.resolve(target)
     path = Path(out or SITE.state / "shots" / f"{int(time.time())}.jpg")
@@ -70,6 +91,10 @@ def shot(target: str, out: str | None = None) -> dict:
 
 
 def _dispatch(cmd: str, args: list[str]):
+    if cmd == "search":
+        if len(args) < 2:
+            raise Fail("usage: search ID QUERY")
+        return search(args[0], " ".join(args[1:]))
     if cmd == "shot" and args:
         out = opt(args, "--out")
         return shot(args[0], out if isinstance(out, str) else None)

@@ -21,8 +21,13 @@ H=~/.claude/skills/x-research/scripts/x_tab.py
 
 ## Commands
 
-`search`, `post` and `profile` each take 1–3 minutes (pacing, reading and scrolling): run them with a 10-minute
-Bash timeout (`timeout: 600000`) or in the background. A run killed by a timeout still spends its load.
+Commands that load a page take 1–3 minutes: pacing sometimes adds a 20–60 s break before a load, then the
+helper reads and scrolls like a person. Run them with a 10-minute Bash timeout (`timeout: 600000`) or in the
+background, never the 120 s default: a command killed by a timeout still spends its page load.
+
+When the run has a report folder, set `RESEARCH_RAW_DIR=<report folder>/raw` on every command: each result is
+saved in `raw/<site>/` (`raw_file` in the result, listed in `index.jsonl`), and an exact repeat of a search
+already in the run is refused (read the saved file instead, or search with different wording; `RESEARCH_ALLOW_REPEAT=1` repeats one on purpose).
 
 ```bash
 $H open --wait                                   # -> {"target": "<ID>"}
