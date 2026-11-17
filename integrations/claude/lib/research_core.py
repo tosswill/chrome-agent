@@ -739,13 +739,16 @@ class Site:
               f" const r = e.getBoundingClientRect(), s = getComputedStyle(e);"
               f" return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none'; }});"
               f" if (!el) return null; const r = el.getBoundingClientRect();"
-              f" return {{x: r.x, y: r.y, width: r.width, height: r.height, vh: innerHeight, vw: innerWidth}}; }})()")
+              f" let pinned = false; for (let e = el; e && e !== document.body; e = e.parentElement) {{"
+              f" const p = getComputedStyle(e).position; if (p === 'fixed' || p === 'sticky') {{ pinned = true; break; }} }}"
+              f" return {{x: r.x, y: r.y, width: r.width, height: r.height, vh: innerHeight, vw: innerWidth, pinned}}; }})()")
         return self.evaluate(target, js)
 
     def scroll_into_view(self, target: str, selector: str, max_steps: int = 25,
                          area: dict | None = None) -> dict | None:
         """Wheel-scroll (at the pointer, inside `area` if given) until the element is comfortably inside
         the viewport."""
+        last_y = None
         for _ in range(max_steps):
             r = self.rect(target, selector)
             if r is None:
@@ -753,6 +756,12 @@ class Site:
             top, bottom = r["y"], r["y"] + min(r["height"], r["vh"] * 0.6)
             if top >= 60 and bottom <= r["vh"] - 20:
                 return r
+            on_screen = r["y"] >= 0 and r["y"] + r["height"] <= r["vh"]
+            # A pinned header element (search box, tabs) stays put however far the page scrolls: when it's on
+            # screen, use it there. Same when a scroll didn't move it (the page can't scroll further).
+            if on_screen and (r.get("pinned") or (last_y is not None and abs(r["y"] - last_y) < 2)):
+                return r
+            last_y = r["y"]
             step = max(-700, min(700, top - r["vh"] * 0.3))
             self.wheel(target, step, area=area)
             pause(0.35)
@@ -815,24 +824,76 @@ class Site:
             log_event("type", target=target, text="<redacted>" if secret else text[:200], chars=len(text),
                       secs=round(time.monotonic() - t0, 1))
 
-    def _type_keys(self, target: str, text: str) -> None:
+    @classmethod
+    def key_plan(cls, text: str) -> list[dict]:
+        """The CDP steps for typing `text` with uneven, human timing: key down, a short hold, key up, then a
+        gap (longer after spaces, a rare hesitation). Characters without a key (accents) are inserted."""
+        steps = []
         for ch in text:
             if ch.isascii() and ch.isalpha():
                 code, vk, shift = f"Key{ch.upper()}", ord(ch.upper()), ch.isupper()
             elif ch.isascii() and ch.isdigit():
                 code, vk, shift = f"Digit{ch}", ord(ch), False
-            elif ch in self._PUNCT:
-                code, vk, shift = self._PUNCT[ch]
+            elif ch in cls._PUNCT:
+                code, vk, shift = cls._PUNCT[ch]
             else:
-                self.cdp(target, "Input.insertText", {"text": ch})
+                steps.append({"method": "Input.insertText", "params": {"text": ch}, "sleep": random.uniform(0.08, 0.2)})
                 continue
-            self.key(target, ch, code, vk, text=ch, modifiers=8 if shift else 0)
+            mods = 8 if shift else 0
+            steps.append({"method": "Input.dispatchKeyEvent", "sleep": random.uniform(0.03, 0.09),
+                          "params": {"type": "keyDown", "key": ch, "code": code, "windowsVirtualKeyCode": vk,
+                                     "modifiers": mods, "text": ch, "unmodifiedText": ch}})
             gap = min(random.lognormvariate(-2.6, 0.6), 0.6)
             if ch == " ":
                 gap += random.uniform(0.05, 0.25)
             if random.random() < 0.04:
                 gap += random.uniform(0.4, 1.2)
-            time.sleep(gap)
+            steps.append({"method": "Input.dispatchKeyEvent", "sleep": gap,
+                          "params": {"type": "keyUp", "key": ch, "code": code, "windowsVirtualKeyCode": vk,
+                                     "modifiers": mods}})
+        return steps
+
+    def _type_keys(self, target: str, text: str) -> None:
+        steps = self.key_plan(text)
+        if self.burst(target, steps):
+            return
+        for st in steps:  # no batch sender available: one command at a time (slower, same events)
+            self.cdp(target, st["method"], st["params"])
+            time.sleep(st["sleep"])
+
+    @staticmethod
+    def _burst_python() -> str | None:
+        """chrome-agent's own interpreter (it has the CDP client), from the launcher's shebang."""
+        try:
+            first = Path(BIN).read_text(errors="replace").split("\n", 1)[0]
+        except OSError:
+            return None
+        exe = first[2:].strip().split()[0] if first.startswith("#!") else ""
+        return exe if exe and Path(exe).exists() else None
+
+    def burst(self, target: str, steps: list[dict]) -> bool:
+        """Replay timed CDP steps over one connection (lib/cdp_burst.py). False when that isn't possible
+        before anything was sent (no interpreter or port), so the caller can fall back; raises Fail when it
+        breaks part-way, since resending would type the text twice."""
+        exe, inst = self._burst_python(), self._status() or {}
+        if not exe or not inst.get("port") or not steps:
+            return False
+        spec = {"port": inst["port"], "target": self.resolve(target), "steps": steps}
+        budget = sum(s.get("sleep", 0) for s in steps) + 20 + 0.05 * len(steps)
+        try:
+            p = subprocess.run([exe, str(Path(__file__).with_name("cdp_burst.py"))], input=json.dumps(spec),
+                               capture_output=True, text=True, timeout=budget)
+        except subprocess.TimeoutExpired:
+            raise Fail(f"typing burst timed out after {budget:.0f} s")
+        try:
+            res = json.loads((p.stdout or "").strip().splitlines()[-1])
+        except (ValueError, IndexError):
+            res = {"error": (p.stderr or "no output").strip()[-300:], "sent": None}
+        if "error" in res:
+            if not res.get("sent"):
+                return False
+            raise Fail(f"typing stopped after {res['sent']} of {len(steps)} key events: {res['error']}")
+        return True
 
     def covered_by(self, target: str, selector: str) -> dict | None:
         """What sits on top of `selector`'s center (a promo dialog, a consent banner, a login nag), or None

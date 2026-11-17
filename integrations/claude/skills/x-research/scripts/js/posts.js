@@ -17,12 +17,27 @@
     }
     return out;
   };
+  // Badge: blue = paid Premium (brands often have it too), gold = verified organization, grey = government.
+  const badge = (icon) => {
+    if (!icon) return null;
+    if (icon.querySelector("linearGradient")) return "gold";
+    const c = getComputedStyle(icon).color;
+    return /29, 155, 240/.test(c) ? "blue" : (/130, 154, 171/.test(c) ? "grey" : "other: " + c);
+  };
+  // Post text with links as written: X splits URLs into hidden spans, so innerText gives "https:// site.com/ …".
+  const textOf = (el) => {
+    if (!el) return "";
+    const c = el.cloneNode(true);
+    c.querySelectorAll("a").forEach(a => a.replaceWith(document.createTextNode(a.textContent.replace(/\s+/g, ""))));
+    c.querySelectorAll("img[alt]").forEach(i => i.replaceWith(document.createTextNode(i.alt)));  // emoji
+    return c.textContent;
+  };
   const author = (root) => {
     const un = root.querySelector("[data-testid=User-Name]");
     if (!un) return {};
     const handle = [...un.querySelectorAll("a[href^='/']")].map(a => a.getAttribute("href")).find(h => /^\/\w+$/.test(h));
     return {name: (un.innerText.split("\n")[0] || "").trim(), handle: handle ? "@" + handle.slice(1) : null,
-            verified: !!un.querySelector("[data-testid=icon-verified]")};
+            verified: !!un.querySelector("[data-testid=icon-verified]"), badge: badge(un.querySelector("[data-testid=icon-verified]"))};
   };
   const out = [];
   for (const a of document.querySelectorAll("article[data-testid=tweet]")) {
@@ -38,7 +53,7 @@
       url: link ? "https://x.com" + link.getAttribute("href").replace(/\/(analytics|media_tags|photo\/\d+)$/, "") : null,
       ...author(a),
       date: time ? time.getAttribute("datetime") : null,
-      text: textEl ? textEl.innerText : "",
+      text: textOf(textEl),
       lang: textEl ? textEl.getAttribute("lang") : null,
       ...counts(a.querySelector("[role=group]")?.getAttribute("aria-label")),
       media: {photos: a.querySelectorAll("[data-testid=tweetPhoto] img").length,
@@ -51,8 +66,9 @@
     };
     if (quoteBox) {
       const qt = quoteBox.querySelector("[data-testid=tweetText]");
-      p.quoted = {...author(quoteBox), text: qt ? qt.innerText : "", date: quoteBox.querySelector("time")?.getAttribute("datetime") || null};
+      p.quoted = {...author(quoteBox), text: textOf(qt), date: quoteBox.querySelector("time")?.getAttribute("datetime") || null};
     }
+    p.grok = p.handle === "@grok";
     out.push(p);
   }
   return out;

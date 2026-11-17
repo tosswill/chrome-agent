@@ -110,6 +110,40 @@ def _handle(h: str) -> str:
     return m.group(1)
 
 
+_HYPHENATED = re.compile(r'(?<![\w:"-])([A-Za-z0-9]+(?:-[A-Za-z0-9]+)+)(?![\w"])')
+
+
+def _quote_hyphenated(query: str) -> tuple[str, list[str]]:
+    """X reads an unquoted hyphen as NOT ("MS-01" searches MS without 01). Quote hyphenated words outside
+    quotes and operators (since:2026-01-01 and -filter:replies are left alone)."""
+    parts, quoted = query.split('"'), []
+    for i in range(0, len(parts), 2):  # even parts are outside quotes
+        def q(m):
+            quoted.append(m.group(1))
+            return f'"{m.group(1)}"'
+        parts[i] = _HYPHENATED.sub(q, parts[i])
+    return '"'.join(parts), quoted
+
+
+_GENERIC = set("""mini homelab home server servers proxmox review reviews best with from that this what price prices
+issue issues problem problems reliability power idle died dead failed failing crash crashing memory ddr4 ddr5 cluster
+setup build worth vs lang since until filter""".split())
+
+
+def _query_terms(query: str) -> list[str]:
+    """Distinctive words in the query (brands, models) for spotting accounts named after them."""
+    words = re.findall(r'(?<![\w:-])[A-Za-z][A-Za-z0-9]{3,}', re.sub(r'\S+:\S+', ' ', query))
+    return sorted({w.lower() for w in words} - _GENERIC)
+
+
+def _flag_name_matches(posts: list[dict], terms: list[str]) -> None:
+    for p in posts:
+        hay = ((p.get("handle") or "") + " " + (p.get("name") or "")).lower()
+        hit = next((t for t in terms if t in hay), None)
+        if hit:
+            p["name_matches_query"] = hit
+
+
 def _merge(seen: dict, posts: list[dict]) -> int:
     new = 0
     for p in posts:
@@ -129,12 +163,14 @@ def _wait_posts(full_id: str, timeout: float = 15) -> str:
     return "posts" if SITE.evaluate(full_id, _POSTS_READY) else "empty"
 
 
-def _collect(full_id: str, limit: int, stop_js: str | None = None) -> tuple[list[dict], int]:
+def _collect(full_id: str, limit: int, stop_js: str | None = None) -> tuple[list[dict], int, str]:
     """Read the rendered posts, wheel down like a reader, and read again until `limit` posts, two scrolls with
     nothing new, or `stop_js` is true (e.g. the replies ran out). X unloads posts that scroll away, so posts
-    are merged by URL. Returns (posts in page order, scrolls)."""
+    are merged by URL. Returns (posts in page order, scrolls, why it stopped: "limit", "no_more" (two scrolls
+    brought nothing new: the results ran out or X stopped loading), "end_marker" or "scroll_cap")."""
     seen: dict = {}
     stale = scrolls = 0
+    ended = None
     _merge(seen, SITE.evaluate(full_id, _js("posts.js")) or [])
     while len(seen) < limit and stale < 2 and scrolls < 40:
         SITE.read_pause(full_id, random.uniform(1.0, 2.2))
@@ -148,8 +184,11 @@ def _collect(full_id: str, limit: int, stop_js: str | None = None) -> tuple[list
             pause(0.6)
         stale = 0 if _merge(seen, SITE.evaluate(full_id, _js("posts.js")) or []) else stale + 1
         if stop_js and SITE.evaluate(full_id, stop_js):
+            ended = "end_marker"
             break
-    return list(seen.values())[:limit], scrolls
+    if ended is None:
+        ended = "limit" if len(seen) >= limit else ("no_more" if stale >= 2 else "scroll_cap")
+    return list(seen.values())[:limit], scrolls, ended
 
 
 def _spa_load(full_id: str, before: str, act) -> dict:
@@ -187,6 +226,7 @@ def _click_tab(full_id: str, label: str) -> bool:
 def search(target: str, query: str, latest: bool = False, limit: int = 40) -> dict:
     """Search like a person: typed into the search box on an x.com page, else by URL. Then the Latest tab when
     asked, and scroll to collect `limit` posts. One load."""
+    query, quoted = _quote_hyphenated(query)
     full_id = SITE.resolve(target)
     SITE.ensure_visible(full_id)
     here = SITE.evaluate(full_id, "location.hostname") or ""
@@ -210,21 +250,30 @@ def search(target: str, query: str, latest: bool = False, limit: int = 40) -> di
         page["via"] = "url"
     if "stop" in page:
         return {"page": page, "posts": []}
-    if latest and "f=live" not in (SITE.evaluate(full_id, "location.href") or ""):
-        if not _click_tab(full_id, "Latest"):
-            page["warning"] = "couldn't open the Latest tab; these are Top results"
+    # A search typed on a results page keeps that page's tab (Latest stays Latest): set the tab explicitly.
+    want = "Latest" if latest else "Top"
+    if not _click_tab(full_id, want):
+        page["warning"] = f"couldn't open the {want} tab"
+    page["url"] = SITE.evaluate(full_id, "location.href")
     state = _wait_posts(full_id)
     if state != "posts":
         return {"page": page, "posts": [], "count": 0,
                 "note": "no posts" if state == "empty" else "posts didn't load (screenshot it and tell the user)"}
     SITE.read_pause(full_id, random.uniform(1.5, 3))
-    posts, scrolls = _collect(full_id, limit)
-    tab = "latest" if "f=live" in (SITE.evaluate(full_id, "location.href") or "") else "top"
+    posts, scrolls, ended = _collect(full_id, limit)
+    tab = SITE.evaluate(full_id, "[...document.querySelectorAll('[role=tab]')].find(t => t.getAttribute('aria-selected') === 'true')?.innerText.trim().toLowerCase()") or None
+    _flag_name_matches(posts, _query_terms(query))
     _remember(full_id, posts)
-    return {"page": page, "tab": tab, "query": query, "posts": posts, "count": len(posts), "scrolls": scrolls,
-            "summary": _summary(posts),
-            "note": ("Top ranks by engagement (and favors Premium accounts); Latest is newest first. `promoted` posts "
-                     "are ads. Counts are as rendered (X rounds to K/M above 10,000 in some views).")}
+    res = {"page": page, "tab": tab, "query": query, "posts": posts, "count": len(posts), "scrolls": scrolls,
+           "ended": ended, "summary": _summary(posts),
+           "note": ("Top ranks by engagement (and favors Premium accounts); Latest is newest first. `promoted` posts "
+                    "are ads. `name_matches_query` marks accounts named after a search term (often the brand). "
+                    "`ended`: no_more means X showed nothing further after two scrolls.")}
+    if quoted:
+        res["quoted_terms"] = quoted
+    if tab and tab != want.lower():
+        res["warning"] = f"results are on the {tab} tab, not {want}"
+    return res
 
 
 def _summary(posts: list[dict]) -> dict:
@@ -233,6 +282,8 @@ def _summary(posts: list[dict]) -> dict:
             "verified_authors": len({p.get("handle") for p in posts if p.get("verified")}),
             "promoted": sum(1 for p in posts if p.get("promoted")),
             "with_community_note": sum(1 for p in posts if p.get("community_note")),
+            "name_matches_query": len({p.get("handle") for p in posts if p.get("name_matches_query")}),
+            "grok": sum(1 for p in posts if p.get("grok")),
             "oldest": dates[0] if dates else None, "newest": dates[-1] if dates else None}
 
 
@@ -274,18 +325,30 @@ def post(target: str, url: str, limit: int = 40) -> dict:
     SITE.read_pause(full_id, random.uniform(2, 3.5))
     end_js = ("[...document.querySelectorAll('button, [role=button]')].some(b => /^show (probable spam|additional replies"
               "|more replies)/i.test(b.innerText.trim()))")
-    posts, scrolls = _collect(full_id, limit + 10, stop_js=end_js)
+    posts, scrolls, ended = _collect(full_id, limit + 10, stop_js=end_js)
     main = next((p for p in posts if (p.get("url") or "").endswith(f"/status/{sid}")), None)
     idx = posts.index(main) if main else -1
     hidden = SITE.evaluate(full_id, "[...document.querySelectorAll('button, [role=button]')].map(b => b.innerText.trim())"
                            ".filter(t => /^show (probable spam|additional replies|more replies)/i.test(t))") or []
     SITE.scroll_to_top(full_id)
-    replies = posts[idx + 1:][:limit] if idx >= 0 else posts[:limit]
-    return {"page": page, "thread_above": posts[:idx] if idx > 0 else [], "post": main, "replies": replies,
-            "replies_read": len(replies), "scrolls": scrolls, "hidden_reply_sections": hidden,
-            "summary": _summary(replies),
+    thread_below, replies = _split_thread(main, posts[idx + 1:] if idx >= 0 else posts)
+    replies = replies[:limit]
+    me = (main or {}).get("handle")
+    return {"page": page, "thread_above": posts[:idx] if idx > 0 else [], "post": main, "thread_below": thread_below,
+            "replies": replies, "replies_read": len(replies), "self_replies": sum(1 for r in replies if me and r.get("handle") == me),
+            "scrolls": scrolls, "ended": ended, "hidden_reply_sections": hidden, "summary": _summary(replies),
             "note": ("Replies are ranked by X (Premium accounts are boosted); `reply_count` on the post is the total. "
                      "Low-quality or 'probable spam' replies sit behind `hidden_reply_sections` and aren't read.")}
+
+
+def _split_thread(main: dict | None, after: list[dict]) -> tuple[list[dict], list[dict]]:
+    """The author's own continuation right under the post (a thread) vs replies from others (and later
+    author replies, counted as `self_replies`)."""
+    me = (main or {}).get("handle")
+    i = 0
+    while me and i < len(after) and after[i].get("handle") == me:
+        i += 1
+    return after[:i], after[i:]
 
 
 def profile(target: str, handle: str, limit: int = 20) -> dict:
@@ -303,7 +366,7 @@ def profile(target: str, handle: str, limit: int = 20) -> dict:
     SITE.read_pause(full_id, random.uniform(1.5, 3))
     posts = []
     if _wait_posts(full_id, timeout=10) == "posts":
-        posts, _ = _collect(full_id, limit)
+        posts, _, _ = _collect(full_id, limit)
     SITE.scroll_to_top(full_id)
     own = [p for p in posts if (p.get("handle") or "").lower() == f"@{h}".lower() and not p.get("reposted_by")]
     return {"page": page, "profile": info, "posts": posts,

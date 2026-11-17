@@ -780,23 +780,7 @@ def _type_text(full_id: str, text: str) -> None:
     """Type `text` key by key with uneven, human timing (short gaps, longer after spaces, rare pauses).
     Callers check focus before typing and the field's value afterwards: a stray key on a watch page
     is a player shortcut (f = fullscreen, m = mute, k = play, c = captions, t = theater)."""
-    for ch in text:
-        if ch.isascii() and ch.isalpha():
-            code, vk, shift = f"Key{ch.upper()}", ord(ch.upper()), ch.isupper()
-        elif ch.isascii() and ch.isdigit():
-            code, vk, shift = f"Digit{ch}", ord(ch), False
-        elif ch in _PUNCT:
-            code, vk, shift = _PUNCT[ch]
-        else:
-            SITE.cdp(full_id, "Input.insertText", {"text": ch})  # e.g. accented letters (an IME-like input)
-            continue
-        _key(full_id, ch, code, vk, text=ch, modifiers=8 if shift else 0)
-        gap = min(random.lognormvariate(-2.6, 0.6), 0.6)
-        if ch == " ":
-            gap += random.uniform(0.05, 0.25)
-        if random.random() < 0.04:
-            gap += random.uniform(0.4, 1.2)  # a moment's hesitation
-        time.sleep(gap)
+    SITE.type_text(full_id, text)  # keystrokes in one burst, human timing (research_core.key_plan)
 
 
 _SEARCH_BOX = "input[name='search_query'], textarea[name='search_query']"
