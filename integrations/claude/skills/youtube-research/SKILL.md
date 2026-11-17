@@ -32,6 +32,10 @@ Y=~/.claude/skills/youtube-research/scripts/youtube_tab.py
 
 ## Commands
 
+Commands that load a page take 1–3 minutes: pacing sometimes adds a 20–60 s break before a load, then the
+helper reads and scrolls like a person. Run them with a 10-minute Bash timeout (`timeout: 600000`) or in the
+background, never the 120 s default: a command killed by a timeout still spends its page load.
+
 ```bash
 $Y open --wait                                   # -> {"target": "<ID>"}; `stop` when signed out, `window.warning` when narrow
 $Y topic <ID> "smart kettles"                    # use the topic's brand file in this window (no load)

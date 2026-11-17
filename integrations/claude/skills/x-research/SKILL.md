@@ -21,8 +21,9 @@ H=~/.claude/skills/x-research/scripts/x_tab.py
 
 ## Commands
 
-`search`, `post` and `profile` each take 1–3 minutes (pacing, reading and scrolling): run them with a 10-minute
-Bash timeout (`timeout: 600000`) or in the background. A run killed by a timeout still spends its load.
+Commands that load a page take 1–3 minutes: pacing sometimes adds a 20–60 s break before a load, then the
+helper reads and scrolls like a person. Run them with a 10-minute Bash timeout (`timeout: 600000`) or in the
+background, never the 120 s default: a command killed by a timeout still spends its page load.
 
 ```bash
 $H open --wait                                   # -> {"target": "<ID>"}

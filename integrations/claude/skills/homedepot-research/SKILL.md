@@ -19,6 +19,10 @@ H=~/.claude/skills/homedepot-research/scripts/homedepot_tab.py
 
 ## Commands
 
+Commands that load a page take 1–3 minutes: pacing sometimes adds a 20–60 s break before a load, then the
+helper reads and scrolls like a person. Run them with a 10-minute Bash timeout (`timeout: 600000`) or in the
+background, never the 120 s default: a command killed by a timeout still spends its page load.
+
 ```bash
 $H open --wait                                  # -> {"target": "<ID>"}
 $H search <ID> "cordless drill"                 # typed into the search box on homedepot.com, else by URL (1 load)

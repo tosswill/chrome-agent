@@ -206,3 +206,15 @@ def test_run_cli_adds_timings_on_failure(capsys):
     assert C.run_cli("doc", dispatch, ["x", "open"]) == 1
     out = json.loads(capsys.readouterr().out)
     assert out["error"] == "hidden" and "visibility_check" in out["timings"]["steps"]
+
+
+def test_nested_timings_not_double_counted():
+    import time as _t
+    import research_core as rc
+    rc.timings_reset()
+    with rc.timed("scroll_to"):
+        with rc.timed("wheel"):
+            _t.sleep(0.05)
+    out = rc.attach_timings({})["timings"]
+    assert out["steps"]["scroll_to"]["n"] == 1 and out["steps"]["wheel"]["n"] == 1
+    assert out["other_s"] < 0.04  # the wheel is inside scroll_to, counted once
