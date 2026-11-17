@@ -1511,7 +1511,7 @@ def _norm_args(args: list) -> list[str]:
 def repeat_search(cmd: str, args: list) -> dict | None:
     """The earlier index entry when this exact search already ran in this run (any agent)."""
     d = raw_dir()
-    if d is None or cmd not in ("search",) or len(args) < 2:
+    if d is None or cmd not in ("search",) or len(args) < 2 or os.environ.get("RESEARCH_ALLOW_REPEAT") == "1":
         return None
     want = _norm_args(args)
     # A verification pass (RESEARCH_RAW_DIR=<report>/raw/verify) also checks the research agents' own searches.
@@ -1607,7 +1607,8 @@ def run_cli(doc: str, dispatch: Callable[[str, list[str]], object], argv: list[s
         prior = repeat_search(cmd, argv[2:])
         if prior:
             raise Fail(f"this exact search already ran in this run (raw file {prior.get('file')}): read that "
-                       "file, or search with different wording")
+                       "file, or search with different wording. To repeat it on purpose (e.g. a later Latest "
+                       "search for new posts), set RESEARCH_ALLOW_REPEAT=1 on this command.")
         result = dispatch(cmd, argv[2:])
         if result is NotImplemented:
             raise Fail(doc.strip())

@@ -263,3 +263,15 @@ def test_repeat_guard_ignores_max(tmp_path, monkeypatch):
     assert rc.repeat_search("search", ["B", "q", "--max", "40"])
     assert rc.repeat_search("search", ["B", "q", "--latest"]) is None
     assert rc.save_raw("open", ["--wait"], {"target": "A"}) is None
+
+
+def test_repeat_guard_scope_and_override(tmp_path, monkeypatch):
+    import research_core as rc
+    monkeypatch.setattr(rc._LOG, "site", "reddit", raising=False)
+    monkeypatch.setenv("RESEARCH_RAW_DIR", str(tmp_path))
+    rc.save_raw("search", ["A", "mini pc", "--sub", "homelab"], {"posts": []})
+    assert rc.repeat_search("search", ["A", "mini pc", "--sub", "selfhosted"]) is None
+    assert rc.repeat_search("search", ["A", "mini pc", "--sub", "homelab", "--sort", "new"]) is None
+    assert rc.repeat_search("search", ["A", "mini pc", "--sub", "homelab"])
+    monkeypatch.setenv("RESEARCH_ALLOW_REPEAT", "1")
+    assert rc.repeat_search("search", ["A", "mini pc", "--sub", "homelab"]) is None

@@ -38,7 +38,7 @@ background, never the 120 s default: a command killed by a timeout still spends 
 
 When the run has a report folder, set `RESEARCH_RAW_DIR=<report folder>/raw` on every command: each result is
 saved in `raw/<site>/` (`raw_file` in the result, listed in `index.jsonl`), and an exact repeat of a search
-already in the run is refused (read the saved file instead, or search with different wording).
+already in the run is refused (read the saved file instead, or search with different wording; `RESEARCH_ALLOW_REPEAT=1` repeats one on purpose).
 
 ```bash
 $Y open --wait                                   # -> {"target": "<ID>"}; `stop` when signed out, `window.warning` when narrow
