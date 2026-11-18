@@ -1960,10 +1960,11 @@ def set_topic(target: str, topic: str | None) -> dict:
             "note": "Add the landscape's products with `brands add --topic ...`; both sites read the same file."}
 
 
-def close(target: str) -> dict:
+def close(target: str, force: bool = False) -> dict:
     full_id = SITE.resolve(target)
-    res = SITE.close(target)
-    _seen_path(full_id).unlink(missing_ok=True)
+    res = SITE.close(target, force=force)
+    if res.get("closed"):
+        _seen_path(full_id).unlink(missing_ok=True)
     return res
 
 
@@ -2073,8 +2074,10 @@ def _dispatch(cmd: str, args: list[str]):
         if not isinstance(topic, str) or args:
             raise Fail('usage: rescore --topic "TOPIC" [--dir RAW_OR_REPORT_DIR ...] [--save]')
         return rescore(topic, dirs, save)
-    if cmd == "close" and len(args) == 1:
-        return close(args[0])
+    if cmd == "close" and args:
+        force = opt(args, "--force") is True
+        if len(args) == 1:
+            return close(args[0], force)
     return common_cli(SITE, cmd, args)
 
 

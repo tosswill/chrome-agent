@@ -26,6 +26,9 @@ CLI (each command prints JSON):
     onboard_site.py scaffold SITE --domain D [--name "Home Depot"] [--account-selector CSS] [--session-cookie NAME]
                        generate the site's research helper (signed-in checks filled in from step 6, a typed
                        `search` stub), SKILL.md stub and a test from the template (refuses to overwrite)
+    onboard_site.py harden SITE [--name "Home Depot"] [--content "reviews and Q&A"]
+                       lock the site's research agent down: .claude/agents/<site>-researcher.md (guard hook,
+                       only the helper, files only in reports/) and its profile in research_profiles.json
     onboard_site.py close ID
 
 Local files, never in version control (RESEARCH_CONFIG, default ~/.config/chrome-agent-research):
@@ -405,6 +408,54 @@ def scaffold(site: str, domain: str, name: str | None = None, account_selector: 
     return {"scaffold": out, "next": "Fill in the site's search/page readers and its signed-in check, then add tests."}
 
 
+# --- harden ----------------------------------------------------------------------------------------
+
+PROJECT = Path(os.environ.get("RESEARCH_PROJECT_DIR", str(ROOT.parents[2])))  # chrome-bot (holds .claude/, reports/)
+
+
+def harden(site: str, name: str | None = None, content: str | None = None, project: Path | None = None) -> dict:
+    """Lock the new site's research agent down like the others: write .claude/agents/<site>-researcher.md (guard
+    hook, only the site's helper, files only in reports/) and register the site's guard profile in
+    .claude/hooks/research_profiles.json. Never overwrites an agent file."""
+    slug = re.sub(r"[^a-z0-9]", "", site.lower())
+    name = name or site.title()
+    content = content or "listings, reviews and comments"
+    project = Path(project or PROJECT)
+    guard = project / ".claude" / "hooks" / "research_guard.py"
+    helper = ROOT / "skills" / f"{slug}-research" / "scripts" / f"{slug}_tab.py"
+    if not guard.exists():
+        raise Fail(f"no guard hook at {guard}: set RESEARCH_PROJECT_DIR to the folder that holds .claude/ and reports/")
+    if not helper.exists():
+        raise Fail(f"no helper at {helper}: run `scaffold {slug}` first")
+    out = {}
+    agent = project / ".claude" / "agents" / f"{slug}-researcher.md"
+    if agent.exists():
+        out[str(agent)] = "exists (left alone)"
+    else:
+        txt = (HERE.parent / "templates" / "agent.md.tmpl").read_text()
+        for k, v in {"{{SLUG}}": slug, "{{NAME}}": name, "{{CONTENT}}": content,
+                     "{{CONTENT_CAP}}": content[:1].upper() + content[1:], "{{PROJECT}}": str(project)}.items():
+            txt = txt.replace(k, v)
+        agent.parent.mkdir(parents=True, exist_ok=True)
+        agent.write_text(txt)
+        out[str(agent)] = "created"
+    prof_file = guard.parent / "research_profiles.json"
+    try:
+        profiles = json.loads(prof_file.read_text())
+    except (OSError, ValueError):
+        profiles = {}
+    entry = {"helpers": [f"{slug}-research/scripts/{slug}_tab.py"], "skills": [f"{slug}-research"], "mcp": [],
+             "web": False}
+    out[str(prof_file)] = "unchanged" if profiles.get(slug) == entry else ("updated" if slug in profiles else "added")
+    profiles[slug] = entry
+    prof_file.write_text(json.dumps(profiles, indent=2) + "\n")
+    return {"harden": out, "next": [
+        f"Add a case for profile {slug!r} to .claude/hooks/test_research_guard.py (helper allowed, eval and "
+        "another site's helper blocked) and run it.",
+        f"Add `{slug}-researcher` to the research-agent list in CLAUDE.md.",
+        "Start a new session (agent files load at start) and run a short red-team pass with the new agent."]}
+
+
 # --- CLI -----------------------------------------------------------------------------------------------
 
 def _dispatch(cmd: str, args: list[str]):
@@ -471,6 +522,11 @@ def _dispatch(cmd: str, args: list[str]):
                        '[--session-cookie NAME]')
         s = lambda v: v if isinstance(v, str) else None  # noqa: E731
         return scaffold(args[0], domain, s(name), s(acct), s(cookie))
+    if cmd == "harden":
+        name, content = opt(args, "--name"), opt(args, "--content")
+        if len(args) != 1:
+            raise Fail('usage: harden SITE [--name "Site Name"] [--content "what strangers write there"]')
+        return harden(args[0], name if isinstance(name, str) else None, content if isinstance(content, str) else None)
     if cmd == "close" and len(args) == 1:
         return close(args[0])
     raise Fail(f"unknown command or arguments: {cmd} {' '.join(args)}")

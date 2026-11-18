@@ -12,7 +12,7 @@ CLI (each command prints JSON):
     x_tab.py profile ID HANDLE [--max N]  profile header (bio, followers, joined, verified) and recent posts (1 load)
     x_tab.py nav ID URL                   paced page load on x.com
     x_tab.py shot ID [--out PATH]         screenshot of the window
-    x_tab.py eval ID JS                   read something off the page
+    x_tab.py eval ID JS   read something off the page (disabled unless RESEARCH_ALLOW_EVAL=1)
     x_tab.py close ID | list | gc         release window / show / clean up claims
 
 Environment (X_TAB_*): INSTANCE (x), MAX (3 windows), GAP (5 s between loads),

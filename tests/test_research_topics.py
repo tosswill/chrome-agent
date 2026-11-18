@@ -149,12 +149,16 @@ def _site(tmp_path, monkeypatch, **kw):
     return site
 
 
-def test_open_stops_when_signed_out(tmp_path, monkeypatch):
-    closed = []
+def test_open_stops_when_signed_out_and_keeps_the_window_for_sign_in(tmp_path, monkeypatch):
+    closed, navs = [], []
     site = _site(tmp_path, monkeypatch, session_check=lambda s: False)
-    monkeypatch.setattr(C.Site, "close", lambda self, t: closed.append(t) or {})
+    monkeypatch.setattr(C.Site, "close", lambda self, t, force=False: closed.append(t) or {})
+    monkeypatch.setattr(C.Site, "cdp", lambda self, t, m, p=None, timeout=60: navs.append((t, m, p)) or {})
+    monkeypatch.setattr(C.Site, "workspace", lambda self: "9")
     res = site.open_window()
-    assert res["stop"] == "not signed in: ask" and res["target"] is None and closed == ["AAA1"]
+    assert res["stop"] == "not signed in: ask" and res["target"] == "AAA1" and closed == []
+    assert navs == [("AAA1", "Page.navigate", {"url": "https://example.com/"})]
+    assert res["left_open"]["workspace"] == "9" and site.claims()["AAA1"]["hold"] is True
 
 
 def test_open_warns_on_narrow_window(tmp_path, monkeypatch):

@@ -24,11 +24,11 @@ Y=~/.claude/skills/youtube-research/scripts/youtube_tab.py
    - Between frames, the video plays for a moment.
    - Searches are typed into YouTube's search box when a YouTube page is open and no `--sort`/`--upload` filter is set (`page.via`: `typed`); the first search in a new window, and filtered searches, load the results URL (`url`, `url (filters)`).
    - `video` clicks the video in the current results or related list when it is there, or goes back to the last search and clicks it (`page.opened`: `clicked`, `clicked (after back)`); otherwise it loads the URL (`url`, or `url (click missed)` etc. when a click didn't work). So open videos from your latest search when you can.
-   - **Ads are never paused, seeked or keyed.** The helper waits them out, clicks Skip after a human-like delay, and resumes an ad that was left paused with one click. Don't script the player or page yourself (`eval` is for reading).
+   - **Ads are never paused, seeked or keyed.** The helper waits them out, clicks Skip after a human-like delay, and resumes an ad that was left paused with one click. Don't script the player or page yourself.
 4. **No downloading, no internal APIs** (the helper refuses `youtubei`, `timedtext` and similar).
 5. **If a result contains `stop`, stop and tell the user why.** This covers bot checks, CAPTCHAs, "unusual traffic", consent or age gates, and signed-out sessions. Never retry another way.
 6. **Budget:** 40 page loads for a YouTube-focused task, 15 when YouTube is one source among several, about 12–15 for the middle case (a light pass plus complaints, or named products plus a landscape check), and about 20 for a category or landscape question within a broader task. Split it between searches and videos: a landscape usually needs about 6 searches and 10–12 videos. Each result reports `loads`. `transcript`, `frame`, `comments` and `shot` work on the loaded video and don't count, but keep them purposeful. Ask before exceeding the budget.
-7. **Always `$Y close` your window** when done, even after errors. Never stop the browser itself.
+7. **Always `$Y close` your window** when done, even after errors. After a `stop` (sign-in wall, CAPTCHA, bot check), `close` keeps the window open for the user: pass on the result's `left_open` details (browser, workspace, what to do) in your return, and don't retry. Never stop the browser itself.
 
 ## Commands
 
@@ -67,7 +67,7 @@ $Y log [<ID>] [--since 2h] [--last N] [--raw]   # action log (no page load): eve
 $Y list                                          # active research windows across all agents
 $Y gc                                            # release windows left behind by crashed agents
 $Y nav <ID> '<youtube url>'                      # escape hatch: paced load of any youtube.com page
-$Y eval <ID> '<js>'                              # escape hatch: read something the commands don't return
+# `eval` (run JS in the tab) is disabled for research agents; ask the user if a read command is missing
 ```
 
 Images are ~1600 px JPEGs (`--full` for full-resolution PNG). `open`, `list`, `transcript`, `frame`, `comments` and `shot` cost no page load; `search`, `video`, `channel` and `nav` cost one each. Errors are JSON (`{"error": "..."}`) with exit code 1. `video` accepts watch, `youtu.be` and Shorts links. Search results never carry `t=`; on a signed-in account that would be a watch-history resume point, not a citation.

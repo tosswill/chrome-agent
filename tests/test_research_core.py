@@ -275,3 +275,49 @@ def test_repeat_guard_scope_and_override(tmp_path, monkeypatch):
     assert rc.repeat_search("search", ["A", "mini pc", "--sub", "homelab"])
     monkeypatch.setenv("RESEARCH_ALLOW_REPEAT", "1")
     assert rc.repeat_search("search", ["A", "mini pc", "--sub", "homelab"]) is None
+
+
+def _held_site(tmp_path, monkeypatch, signed_in=None):
+    import research_core as C
+    monkeypatch.setenv("TSTHOLD_TAB_STATE", str(tmp_path / "state"))
+    site = C.Site(prefix="TSTHOLD_TAB", default_instance="tst", hosts=("example.com",), ready_js="1",
+                  page_state_js="1", stop_reason=lambda st, s: None,
+                  session_check=(lambda s: signed_in) if signed_in is not None else None)
+    stops = []
+    monkeypatch.setattr(C.Site, "ca", lambda self, *a, **k: stops.append(a) or "")
+    monkeypatch.setattr(C.Site, "workspace", lambda self: "9")
+    monkeypatch.setattr(C.Site, "targets", lambda self, restore=False: [])
+    return C, site, stops
+
+
+def test_held_window_survives_close_and_gc(tmp_path, monkeypatch):
+    C, site, stops = _held_site(tmp_path, monkeypatch)
+    site._write_claim("ABCDEF123", {"created": 0, "last_used": 0, "loads": 1})
+    info = site.hold("ABCDEF123", "not signed in", "https://example.com/")
+    assert info["workspace"] == "9" and "chrome-agent save tst --overwrite" in info["user_action"]
+    res = site.close("ABCDEF")
+    assert res["closed"] is None and res["left_open"] == "ABCDEF123" and not stops
+    site.idle = 0  # everything counts as idle: a held window still isn't reaped
+    with site._locked("claims.lock"):
+        assert site._gc_locked({"ABCDEF123"}) == []
+    assert site.close("ABCDEF", force=True) == {"closed": "ABCDEF123"}
+    assert ("stop", "tst", "--target-id", "ABCDEF123") in stops and "ABCDEF123" not in site.claims()
+
+
+def test_holds_released_once_signed_in(tmp_path, monkeypatch):
+    C, site, stops = _held_site(tmp_path, monkeypatch, signed_in=False)
+    site.hold("HELD1", "not signed in")
+    assert site._release_holds_if_signed_in() == [] and "HELD1" in site.claims()
+    site.session_check = lambda s: True
+    assert site._release_holds_if_signed_in() == ["HELD1"]
+    assert "HELD1" not in site.claims() and ("stop", "tst", "--target-id", "HELD1") in stops
+
+
+def test_record_stop_holds_the_window(tmp_path, monkeypatch):
+    C, site, stops = _held_site(tmp_path, monkeypatch)
+    monkeypatch.setattr(C, "_log_on", lambda: False)
+    C._LOG.stop_logged = False
+    site._write_claim("W1", {"created": 0, "last_used": 0, "loads": 0})
+    state = {"stop": "CAPTCHA", "url": "https://example.com/x"}
+    site.record_stop("W1", state)
+    assert site.claims()["W1"]["hold"] and state["left_open"]["url"] == "https://example.com/x"

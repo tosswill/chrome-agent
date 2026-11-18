@@ -345,6 +345,7 @@ class Site:
     on_resolve: Callable[[str], None] | None = None  # called with the full target id on every resolve
     content_js: str | None = None    # returns the reading column's viewport rect {x, y, width, height}
     ad_selectors: tuple[str, ...] = ()  # CSS selectors of ad units, for ads_in_view in captures
+    signin_url: str | None = None    # page a held signed-out window shows the user (default: https://<hosts[0]>/)
     instance: str = field(init=False)
     max_claims: int = field(init=False)
     gap: float = field(init=False)
@@ -1095,7 +1096,7 @@ class Site:
         dropped, now = [], time.time()
         for full_id, c in self.claims().items():
             gone = full_id not in live_ids
-            idle = now - c.get("last_used", 0) > self.idle
+            idle = now - c.get("last_used", 0) > self.idle and not c.get("hold")
             if gone or idle:
                 if idle and not gone:
                     try:
@@ -1191,7 +1192,8 @@ class Site:
             with self._locked("claims.lock"):
                 tabs = self.targets(restore=True)
                 self._gc_locked({t["full_id"] for t in tabs})
-                busy = len(self.claims())
+                self._release_holds_if_signed_in()
+                busy = sum(1 for c in self.claims().values() if not c.get("hold"))
                 if busy < self.max_claims:
                     if not tabs:
                         raise Fail(f"{self.instance} has no open tab to issue commands through.")
@@ -1228,12 +1230,17 @@ class Site:
         res = {"target": full_id, "slots_in_use": busy + 1, "max_slots": self.max_claims}
         if placed:
             res["placement"] = placed
-        # Signed out? Say so now, before any page load is spent (seen 2026-11-12).
+        # Signed out? Say so now, before any page load is spent (seen 2026-11-12). The window stays open on the
+        # site so the user can sign in there.
         if self.session_check and self.session_check(self) is False:
-            self.close(full_id)
-            res = {"target": None, "stop": self.stop_reason({"loggedIn": False}, self)
-                   or f"{self.instance} is not signed in. Ask the user to sign in and save the session."}
-            return res
+            reason = (self.stop_reason({"loggedIn": False}, self)
+                      or f"{self.instance} is not signed in. Ask the user to sign in and save the session.")
+            url = self.signin_url or f"https://{self.hosts[0]}/"
+            try:
+                self.cdp(full_id, "Page.navigate", {"url": url})
+            except Fail:
+                pass
+            return {"target": full_id, "stop": reason, "left_open": self.hold(full_id, reason, url)}
         win = self.window_check(full_id)
         if win:
             res["window"] = win
@@ -1345,6 +1352,10 @@ class Site:
                 state["stop_shot"] = shot
             except Exception:  # noqa: BLE001 - the stop itself matters more than its picture
                 pass
+        try:
+            state["left_open"] = self.hold(full_id, str(state.get("stop") or "stop"), state.get("url"))
+        except Exception:  # noqa: BLE001 - never let holding the window hide the stop
+            pass
         log_event("stop", target=full_id, reason=state.get("stop"), shot=shot,
                   **{k: state.get(k) for k in ("url", "title", "loggedIn", "blocked", "blocked_by", "phrase_ignored")
                      if state.get(k) is not None})
@@ -1356,8 +1367,37 @@ class Site:
         self.touch(full_id)
         return self.evaluate(full_id, js)
 
-    def close(self, target: str) -> dict:
+    def hold(self, full_id: str, reason: str, url: str | None = None) -> dict:
+        """Keep a window open for the user after a stop (sign-in wall, CAPTCHA, bot check): `close` leaves it
+        up, gc doesn't reap it, it doesn't use a slot, and it's closed once the site is signed in again."""
+        claim = self.claims().get(full_id, {"created": time.time(), "loads": 0})
+        claim.update(hold=True, hold_reason=reason[:300], hold_since=time.time(), last_used=time.time())
+        self._write_claim(full_id, claim)
+        return {"target": full_id, "browser": self.instance, "workspace": self.workspace() or None,
+                "url": url, "user_action": "Sign in (or clear the check) in this window, then run "
+                f"`chrome-agent save {self.instance} --overwrite`. The window closes on the next `open` "
+                "after the site is signed in again."}
+
+    def _release_holds_if_signed_in(self) -> list[str]:
+        """Close windows held for sign-in once the site is signed in again (claims lock held)."""
+        held = [k for k, c in self.claims().items() if c.get("hold")]
+        if not held or not self.session_check or self.session_check(self) is not True:
+            return []
+        for full_id in held:
+            try:
+                self.ca("stop", self.instance, "--target-id", full_id)
+            except Fail:
+                pass
+            (self._claims_dir / f"{full_id}.json").unlink(missing_ok=True)
+        return [h[:8] for h in held]
+
+    def close(self, target: str, force: bool = False) -> dict:
         full_id = self.resolve(target)
+        claim = self.claims().get(full_id, {})
+        if claim.get("hold") and not force:
+            return {"closed": None, "left_open": full_id, "reason": claim.get("hold_reason"),
+                    "note": "kept open so the user can sign in or clear the check; tell the user, and don't "
+                            "retry. (`close ID --force` closes it.)"}
         with self._locked("claims.lock"):
             try:
                 self.ca("stop", self.instance, "--target-id", full_id)
@@ -1378,7 +1418,8 @@ class Site:
     def list_claims(self) -> list[dict]:
         now = time.time()
         return [{"target": k, "age_s": int(now - c["created"]), "idle_s": int(now - c["last_used"]),
-                 "loads": c.get("loads", 0)} for k, c in self.claims().items()]
+                 "loads": c.get("loads", 0), **({"held_for_user": c.get("hold_reason")} if c.get("hold") else {})}
+                for k, c in self.claims().items()]
 
     def gc(self) -> dict:
         with self._locked("claims.lock"):
@@ -1457,9 +1498,17 @@ def common_cli(site: Site, cmd: str, args: list[str]):
     if cmd == "nav" and len(args) == 2:
         return site.nav(*args)
     if cmd == "eval" and len(args) == 2:
+        # Arbitrary JS in a signed-in tab could post, vote or like as the research account, so it's off unless
+        # a person turns it on for one command. The research-agent guard hook never allows this variable.
+        if os.environ.get("RESEARCH_ALLOW_EVAL") != "1":
+            raise Fail("eval is disabled: it runs arbitrary JavaScript in the signed-in research browser. Use the "
+                       "helper's read commands instead; a person can enable it for one command with "
+                       "RESEARCH_ALLOW_EVAL=1.")
         return site.run_js(*args)
-    if cmd == "close" and len(args) == 1:
-        return site.close(args[0])
+    if cmd == "close" and args:
+        force = opt(args, "--force") is True
+        if len(args) == 1:
+            return site.close(args[0], force=force)
     if cmd == "list":
         return site.list_claims()
     if cmd == "gc":

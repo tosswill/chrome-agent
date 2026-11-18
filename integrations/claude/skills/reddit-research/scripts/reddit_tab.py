@@ -27,7 +27,7 @@ CLI (each command prints JSON):
     reddit_tab.py brands list | show --topic T | add --topic T NAME ... [--alias "A=x,y"] [--everyday "Bear Notes=Bear"]
                          [--common word,word] | remove --topic T NAME ...   topic brand files, shared with youtube_tab
     reddit_tab.py nav ID URL                        paced load, page state only
-    reddit_tab.py eval ID JS|@file.js               run JS in your tab (escape hatch)
+    reddit_tab.py eval ID JS|@file.js   run JS in your tab (disabled unless RESEARCH_ALLOW_EVAL=1)
     reddit_tab.py close ID                          release the window
     reddit_tab.py list | gc                         show / clean up claims
 
