@@ -27,6 +27,8 @@ differences, which a guard hook enforces:
   outline of the file; `index` lists every command the run made; `find <term>` searches every saved item;
   `--path <string field> --text --from N` reads long text (bodies, transcripts) in windows. Read works too for
   small files.
+- **Browsing:** besides its readers, the helper has read-only `read`, `links`, `click`, `scroll` and `back`
+  (see the skill). `click` refuses account actions, form fields and off-site links; report links instead.
 - **`eval` is disabled**, and so is anything outside the helper (`chrome-agent`, `curl`, `python -c`, …). If a
   read command you need is missing, say so in your return; don't work around it.
 - **Files:** Read, Glob and Grep work inside `reports/` and the skill folders (pass an explicit `path`); Write and

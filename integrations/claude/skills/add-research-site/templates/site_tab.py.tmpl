@@ -9,6 +9,13 @@ CLI (each command prints JSON):
     {{SLUG}}_tab.py open [--wait [SECONDS]]      claim a window -> {"target": ID} (`stop` when signed out)
     {{SLUG}}_tab.py search ID QUERY             typed into the search box on {{DOMAIN}}, else by URL (1 load)
     {{SLUG}}_tab.py nav ID URL                   paced page load on {{DOMAIN}}
+    {{SLUG}}_tab.py read ID [--selector CSS] [--from N] [--length N]   the page as text (headings, [text](links),
+                       [button: labels]); read on with --from next_from (no load)
+    {{SLUG}}_tab.py links ID [--grep T] [--max N]       visible links, with on_site (no load)
+    {{SLUG}}_tab.py click ID --text T | --selector CSS | --href URL [--nth N]   click like a person; refuses
+                       votes, follows, comments, posts, saves, purchases, sign-out, form fields and off-site links
+    {{SLUG}}_tab.py scroll ID [--screens N]             mouse-wheel scroll (negative: up)
+    {{SLUG}}_tab.py back ID                             previous page in this window
     {{SLUG}}_tab.py shot ID [--out PATH]         screenshot of the window
     {{SLUG}}_tab.py eval ID JS   read something off the page (disabled unless RESEARCH_ALLOW_EVAL=1)
     {{SLUG}}_tab.py close ID | list | gc         release window / show / clean up claims

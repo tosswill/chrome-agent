@@ -5,7 +5,7 @@
 
 RAW_DIR is the run's raw folder (raw/<site>/ subfolders written with RESEARCH_RAW_DIR set). Reads every saved
 result, pulls out the discussion items each site read in full (Reddit thread posts and comments, X posts and
-replies, YouTube comments, GitHub issue threads, Hacker News threads, retail reviews), de-duplicates them, and computes the same metrics per site:
+replies, YouTube comments, GitHub issue threads, Hacker News threads, Product Hunt launches, retail reviews), de-duplicates them, and computes the same metrics per site:
 
     volume      items, distinct authors, share of items from the top 3 authors
     recency     oldest / newest, median age (days), share from the last 90 days
@@ -120,6 +120,22 @@ def _youtube_items(res, saved):
     return out
 
 
+def _ph_items(res, saved):
+    """A Product Hunt `post` read: the launch and its comments. Commenters are redacted by the API, so author
+    counts are unavailable (items count, recency, votes and replies still work)."""
+    if "comments_returned" not in res:
+        return []
+    url = res.get("url")
+    out = [_item("producthunt", url, None, f"{res.get('name') or ''}\n{res.get('tagline') or ''}\n"
+                 f"{res.get('description') or ''}", _date(res.get("createdAt"), saved), res.get("votesCount"),
+                 bool(res.get("comments_total")), False, False, url)]
+    for c in res.get("comments") or []:
+        out.append(_item("producthunt", c.get("link") or c.get("id"), None, c.get("text"),
+                         _date(c.get("created"), saved), c.get("votes"), (c.get("replies_total") or 0) > 0,
+                         False, False, c.get("link")))
+    return out
+
+
 def _hn_items(res, saved):
     """An `item` read: the story and its comments (search hits are listings; threads carry the discussion)."""
     if "comments_total" not in res:
@@ -177,7 +193,8 @@ def load(raw: Path) -> dict[str, list[dict]]:
             items = (_x_items(res, saved) if d.name == "x" else _reddit_items(res, saved) if d.name == "reddit"
                      else _youtube_items(res, saved) if d.name == "youtube"
                      else _github_items(res, saved) if d.name == "github"
-                     else _hn_items(res, saved) if d.name == "hackernews" else _review_items(d.name, res, saved))
+                     else _hn_items(res, saved) if d.name == "hackernews"
+                     else _ph_items(res, saved) if d.name == "producthunt" else _review_items(d.name, res, saved))
             for it in items:
                 seen.setdefault(json.dumps(it["key"], default=str), it)
     return {k: list(v.values()) for k, v in sites.items() if v}
