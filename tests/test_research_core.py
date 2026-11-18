@@ -1,5 +1,6 @@
 """research_core pure helpers: screenshot clip math and pacing. No browser."""
 import random
+import pytest
 import statistics
 import sys
 from pathlib import Path
@@ -321,3 +322,27 @@ def test_record_stop_holds_the_window(tmp_path, monkeypatch):
     state = {"stop": "CAPTCHA", "url": "https://example.com/x"}
     site.record_stop("W1", state)
     assert site.claims()["W1"]["hold"] and state["left_open"]["url"] == "https://example.com/x"
+
+
+@pytest.mark.parametrize("desc,blocked", [
+    ({"tag": "button", "text": "Upvote"}, True),
+    ({"tag": "button", "text": "(17)", "attrs": "vote-button"}, True),
+    ({"tag": "button", "text": "Follow"}, True),
+    ({"tag": "button", "text": "Reply"}, True),
+    ({"tag": "button", "text": "Share"}, True),
+    ({"tag": "button", "text": "", "attrs": "aria-label=Like this post"}, True),
+    ({"tag": "button", "text": "", "attrs": "styles_commentButton"}, True),
+    ({"tag": "a", "text": "Sign out", "href": "https://x.example/logout"}, True),
+    ({"tag": "button", "text": "Comment", "in_form": True}, True),
+    ({"tag": "input", "text": "", "editable": True}, True),
+    ({"tag": "button", "text": "Go", "type": "submit", "in_form": True}, True),
+    ({"tag": "button", "text": "Show more"}, False),
+    ({"tag": "button", "text": "Reviews"}, False),
+    ({"tag": "a", "text": "12 comments", "href": "https://x.example/c"}, False),
+    ({"tag": "a", "text": "Share your feedback with the community", "href": "https://x.example/f"}, False),
+    ({"tag": "button", "text": "Canva Create and share beautiful designs with your team"}, False),  # a result card
+    ({"tag": "button", "text": "Search", "type": "submit", "in_form": True, "search_form": True}, False),
+])
+def test_write_action_detection(desc, blocked):
+    import research_core as C
+    assert (C._write_action(desc) is not None) == blocked, (desc, C._write_action(desc))
