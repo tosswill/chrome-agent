@@ -17,7 +17,7 @@ H=~/.claude/skills/x-research/scripts/x_tab.py
    accounts that look automated, so a wall (login flow, `/account/access`, rate limit) ends the run.
 4. **Budget:** 15 page loads unless the user says otherwise. Each result reports `loads`. Scrolling within a page
    doesn't count, but keep `--max` moderate (≤ 60).
-5. **Always `$H close` your window** when done, even after errors.
+5. **Always `$H close` your window** when done, even after errors. After a `stop` (sign-in wall, CAPTCHA, bot check), `close` keeps the window open for the user: pass on the result's `left_open` details (browser, workspace, what to do) in your return, and don't retry.
 
 ## Commands
 

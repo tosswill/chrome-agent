@@ -18,7 +18,7 @@ R=~/.claude/skills/reddit-research/scripts/reddit_tab.py
 3. **Never solve CAPTCHAs or type credentials.** Never run `chrome-agent save`, restart or stop the browser yourself, even when a `stop` message mentions it: that is for the user. A sign-in `stop` fires at `open` when the browser has no `reddit_session` cookie (before any load), or later when a page shows a log-in button and no session cookie is present.
 4. **If a result contains `stop`, stop and tell the user why.** This covers block pages, CAPTCHAs, and signed-out sessions. Never retry another way, and never use Reddit's JSON/API endpoints (the helper refuses them). See **Errors** below for which errors the user must fix and which you may retry once.
 5. **Budget:** 25 page loads for a Reddit-focused task, 10 when Reddit is one source among several, **12–15 for the middle case** (a light pass plus complaints, or named products plus a landscape check), and about 20 for a category or landscape question. A user-given cap wins. Each result reports `loads`. Ask before exceeding the budget.
-6. **Always `$R close` your window** when done, even after errors. Never stop the browser itself.
+6. **Always `$R close` your window** when done, even after errors. After a `stop` (sign-in wall, CAPTCHA, bot check), `close` keeps the window open for the user: pass on the result's `left_open` details (browser, workspace, what to do) in your return, and don't retry. Never stop the browser itself.
 
 ## Commands
 
@@ -44,7 +44,7 @@ $R shot <ID> --at post | --comment <id or permalink> | --selector '<css>' [--out
 $R close <ID>
 $R log [<ID>] [--since 2h] [--last N] [--raw]   # action log (no page load): every load, pacing wait, click, key, typed text, scroll, result and stop
 $R list | gc                                         # active windows across agents / release ones left by crashed agents
-$R nav <ID> '<reddit url>' | eval <ID> '<js>'        # escape hatches: paced load / read something the commands don't return
+$R nav <ID> '<reddit url>'                         # escape hatch: paced load of a reddit page (`eval` is disabled for agents)
 ```
 
 - **Long threads:** `thread` on a thread with hundreds of comments reads for up to about 150 s, so the 10-minute timeout above matters most there.

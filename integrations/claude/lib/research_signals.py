@@ -5,7 +5,7 @@
 
 RAW_DIR is the run's raw folder (raw/<site>/ subfolders written with RESEARCH_RAW_DIR set). Reads every saved
 result, pulls out the discussion items each site read in full (Reddit thread posts and comments, X posts and
-replies, YouTube comments, retail reviews), de-duplicates them, and computes the same metrics per site:
+replies, YouTube comments, GitHub issue threads, Hacker News threads, retail reviews), de-duplicates them, and computes the same metrics per site:
 
     volume      items, distinct authors, share of items from the top 3 authors
     recency     oldest / newest, median age (days), share from the last 90 days
@@ -120,6 +120,37 @@ def _youtube_items(res, saved):
     return out
 
 
+def _hn_items(res, saved):
+    """An `item` read: the story and its comments (search hits are listings; threads carry the discussion)."""
+    if "comments_total" not in res:
+        return []
+    url = res.get("hn_url")
+    out = [_item("hackernews", url, res.get("author"), f"{res.get('title') or ''}\n{res.get('text') or ''}",
+                 _date(res.get("created"), saved), res.get("points"), bool(res.get("comments_total")), False,
+                 False, url)]
+    for c in res.get("comments") or []:
+        if c.get("deleted"):
+            continue
+        out.append(_item("hackernews", c.get("link") or c.get("id"), c.get("author"), c.get("text"),
+                         _date(c.get("created"), saved), c.get("points"), (c.get("replies") or 0) > 0, False,
+                         False, c.get("link")))
+    return out
+
+
+def _github_items(res, saved):
+    """An `issue` read: the issue body and its comments (search and repo listings carry no discussion)."""
+    if "comment_list" not in res:
+        return []
+    url = res.get("url")
+    out = [_item("github", url, res.get("author"), f"{res.get('title') or ''}\n{res.get('body') or ''}",
+                 _date(res.get("created"), saved), res.get("reactions"), bool(res.get("comments")), False,
+                 False, url)]
+    for c in res.get("comment_list") or []:
+        out.append(_item("github", c.get("link") or c.get("id"), c.get("author"), c.get("text"),
+                         _date(c.get("created"), saved), c.get("reactions"), None, False, False, c.get("link")))
+    return out
+
+
 def _review_items(site, res, saved):
     out = []
     for r in res.get("reviews") or []:
@@ -144,7 +175,9 @@ def load(raw: Path) -> dict[str, list[dict]]:
             res = rec.get("result") or {}
             saved = _date(rec.get("saved_at"), datetime.now(timezone.utc)) or datetime.now(timezone.utc)
             items = (_x_items(res, saved) if d.name == "x" else _reddit_items(res, saved) if d.name == "reddit"
-                     else _youtube_items(res, saved) if d.name == "youtube" else _review_items(d.name, res, saved))
+                     else _youtube_items(res, saved) if d.name == "youtube"
+                     else _github_items(res, saved) if d.name == "github"
+                     else _hn_items(res, saved) if d.name == "hackernews" else _review_items(d.name, res, saved))
             for it in items:
                 seen.setdefault(json.dumps(it["key"], default=str), it)
     return {k: list(v.values()) for k, v in sites.items() if v}

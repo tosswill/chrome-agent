@@ -15,7 +15,7 @@ H=~/.claude/skills/{{SLUG}}-research/scripts/{{SLUG}}_tab.py
 2. **Read-only.** Never buy, add to cart, review, ask a question, change the account or the store.
 3. **If a result contains `stop`, stop and tell the user why.** Never solve CAPTCHAs; never retry another way.
 4. **Budget:** TODO page loads. Each result reports `loads`.
-5. **Always `$H close` your window** when done, even after errors.
+5. **Always `$H close` your window** when done, even after errors. After a `stop` (sign-in wall, CAPTCHA, bot check), `close` keeps the window open for the user: pass on the result's `left_open` details (browser, workspace, what to do) in your return, and don't retry.
 
 ## Commands
 
@@ -27,7 +27,7 @@ When the run has a report folder, set `RESEARCH_RAW_DIR=<report folder>/raw` on 
 saved in `raw/<site>/` (`raw_file` in the result, listed in `index.jsonl`), and an exact repeat of a search
 already in the run is refused (read the saved file instead, or search with different wording; `RESEARCH_ALLOW_REPEAT=1` repeats one on purpose).
 
-TODO: document the readers once they exist (`open`, `nav`, `shot`, `eval`, `close` and `log` work now). Open product pages by clicking them in search results, not by URL: cold product-URL loads look like a bot.
+TODO: document the readers once they exist (`open`, `nav`, `shot`, `close` and `log` work now; `eval` is disabled for research agents). Open product pages by clicking them in search results, not by URL: cold product-URL loads look like a bot.
 
 ## Using what you find
 

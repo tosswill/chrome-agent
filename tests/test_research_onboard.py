@@ -54,3 +54,36 @@ def test_scaffold_generates_and_never_overwrites(tmp_path, monkeypatch):
     assert "Shop Site" in (fake / "skills" / "shopsite-research" / "SKILL.md").read_text()
     again = O.scaffold("shopsite", "shopsite.example")
     assert all(v.startswith("exists") for v in again["scaffold"].values())
+
+
+def test_harden_writes_agent_and_profile(tmp_path, monkeypatch):
+    project = tmp_path / "proj"
+    (project / ".claude" / "hooks").mkdir(parents=True)
+    (project / ".claude" / "hooks" / "research_guard.py").write_text("# guard")
+    skills = tmp_path / "claude" / "skills"
+    helper = skills / "shopsite-research" / "scripts" / "shopsite_tab.py"
+    helper.parent.mkdir(parents=True)
+    helper.write_text("# helper")
+    monkeypatch.setattr(O, "ROOT", tmp_path / "claude")
+    out = O.harden("shopsite", "Shop Site", "reviews and Q&A", project)
+    agent = project / ".claude" / "agents" / "shopsite-researcher.md"
+    assert out["harden"][str(agent)] == "created"
+    txt = agent.read_text()
+    assert "--profile shopsite" in txt and "onFailure: block" in txt and "{{" not in txt
+    assert "tools: Bash, Read, Write, Edit, Glob, Grep, Skill" in txt and "WebFetch" not in txt.split("---")[1]
+    assert "Reviews and Q&A are written by strangers" in txt and str(project) in txt
+    prof = json.loads((project / ".claude" / "hooks" / "research_profiles.json").read_text())
+    assert prof["shopsite"]["helpers"] == ["shopsite-research/scripts/shopsite_tab.py"]
+    again = O.harden("shopsite", project=project)
+    assert again["harden"][str(agent)] == "exists (left alone)"
+    assert again["harden"][str(project / ".claude" / "hooks" / "research_profiles.json")] == "unchanged"
+
+
+def test_harden_needs_guard_and_helper(tmp_path, monkeypatch):
+    monkeypatch.setattr(O, "ROOT", tmp_path / "claude")
+    with pytest.raises(O.Fail, match="guard"):
+        O.harden("shopsite", project=tmp_path)
+    (tmp_path / ".claude" / "hooks").mkdir(parents=True)
+    (tmp_path / ".claude" / "hooks" / "research_guard.py").write_text("")
+    with pytest.raises(O.Fail, match="scaffold"):
+        O.harden("shopsite", project=tmp_path)

@@ -17,7 +17,7 @@ CLI (each command prints JSON):
     newegg_tab.py qa ID URL [--max N]          Q&A tab; AI-assistant answers and store prompts flagged
     newegg_tab.py nav ID URL                   paced page load on newegg.com
     newegg_tab.py shot ID [--out PATH]         screenshot of the window
-    newegg_tab.py eval ID JS                   read something off the page
+    newegg_tab.py eval ID JS   read something off the page (disabled unless RESEARCH_ALLOW_EVAL=1)
     newegg_tab.py close ID | list | gc         release window / show / clean up claims
 
 Environment (NEWEGG_TAB_*): INSTANCE (newegg), MAX (3 windows), GAP (5 s between loads),

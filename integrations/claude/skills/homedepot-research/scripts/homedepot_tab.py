@@ -21,7 +21,7 @@ CLI (each command prints JSON):
                        (1 load)
     homedepot_tab.py nav ID URL                   paced page load on homedepot.com
     homedepot_tab.py shot ID [--out PATH]         screenshot of the window
-    homedepot_tab.py eval ID JS                   read something off the page
+    homedepot_tab.py eval ID JS   read something off the page (disabled unless RESEARCH_ALLOW_EVAL=1)
     homedepot_tab.py close ID | list | gc         release window / show / clean up claims
 
 Environment (HOMEDEPOT_TAB_*): INSTANCE (homedepot), MAX (3 windows), GAP (5 s between loads),

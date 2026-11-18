@@ -10,7 +10,7 @@ CLI (each command prints JSON):
     {{SLUG}}_tab.py search ID QUERY             typed into the search box on {{DOMAIN}}, else by URL (1 load)
     {{SLUG}}_tab.py nav ID URL                   paced page load on {{DOMAIN}}
     {{SLUG}}_tab.py shot ID [--out PATH]         screenshot of the window
-    {{SLUG}}_tab.py eval ID JS                   read something off the page
+    {{SLUG}}_tab.py eval ID JS   read something off the page (disabled unless RESEARCH_ALLOW_EVAL=1)
     {{SLUG}}_tab.py close ID | list | gc         release window / show / clean up claims
 
 Environment ({{PREFIX}}_*): INSTANCE ({{SLUG}}), MAX (3 windows), GAP (5 s between loads),
