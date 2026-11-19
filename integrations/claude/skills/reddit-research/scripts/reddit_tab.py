@@ -34,7 +34,7 @@ CLI (each command prints JSON):
 The same functions back the reddit_* tools of the chrome-agent MCP server.
 
 Environment (REDDIT_TAB_*): INSTANCE (reddit-research-01), MAX (3 windows),
-GAP (4 s between loads, all agents), IDLE (1800 s), MAX_LOADS (40 per window),
+GAP (4 s between loads, all agents), IDLE (1800 s), MAX_LOADS (75 per window),
 STATE (/tmp/chrome-agent-reddit), TYPE (1: type searches when possible; 0: always
 load search URLs), READ_CAP (45 s: longest reading dwell per thread). Needs
 `chrome-agent` on PATH.
@@ -136,6 +136,7 @@ SITE = Site(
     page_state_js=PAGE_STATE_JS,
     stop_reason=_stop_reason,
     default_gap=4.0,
+    default_max_loads=75,  # raised from 40 (2026-11-19): broad multi-subreddit passes ran out mid-thread
     content_js=CONTENT_JS,
     ad_selectors=AD_SELECTORS,
 )

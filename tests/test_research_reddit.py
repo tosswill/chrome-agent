@@ -636,3 +636,7 @@ def test_staff_flair_needs_a_person_name_and_role_of_project():
             "moderators": [{"name": "pat_dev", "flair": "Founder of Home Assistant"}]}
     pb = R.promo_bias(data)
     assert pb["brand_moderators"] == ["pat_dev"]
+
+
+def test_reddit_window_cap_is_75():
+    assert R.SITE.default_max_loads == 75
