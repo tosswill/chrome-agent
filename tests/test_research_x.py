@@ -74,3 +74,19 @@ def test_thread_split():
     below, replies = H._split_thread(main, [{"handle": "@a"}, {"handle": "@a"}, {"handle": "@b"}, {"handle": "@a"}])
     assert [p["handle"] for p in below] == ["@a", "@a"] and [p["handle"] for p in replies] == ["@b", "@a"]
     assert H._split_thread(None, [{"handle": "@b"}]) == ([], [{"handle": "@b"}])
+
+
+def test_long_or_chains_are_refused_before_loading():
+    import pytest
+    H._check_human_query("grok bot I wish since:2026-08-11 lang:en")
+    H._check_human_query('"grok bot" OR "grok bots" limits')
+    H._check_human_query("muse OR dots OR duet wish")  # two ORs is the limit
+    H._check_human_query('"this OR that OR other OR more" agent')  # OR inside quotes is text
+    with pytest.raises(H.Fail, match="3 OR operators"):
+        H._check_human_query('("grok bot" OR "grok bots") ("I wish" OR "needs to" OR "please add") lang:en')
+    bad = ('("grok bot" OR "grok bots") ("I wish" OR "needs to" OR "please add" OR "feature request" '
+           'OR "should be able" OR "why cant") since:2026-08-11 lang:en')
+    with pytest.raises(H.Fail, match="Search like a person"):
+        H._check_human_query(bad)
+    with pytest.raises(H.Fail):
+        H.search("anything", bad)  # refused before resolving the window or loading a page
