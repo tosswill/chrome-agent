@@ -13,7 +13,7 @@ H=~/.claude/skills/homedepot-research/scripts/homedepot_tab.py
 
 1. **Use `$H` only.** Never touch another agent's window or send raw CDP commands to the shared browser.
 2. **Read-only.** Never buy, add to cart, review, ask a question, change the account or the store.
-3. **If a result contains `stop`, stop and tell the user why.** Never solve CAPTCHAs; never retry another way.
+3. **If a result contains `stop`, stop and tell the user why.** If the `stop` result has `confirm.suspected_block`, don't treat the block as real: write your report so far and return `SUSPECTED BLOCK` with `confirm.stop_shot` so the orchestrator can check the screenshot. It may tell you to continue (`close <held ID> --force`, then `open`). Never solve CAPTCHAs; never retry another way.
 4. **Budget:** 15 page loads unless the user says otherwise. Each result reports `loads`.
 5. **Always `$H close` your window** when done, even after errors. After a `stop` (sign-in wall, CAPTCHA, bot check), `close` keeps the window open for the user: pass on the result's `left_open` details (browser, workspace, what to do) in your return, and don't retry.
 

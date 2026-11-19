@@ -64,8 +64,8 @@ def _cookie_session(site: Site) -> bool | None:
 
 def _stop_reason(state: dict, site: Site) -> str | None:
     if state.get("blocked"):
-        return (f"X (Twitter) is showing a wall ({state.get('blocked_by') or 'bot check'}). Stop and ask the user; "
-                "do not retry.")
+        return (f"X (Twitter) is showing a wall ({state.get('blocked_by') or 'bot check'}). Stop and return the stop_shot to "
+                "the orchestrator to confirm; do not retry.")
     if state.get("loggedIn") is False and _cookie_session(site) is False:
         return ("X (Twitter) is not signed in. Ask the user to sign in in the browser window, then save it: "
                 f"chrome-agent save {site.instance} --overwrite")

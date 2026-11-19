@@ -86,7 +86,7 @@ from urllib.parse import parse_qs, quote, urlencode, urlparse
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parents[2] / "lib"))
 sys.path.insert(0, str(HERE))
-from research_core import Fail, Site, common_cli, intersect, opt, pause, raw_dir, run_cli  # noqa: E402
+from research_core import Fail, Site, block_check_js, common_cli, intersect, opt, pause, raw_dir, run_cli  # noqa: E402
 import brands as B  # noqa: E402
 import disclosure as D  # noqa: E402
 import tally as T  # noqa: E402
@@ -118,7 +118,7 @@ def _call(name: str, opts: dict) -> str:
 def _stop_reason(state: dict, site: Site) -> str | None:
     if state.get("blocked"):
         return ("YouTube is showing a bot check, CAPTCHA or 'unusual traffic' page. "
-                "Stop and ask the user; do not retry.")
+                "Stop and return the stop_shot to the orchestrator to confirm; do not retry.")
     if state.get("gate"):
         return "YouTube is showing a consent or age gate. Stop and ask the user."
     if not state.get("loggedIn"):
@@ -142,6 +142,11 @@ AD_SELECTORS = (
     "ytd-action-companion-ad-renderer", "ytd-player-legacy-desktop-watch-ads-renderer", "ytd-engagement-panel-section-list-renderer[target-id='engagement-panel-ads']",
 )
 
+# YouTube/Google bot-check wording ("Sign in to confirm you're not a bot", Google's /sorry page), on top of the
+# shared list.
+YOUTUBE_WALL = r"not a bot|our systems have detected|automated queries"
+PAGE_STATE_JS = "Object.assign(" + _js("page_state.js").strip().rstrip(";") + ", " + block_check_js(YOUTUBE_WALL) + ")"
+
 SITE = Site(
     prefix="YOUTUBE_TAB",
     default_instance="youtube-research-01",
@@ -150,7 +155,7 @@ SITE = Site(
     ready_js=("document.readyState === 'complete' && !!document.querySelector('ytd-app') && "
               "!!document.querySelector('ytd-video-renderer, ytd-watch-metadata #title h1, "
               "ytd-rich-item-renderer, ytd-item-section-renderer, #avatar-btn, a[href*=\"ServiceLogin\"]')"),
-    page_state_js=_js("page_state.js"),
+    page_state_js=PAGE_STATE_JS,
     stop_reason=_stop_reason,
     default_gap=6.0,
     default_max_loads=45,
