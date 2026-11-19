@@ -49,7 +49,15 @@ $H log [<ID>] [--since 2h] [--last N] [--raw]    # action log (no page load)
   `since:2026-10-01 until:2026-11-01`, `min_faves:20`, `min_replies:5`, `-filter:replies`, `filter:links`,
   `-is:retweet`, `OR`. Hyphenated words are quoted for you (`MS-01` → `"MS-01"`; unquoted, X reads the hyphen as
   NOT) and listed in `quoted_terms`. Top (default) ranks by engagement; `--latest` is newest first; `tab` says which
-  one the results came from. `ended` says why collecting stopped: `limit`, or `no_more` (X showed nothing further:
+  one the results came from.
+- **Search like a person.** Queries are typed into X's search box, so they should read like something a person
+  would type: a few words (`grok bot wish`, `"grok bot" limits`, `cancelled dots`). Use at most one or two `OR`s (the helper refuses more than two), no nested
+  parentheses, and at most one or two quoted phrases. A filter such as `since:`, `lang:en` or `min_faves:` is fine
+  to add. To cover several phrasings ("I wish", "please add", "feature request"), run a few short searches and
+  stop when the results repeat. Don't pack every phrasing into one long boolean query.
+  Not this: `("grok bot" OR "grok bots") ("I wish" OR "needs to" OR "please add" OR "feature request") since:2026-08-11 lang:en`.
+  This: `grok bot I wish since:2026-08-11`, then `"grok bot" please add`.
+- `ended` says why collecting stopped: `limit`, or `no_more` (X showed nothing further:
   the search is small). Each post: `url`, `name`, `handle`, `verified`, `badge` (blue = paid Premium, which brands
   also buy; gold = verified organization; grey = government), `name_matches_query` (the account is named after a
   search term: often the brand itself), `grok` (an @grok auto-reply), `date`, `text`, `lang`, `replies`, `reposts`, `likes`, `bookmarks`, `views`, `media`,

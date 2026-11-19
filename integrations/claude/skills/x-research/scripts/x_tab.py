@@ -125,6 +125,21 @@ def _quote_hyphenated(query: str) -> tuple[str, list[str]]:
     return '"'.join(parts), quoted
 
 
+MAX_OR = 2
+
+
+def _check_human_query(query: str) -> None:
+    """Refuse machine-looking boolean queries before any page load. Searches are typed into X's box like a
+    person would, and a long OR-chain of phrasings is neither human nor needed: run a few short searches
+    instead. Counts OR operators outside quotes ("this or that" inside quotes is just text)."""
+    outside = " ".join(query.split('"')[0::2])
+    n = len(re.findall(r"(?<![\w-])OR(?![\w-])", outside))
+    if n > MAX_OR:
+        raise Fail(f"query has {n} OR operators (max {MAX_OR}). Search like a person: run a few short searches "
+                   "instead of one long boolean query, e.g. `grok bot I wish since:2026-08-11`, then "
+                   "`\"grok bot\" please add`. Filters like since:, lang: and min_faves: are fine.")
+
+
 _GENERIC = set("""mini homelab home server servers proxmox review reviews best with from that this what price prices
 issue issues problem problems reliability power idle died dead failed failing crash crashing memory ddr4 ddr5 cluster
 setup build worth vs lang since until filter""".split())
@@ -227,6 +242,7 @@ def _click_tab(full_id: str, label: str) -> bool:
 def search(target: str, query: str, latest: bool = False, limit: int = 40) -> dict:
     """Search like a person: typed into the search box on an x.com page, else by URL. Then the Latest tab when
     asked, and scroll to collect `limit` posts. One load."""
+    _check_human_query(query)
     query, quoted = _quote_hyphenated(query)
     full_id = SITE.resolve(target)
     SITE.ensure_visible(full_id)
