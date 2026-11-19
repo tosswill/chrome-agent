@@ -51,7 +51,7 @@ from urllib.parse import parse_qs, quote, urlencode, urlparse
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parents[2] / "lib"))
-from research_core import Fail, Site, common_cli, opt, pause, run_cli  # noqa: E402
+from research_core import Fail, Site, block_check_js, common_cli, opt, pause, run_cli  # noqa: E402
 import brands as B  # noqa: E402
 import disclosure as D  # noqa: E402
 import tally as TL  # noqa: E402
@@ -81,7 +81,7 @@ def _session_cookie_valid(site: Site) -> bool | None:
 
 def _stop_reason(state: dict, site: Site) -> str | None:
     if state.get("blocked"):
-        return "Reddit is showing a block or CAPTCHA page. Stop and ask the user; do not retry."
+        return "Reddit is showing a block or CAPTCHA page. Stop and return the stop_shot to the orchestrator to confirm; do not retry."
     if state.get("loggedIn") is True:
         return None
     # The header may simply not have rendered yet (slow, throttled or covered window). Only stop when
@@ -122,6 +122,10 @@ MAIN_JS = """(() => { const vw = innerWidth, vh = innerHeight;
 AD_SELECTORS = ("shreddit-ad-post", "shreddit-comments-page-ad", "shreddit-comment-tree-ad",
                 "shreddit-sidebar-ad", "[data-testid='promoted-post']")
 
+# Reddit's own wall wording ("whoa there, pardner", network-policy block, rate limit), on top of the shared list.
+REDDIT_WALL = r"whoa there|blocked by network security|blocked by network policy|unusual activity|too many requests|prove you're human"
+PAGE_STATE_JS = "Object.assign(" + _js("page_state.js").strip().rstrip(";") + ", " + block_check_js(REDDIT_WALL) + ")"
+
 SITE = Site(
     prefix="REDDIT_TAB",
     default_instance="reddit-research-01",
@@ -129,7 +133,7 @@ SITE = Site(
     forbidden=(".json", "/api/"),
     ready_js=("document.readyState === 'complete' && "
               "!!document.querySelector(\"shreddit-post, shreddit-comment, a[href*='/comments/']\")"),
-    page_state_js=_js("page_state.js"),
+    page_state_js=PAGE_STATE_JS,
     stop_reason=_stop_reason,
     default_gap=4.0,
     content_js=CONTENT_JS,

@@ -1,15 +1,9 @@
-// Where the tab is, whether Reddit is signed in, and whether it is showing a block/CAPTCHA.
-// Reddit embeds an invisible reCAPTCHA anchor on every page; only a visible challenge
-// frame (or block wording in the page text) counts as blocked.
+// Where the tab is and whether Reddit is signed in. reddit_tab.py adds the shared wall check
+// (research_core.block_check_js) with Reddit's own wall wording: a visible challenge frame always
+// counts; wall wording counts only on a page that also looks like a wall, so a post that says
+// "unusual activity" no longer stops a run (seen 2026-11-18). Reddit embeds an invisible reCAPTCHA
+// anchor on every page, which the shared check ignores because it isn't visible.
 (() => {
-  const t = (document.title || "").toLowerCase();
-  const b = (document.body?.innerText || "").slice(0, 3000).toLowerCase();
-  const visible = f => {
-    const r = f.getBoundingClientRect(), s = getComputedStyle(f);
-    return r.width > 100 && r.height > 100 && s.visibility !== "hidden" && s.display !== "none" && +s.opacity > 0;
-  };
-  const challenge = [...document.querySelectorAll("iframe")].some(f =>
-    /recaptcha\/.*\/bframe|hcaptcha|challenges\.cloudflare/.test(f.src || "") && visible(f));
   return {
     url: location.href,
     title: document.title,
@@ -17,6 +11,5 @@
     // hasn't rendered either yet (slow or throttled page), which is not evidence of being signed out.
     loggedIn: document.querySelector("#expand-user-drawer-button") ? true
       : document.querySelector("#login-button") ? false : null,
-    blocked: challenge || /whoa there|blocked by network security|unusual activity|too many requests|prove you're human/.test(t + " " + b),
   };
 })()

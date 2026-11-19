@@ -13,7 +13,7 @@ H=~/.claude/skills/x-research/scripts/x_tab.py
 
 1. **Use `$H` only.** Never touch another agent's window or send raw CDP commands to the shared browser.
 2. **Read-only.** Never post, reply, like, repost, bookmark, follow, vote in a poll, message, open Grok, or change the account.
-3. **If a result contains `stop`, stop and tell the user why.** Never solve CAPTCHAs; never retry another way. X locks
+3. **If a result contains `stop`, stop and tell the user why.** If the `stop` result has `confirm.suspected_block`, don't treat the block as real: write your report so far and return `SUSPECTED BLOCK` with `confirm.stop_shot` so the orchestrator can check the screenshot. It may tell you to continue (`close <held ID> --force`, then `open`). Never solve CAPTCHAs; never retry another way. X locks
    accounts that look automated, so a wall (login flow, `/account/access`, rate limit) ends the run.
 4. **Budget:** 15 page loads unless the user says otherwise. Each result reports `loads`. Scrolling within a page
    doesn't count, but keep `--max` moderate (≤ 60).

@@ -54,7 +54,7 @@ def _cookie_session(site: Site) -> bool | None:
 
 def _stop_reason(state: dict, site: Site) -> str | None:
     if state.get("blocked"):
-        return "Newegg is showing a bot check, CAPTCHA or access-denied page. Stop and ask the user; do not retry."
+        return "Newegg is showing a bot check, CAPTCHA or access-denied page. Stop and return the stop_shot to the orchestrator to confirm; do not retry."
     if state.get("loggedIn") is False and _cookie_session(site) is False:
         return ("Newegg is not signed in. Ask the user to sign in in the browser window, then save it: "
                 f"chrome-agent save {site.instance} --overwrite")

@@ -57,7 +57,7 @@ def _cookie_session(site: Site) -> bool | None:
 
 def _stop_reason(state: dict, site: Site) -> str | None:
     if state.get("blocked"):
-        return "Product Hunt is showing a bot check, CAPTCHA or access-denied page. Stop and ask the user; do not retry."
+        return "Product Hunt is showing a bot check, CAPTCHA or access-denied page. Stop and return the stop_shot to the orchestrator to confirm; do not retry."
     if state.get("loggedIn") is False:
         return ("Product Hunt is not signed in. Ask the user to sign in in the browser window, then save it: "
                 f"chrome-agent save {site.instance} --overwrite")

@@ -34,7 +34,7 @@ from urllib.parse import urlparse
 # phrase counts only when the page also looks like a wall: the title or path says so, or the page is short
 # (a wall has little else on it). A phrase on an otherwise normal page is reported as `phrase_ignored`.
 # Returns {blocked, blocked_by, phrase_ignored?}; site PAGE_STATE_JS merges it in.
-BLOCK_CHECK_JS = r"""(() => {
+_BLOCK_CHECK_TEMPLATE = r"""(() => {
   const body = document.body?.innerText || "";
   const text = ((document.title || "") + " " + body.slice(0, 4000)).toLowerCase();
   const visible = el => { const r = el.getBoundingClientRect(), s = getComputedStyle(el);
@@ -42,7 +42,7 @@ BLOCK_CHECK_JS = r"""(() => {
   const frame = [...document.querySelectorAll("iframe")].find(f =>
     /recaptcha\/.*\/bframe|hcaptcha|challenges\.cloudflare|captcha-delivery|arkoselabs/.test(f.src || "") && visible(f));
   if (frame) return {blocked: true, blocked_by: "challenge frame: " + (frame.src || "").split("?")[0].slice(0, 120)};
-  const phrase = (text.match(/access denied|unusual traffic|verify you are (a )?human|are you a (human|robot)|press (&|and) hold|just a moment/) || [])[0];
+  const phrase = (text.match(/access denied|unusual traffic|verify you are (a )?human|are you a (human|robot)|press (&|and) hold|just a moment__EXTRA__/) || [])[0];
   if (!phrase) return {blocked: false, blocked_by: null};
   const wallTitle = /access denied|are you a (human|robot)|captcha|just a moment|attention required|blocked/i.test(document.title || "");
   const wallPath = /captcha|areyouahuman|blocked|denied|challenge/i.test(location.pathname);
@@ -52,6 +52,15 @@ BLOCK_CHECK_JS = r"""(() => {
             [wallTitle && "title", wallPath && "path", short && "short page"].filter(Boolean).join(", ") + ")"};
   return {blocked: false, blocked_by: null, phrase_ignored: phrase};
 })()"""
+
+def block_check_js(extra_phrases: str = "") -> str:
+    """The shared wall check, with a site's own wall wording added to the phrase list (a regex alternation,
+    lower case, e.g. r"whoa there|blocked by network security"). Like the shared phrases, these count only
+    on a page that also looks like a wall, so the same words in a post or comment don't stop a run."""
+    return _BLOCK_CHECK_TEMPLATE.replace("__EXTRA__", "|" + extra_phrases if extra_phrases else "")
+
+
+BLOCK_CHECK_JS = block_check_js()
 
 
 BIN = shutil.which("chrome-agent") or str(Path.home() / ".local/bin/chrome-agent")
@@ -279,7 +288,7 @@ def _brief(result) -> dict:
     page = result.get("page") if isinstance(result.get("page"), dict) else {}
     for src in (result, page):
         for k in ("target", "url", "title", "loads", "via", "opened", "blocked", "blocked_by", "loggedIn",
-                  "stop", "stop_shot", "warning", "count", "error"):
+                  "stop", "stop_shot", "confirm", "warning", "count", "error"):
             if k in src and k not in out and src[k] not in (None, "", []):
                 v = src[k]
                 out[k] = v[:200] if isinstance(v, str) else v
@@ -1352,6 +1361,15 @@ class Site:
                 state["stop_shot"] = shot
             except Exception:  # noqa: BLE001 - the stop itself matters more than its picture
                 pass
+        if state.get("blocked"):
+            copy = _copy_stop_shot(shot, self.name)
+            state["confirm"] = {
+                "suspected_block": True, "blocked_by": state.get("blocked_by"), "stop_shot": copy or shot,
+                "next": "Stop here and return to the orchestrator with this screenshot path, the rule in "
+                        "blocked_by, and what is left to do. Don't retry and don't open another window. The "
+                        "orchestrator looks at the screenshot: if the page is normal it will tell you to "
+                        "continue (a new `open` releases this window once the site is signed in); if it is "
+                        "a real block it asks the user to clear it."}
         try:
             state["left_open"] = self.hold(full_id, str(state.get("stop") or "stop"), state.get("url"))
         except Exception:  # noqa: BLE001 - never let holding the window hide the stop
@@ -1738,6 +1756,20 @@ def raw_dir(site: str | None = None) -> Path | None:
         return None
     site = site or getattr(_LOG, "site", None)
     return Path(root).expanduser() / site if site else None
+
+
+def _copy_stop_shot(shot: str | None, site: str) -> str | None:
+    """Copy a stop screenshot into the run's raw folder (raw/<site>/shots/), where research agents and the
+    orchestrator can read it and it stays with the report. None without RESEARCH_RAW_DIR or a screenshot."""
+    d = raw_dir(site)
+    if not shot or not d:
+        return None
+    try:
+        import shutil
+        (d / "shots").mkdir(parents=True, exist_ok=True)
+        return str(shutil.copy2(shot, d / "shots" / Path(shot).name))
+    except OSError:
+        return None
 
 
 def _raw_index(d: Path) -> list[dict]:

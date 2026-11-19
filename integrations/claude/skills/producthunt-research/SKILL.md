@@ -47,7 +47,7 @@ Only fixed read queries are sent. 6,250 complexity points per 15 minutes; result
 ## Rules
 
 1. **Read-only.** No votes, comments, follows or collections, and no free-form GraphQL.
-2. **If a result contains `stop`** (rate limit, missing or rejected token, call budget), stop and tell the user.
+2. **If a result contains `stop`** (rate limit, missing or rejected token, call budget), stop and tell the user. If the `stop` result has `confirm.suspected_block`, don't treat the block as real: write your report so far and return `SUSPECTED BLOCK` with `confirm.stop_shot` so the orchestrator can check the screenshot. It may tell you to continue (`close <held ID> --force`, then `open`).
 3. **Budget:** 150 calls per run folder (`PH_RESEARCH_MAX_CALLS`). A `--url` lookup that misses tries up to three
    other spellings of the URL (www, trailing slash), one call each.
 
