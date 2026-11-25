@@ -115,3 +115,5 @@ agent following injected text can't do harm:
   sign-in, persona's name). Signed-in check: `[data-testid=SideNav_AccountSwitcher_Button]`; cookie
   `auth_token` (httpOnly). Walls: `/i/flow/login`, `/account/access`, "Rate limit exceeded".
   `clone` used to crash when no chrome-agent browsers were running (`status` prints plain text then); fixed.
+
+- **Instagram (2026-11-25):** browser `instagram`; no Google sign-in on the web, so the user signed in by hand in that window. Signed-in check: `a[href*="/direct/inbox"]`; cookie `sessionid` (httpOnly; `ds_user_id` is readable). New account, so the helper defaults to 1 window, 25 s gaps, 15 loads per window and a 30-load rolling 24 h cap (raised from 20 on 2026-11-25) (`INSTAGRAM_TAB_DAY_CAP`). Profile counts come from the `og:description` meta tag; grid thumbnails are `main a[href*="/p/"], a[href*="/reel/"]`.
