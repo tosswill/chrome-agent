@@ -121,9 +121,23 @@ def _stop_reason(state: dict, site: Site) -> str | None:
                 "Stop and return the stop_shot to the orchestrator to confirm; do not retry.")
     if state.get("gate"):
         return "YouTube is showing a consent or age gate. Stop and ask the user."
+    if state.get("notFound"):
+        return None  # a wrong handle or URL, not a sign-out: the command reports it (see _not_found)
     if not state.get("loggedIn"):
         return ("YouTube is not signed in. Ask the user to sign in manually in the browser window, "
                 f"then save it: chrome-agent save {site.instance} --overwrite")
+    return None
+
+
+# YouTube's bare 404 page has no ytd-app, so the normal ready checks would wait out their timeout on it.
+_NOT_FOUND_READY_JS = ("(document.readyState === 'complete' && !document.querySelector('ytd-app') && "
+                       "/^404 not found/i.test(document.title))")
+
+
+def _not_found(page: dict) -> str | None:
+    if page.get("notFound"):
+        return (f"YouTube says this page doesn't exist (404): {page.get('url')}. The handle or URL is probably "
+                "wrong; find the channel or video with `search` instead of guessing again. Not a sign-in problem.")
     return None
 
 
@@ -152,9 +166,10 @@ SITE = Site(
     default_instance="youtube-research-01",
     hosts=("youtube.com",),
     forbidden=("/youtubei/", "/api/timedtext", "timedtext?", "/get_video_info", "googlevideo.com"),
-    ready_js=("document.readyState === 'complete' && !!document.querySelector('ytd-app') && "
+    ready_js=("(document.readyState === 'complete' && !!document.querySelector('ytd-app') && "
               "!!document.querySelector('ytd-video-renderer, ytd-watch-metadata #title h1, "
-              "ytd-rich-item-renderer, ytd-item-section-renderer, #avatar-btn, a[href*=\"ServiceLogin\"]')"),
+              "ytd-rich-item-renderer, ytd-item-section-renderer, #avatar-btn, a[href*=\"ServiceLogin\"]')) || "
+              + _NOT_FOUND_READY_JS),
     page_state_js=PAGE_STATE_JS,
     stop_reason=_stop_reason,
     default_gap=6.0,
@@ -1126,8 +1141,9 @@ def sponsor_bias(data: dict, transcript_hits: list[dict] | None = None) -> dict:
     return res
 
 
-_VIDEO_READY_JS = ("document.readyState === 'complete' && !!window.ytInitialPlayerResponse && "
-                   "!!document.querySelector('#movie_player') && !!document.querySelector('ytd-watch-metadata #title h1')")
+_VIDEO_READY_JS = ("(document.readyState === 'complete' && !!window.ytInitialPlayerResponse && "
+                   "!!document.querySelector('#movie_player') && !!document.querySelector('ytd-watch-metadata #title h1')) || "
+                   + _NOT_FOUND_READY_JS)
 
 
 PAGES = Path(os.environ.get("YOUTUBE_TAB_PAGES", str(_DATA / "youtube-pages"))).expanduser()
@@ -1191,6 +1207,8 @@ def video(target: str, url: str) -> dict:
     page["opened"] = opened
     if "stop" in page:
         return {"page": page, "video": None}
+    if _not_found(page):
+        return {"page": page, "video": None, "error": _not_found(page)}
     data = SITE.evaluate(full_id, _js("video.js"))
     if data and data.get("stale"):
         pause(2)
@@ -1604,6 +1622,8 @@ def channel(target: str, url: str) -> dict:
     page = SITE.nav(target, url)
     if "stop" in page:
         return {"page": page, "channel": None}
+    if _not_found(page):
+        return {"page": page, "channel": None, "error": _not_found(page)}
     full_id = SITE.resolve(target)
     SITE.ensure_visible(full_id)  # fail fast in a hidden window
     ch = SITE.evaluate(full_id, _js("channel.js"))

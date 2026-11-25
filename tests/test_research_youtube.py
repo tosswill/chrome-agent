@@ -722,3 +722,46 @@ def test_screen_data_pihole_table_and_traffic_chart():
         rows += [{"x": 0.04, "y": 0.5 + i * 0.04, "text": d}, {"x": 0.21, "y": 0.5 + i * 0.04, "text": n}]
     assert S.screen_data(rows)["table_like"]
     assert S._NUM_CELL.match("1.5 MB") and S._NUM_CELL.match("500 kB")
+
+
+# --- 404 page is not a sign-out (2026-11-24: a wrong handle stopped a run as "not signed in") ---------
+
+def test_stop_reason_skips_not_found_page():
+    site = Y.SITE
+    assert Y._stop_reason({"loggedIn": False, "notFound": True}, site) is None
+    assert "not signed in" in Y._stop_reason({"loggedIn": False}, site)
+    # a real block still wins over a 404 flag
+    assert "bot check" in Y._stop_reason({"blocked": True, "notFound": True}, site)
+
+
+def test_not_found_message_points_to_search():
+    msg = Y._not_found({"notFound": True, "url": "https://www.youtube.com/@DirectWeatherChannel/videos"})
+    assert "404" in msg and "search" in msg and "@DirectWeatherChannel" in msg
+    assert Y._not_found({"loggedIn": True}) is None
+
+
+def test_ready_checks_accept_404_page():
+    assert Y._NOT_FOUND_READY_JS in Y.SITE.ready_js
+    assert Y._NOT_FOUND_READY_JS in Y._VIDEO_READY_JS
+
+
+def test_page_state_flags_404(tmp_path):
+    import shutil
+    import subprocess
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node not installed")
+    js = (ROOT / "skills" / "youtube-research" / "scripts" / "page_state.js").read_text()
+
+    def run(title, body, has_app):
+        prog = (f"const document = {{title: {json.dumps(title)}, body: {{innerText: {json.dumps(body)}}},"
+                f" querySelector: s => ({json.dumps(has_app)} && s === 'ytd-app') ? {{}} : null}};"
+                "const location = {href: 'https://www.youtube.com/@x/videos'}; const window = {};"
+                f"console.log(JSON.stringify({js.strip().rstrip(';')}));")
+        return json.loads(subprocess.run([node, "-e", prog], capture_output=True, text=True, check=True).stdout)
+
+    nf = run("404 Not Found", "This page isn't available. Sorry about that.\nTry searching for something else.", False)
+    assert nf["notFound"] is True and nf["loggedIn"] is False
+    # an in-app "video isn't available" page or a normal channel is not the bare 404
+    assert run("YouTube", "This video isn't available anymore", True)["notFound"] is False
+    assert run("Max Velocity - YouTube", "Max Velocity 2.24M subscribers", True)["notFound"] is False
