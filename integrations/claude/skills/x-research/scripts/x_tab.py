@@ -392,11 +392,42 @@ def profile(target: str, handle: str, limit: int = 20) -> dict:
             "note": "A pinned post comes first regardless of date (`reposted_by`: Pinned)."}
 
 
-def shot(target: str, out: str | None = None) -> dict:
+# Photos on the page: the open photo viewer first (a /photo/N page), else the images inside posts.
+PHOTO_SELECTORS = ('[aria-modal="true"] img[src*="/media/"]', '[data-testid="tweetPhoto"] img')
+
+
+def _mark_visible_photo_js(sel: str, n: int) -> str:
+    """JS: mark the n-th (1-based) photo matching `sel` that is in the viewport, ordered top to bottom then left
+    to right, with data-ca-photo=1; true when there is one."""
+    return (f"(() => {{ document.querySelectorAll('[data-ca-photo]').forEach(e => e.removeAttribute('data-ca-photo'));"
+            f" const vis = [...document.querySelectorAll({json.dumps(sel)})].map(e => [e, e.getBoundingClientRect()])"
+            f".filter(([e, r]) => r.width > 40 && r.height > 40 && r.bottom > 0 && r.top < innerHeight && r.right > 0 && r.left < innerWidth)"
+            f".sort((a, b) => (a[1].top - b[1].top) || (a[1].left - b[1].left));"
+            f" const hit = vis[{n - 1}]; if (!hit) return false; hit[0].setAttribute('data-ca-photo', '1'); return true; }})()")
+
+
+def shot(target: str, out: str | None = None, selector: str | None = None, photo: int | None = None) -> dict:
+    """Screenshot of the visible page, or just one element: `selector` (CSS) or `photo` N (the N-th photo
+    in view, top to bottom: the open photo viewer first, else photos in posts). Element shots leave out X's side bars, so the
+    research account's name isn't in the image."""
     full_id = SITE.resolve(target)
     path = Path(out or SITE.state / "shots" / f"{int(time.time())}.jpg")
+    if photo is not None:
+        for sel in PHOTO_SELECTORS:
+            # Count photos in the viewport, top to bottom: on a scrolled feed the document order includes
+            # photos far above or below the view, so "photo 1" used to be an off-screen image (2026-11-25).
+            if SITE.evaluate(full_id, _mark_visible_photo_js(sel, photo)):
+                selector = "[data-ca-photo='1']"
+                break
+        else:
+            raise Fail(f"no photo #{photo} in view; scroll it into view, or open its /photo/1 view first")
+    if selector:
+        res = SITE.capture(full_id, path, selector=selector)
+        res.update(path=str(path), note="Look at the image before using it.")
+        return res
     SITE.screenshot(full_id, path, max_width=1600)
-    return {"path": str(path), "note": "Look at the image before using it."}
+    return {"path": str(path), "note": "Look at the image before using it. A whole-page shot shows the research "
+                                       "account's name in the side bar; use --photo N or --selector for an element."}
 
 
 def _dispatch(cmd: str, args: list[str]):
@@ -418,8 +449,9 @@ def _dispatch(cmd: str, args: list[str]):
             raise Fail("usage: profile ID HANDLE [--max N]")
         return profile(args[0], args[1], mx)
     if cmd == "shot" and args:
-        out = opt(args, "--out")
-        return shot(args[0], out if isinstance(out, str) else None)
+        out, sel, photo = opt(args, "--out"), opt(args, "--selector"), opt(args, "--photo")
+        return shot(args[0], out if isinstance(out, str) else None, sel if isinstance(sel, str) else None,
+                    int(photo) if isinstance(photo, str) else None)
     res = common_cli(SITE, cmd, args)
     if res is NotImplemented:
         raise Fail(f"unknown command: {cmd}")

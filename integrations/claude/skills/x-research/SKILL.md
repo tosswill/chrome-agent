@@ -40,7 +40,7 @@ $H open --wait                                   # -> {"target": "<ID>"}
 $H search <ID> "sony a7c ii" [--latest] [--max 40]   # typed into the search box (1 load), then scrolls
 $H post <ID> '<post url>' [--max 40]             # the post, thread above it, and replies (1 load)
 $H profile <ID> @handle [--max 20]               # bio, followers, joined, verified + recent posts (1 load)
-$H shot <ID> [--out PATH]
+$H shot <ID> [--out PATH] [--photo N | --selector CSS]   (--photo N: the N-th photo in view, top to bottom, no side bars. Reliable targets: `--selector "a[href='/<handle>/status/<id>/photo/1']"` for a post's photo, `--selector "[aria-modal='true'] img"` in the open photo or avatar viewer (avatars come out at 384 px))
 $H close <ID>
 $H log [<ID>] [--since 2h] [--last N] [--raw]    # action log (no page load)
 ```
