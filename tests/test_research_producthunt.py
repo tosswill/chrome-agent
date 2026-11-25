@@ -134,3 +134,13 @@ def test_signals_counts_launch_comments(api, tmp_path, capsys):
     capsys.readouterr()
     out = R.run(tmp_path / "raw", {"Glassy": ["glass"]}, [])
     assert out["sites"]["producthunt"]["metrics"]["items"] == 2
+
+
+def test_search_page_check():
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "integrations" / "claude" / "skills"
+                           / "producthunt-research" / "scripts"))
+    import producthunt_tab as PT
+    assert PT._is_search_page("https://www.producthunt.com/search?q=ai+weather")
+    assert PT._is_search_page("https://www.producthunt.com/search/?q=x")
+    assert not PT._is_search_page("https://www.producthunt.com/p/new?category=general&ref=header")
+    assert not PT._is_search_page(None)

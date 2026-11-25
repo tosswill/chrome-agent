@@ -29,7 +29,7 @@ import random
 import sys
 import time
 from pathlib import Path
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlparse
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parents[2] / "lib"))
@@ -79,6 +79,10 @@ SITE.min_width = 1200
 INSTANCE = SITE.instance
 
 
+def _is_search_page(url: str | None) -> bool:
+    return urlparse(url or "").path.rstrip("/") == "/search"
+
+
 def search(target: str, query: str, tab: str | None = None) -> dict:
     """Typed into the header search like a person, else by URL. Results are cards without links: the reply
     carries the results page as text; open one with `click ID --text "<name>"` (the URL then gives the product
@@ -88,6 +92,11 @@ def search(target: str, query: str, tab: str | None = None) -> dict:
     page = SITE.typed_search(target, SEARCH_BOX, query, url)
     if "stop" in page:
         return {"page": page, "results_text": ""}
+    if not _is_search_page(page.get("url")):
+        # Enter went somewhere other than search results: load them by URL (another counted load).
+        page = {**SITE.nav(target, url), "via": "url", "typed_fallback": f"typed search landed on {page.get('url')}"}
+        if "stop" in page:
+            return {"page": page, "results_text": ""}
     full_id = SITE.resolve(target)
     SITE.wait_for(full_id, "document.querySelectorAll('main button').length > 3", timeout=10)
     SITE.read_pause(full_id, random.uniform(1.5, 3))

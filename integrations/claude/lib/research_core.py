@@ -1326,9 +1326,16 @@ class Site:
             self.uncount_load(full_id)
             raise Fail("the search box isn't visible")
         pause(0.4)
+        # Type only into the search box itself. On 2026-11-24 a Product Hunt header click opened
+        # "Start new thread" (/p/new) instead and the query went there. When the focus or the URL moved,
+        # load the results URL instead and say why.
+        if not self._box_focused(full_id, box, before):
+            return self._typed_fallback(full_id, target, fallback_url, "the click didn't focus the search box")
         self.evaluate(full_id, f"(() => {{ const i = document.querySelector({json.dumps(box)}); if (i && i.value) i.select(); }})()")
         self.type_text(full_id, query)
         pause(random.uniform(0.5, 1.0))
+        if not self._box_focused(full_id, box, before, query):
+            return self._typed_fallback(full_id, target, fallback_url, "the search box lost focus while typing")
         self.key(full_id, "Enter")
         with timed("page_load"):
             self.wait_for(full_id, changed_js or f"location.href !== {json.dumps(before)} && document.readyState === 'complete'",
@@ -1341,6 +1348,28 @@ class Site:
             self.record_stop(full_id, page)
         else:
             self.log_page(page)
+        return page
+
+    @staticmethod
+    def _box_focused_js(box: str, before: str, query: str | None = None) -> str:
+        """JS: true when the page is still `before` and the focused element is `box` (or inside it), and, given
+        `query`, the box holds it."""
+        value = (f" && (a.value || '').trim().toLowerCase() === {json.dumps(query.strip().lower())}"
+                 if query is not None else "")
+        return (f"(() => {{ const a = document.activeElement, b = document.querySelector({json.dumps(box)});"
+                f" return location.href === {json.dumps(before)} && !!a && !!b && (a === b || b.contains(a))"
+                f" && /^(input|textarea)$/i.test(a.tagName){value}; }})()")
+
+    def _box_focused(self, full_id: str, box: str, before: str, query: str | None = None) -> bool:
+        return bool(self.evaluate(full_id, self._box_focused_js(box, before, query)))
+
+    def _typed_fallback(self, full_id: str, target: str, fallback_url: str, why: str) -> dict:
+        """Typed search went wrong before Enter: drop the counted typed load and load the results URL."""
+        log_event("typed_search_fallback", target=full_id, why=why)
+        self.key(full_id, "Escape")
+        self.uncount_load(full_id)
+        page = self.nav(target, fallback_url)
+        page.update(via="url", typed_fallback=why)
         return page
 
     def log_page(self, state: dict, **extra) -> None:

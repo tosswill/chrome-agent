@@ -346,3 +346,66 @@ def test_record_stop_holds_the_window(tmp_path, monkeypatch):
 def test_write_action_detection(desc, blocked):
     import research_core as C
     assert (C._write_action(desc) is not None) == blocked, (desc, C._write_action(desc))
+
+
+# --- typed search types only into the focused search box (2026-11-24: a Product Hunt header click opened
+# "Start new thread" and the query went there) ----------------------------------------------------------
+
+def _typed_site(tmp_path, monkeypatch, focused):
+    C, site, _ = _held_site(tmp_path, monkeypatch)
+    calls = {"typed": [], "keys": [], "nav": [], "uncount": 0}
+    focus = list(focused)  # answers for successive focus checks
+
+    def evaluate(fid, expr, timeout=None):
+        if "document.activeElement" in expr:
+            return focus.pop(0)
+        if expr == "location.hostname":
+            return "example.com"
+        if expr == "location.href":
+            return "https://example.com/p/x"
+        if expr.startswith("!!document.querySelector"):
+            return True
+        return {"url": "https://example.com/search?q=q"}
+
+    monkeypatch.setattr(site, "resolve", lambda t: t)
+    monkeypatch.setattr(site, "ensure_visible", lambda *a, **k: None)
+    monkeypatch.setattr(site, "evaluate", evaluate)
+    monkeypatch.setattr(site, "_count_load", lambda fid: 1)
+    monkeypatch.setattr(site, "_pace", lambda *a: None)
+    monkeypatch.setattr(site, "click_on", lambda *a, **k: True)
+    monkeypatch.setattr(site, "type_text", lambda fid, text: calls["typed"].append(text))
+    monkeypatch.setattr(site, "key", lambda fid, k, *a, **kw: calls["keys"].append(k))
+    monkeypatch.setattr(site, "wait_for", lambda *a, **k: True)
+    monkeypatch.setattr(site, "uncount_load", lambda fid: calls.__setitem__("uncount", calls["uncount"] + 1))
+    monkeypatch.setattr(site, "nav", lambda t, url: calls["nav"].append(url) or {"url": url})
+    monkeypatch.setattr(C, "pause", lambda *a: None)
+    return site, calls
+
+
+def test_typed_search_never_types_when_box_not_focused(tmp_path, monkeypatch):
+    site, calls = _typed_site(tmp_path, monkeypatch, focused=[False])
+    page = site.typed_search("T1", "input#q", "weather briefing", "https://example.com/search?q=weather+briefing")
+    assert calls["typed"] == [] and "Enter" not in calls["keys"] and calls["keys"] == ["Escape"]
+    assert calls["nav"] == ["https://example.com/search?q=weather+briefing"] and calls["uncount"] == 1
+    assert page["via"] == "url" and "didn't focus" in page["typed_fallback"]
+
+
+def test_typed_search_no_enter_when_focus_lost_while_typing(tmp_path, monkeypatch):
+    site, calls = _typed_site(tmp_path, monkeypatch, focused=[True, False])
+    page = site.typed_search("T1", "input#q", "weather", "https://example.com/search?q=weather")
+    assert calls["typed"] == ["weather"] and "Enter" not in calls["keys"]
+    assert page["via"] == "url" and "lost focus" in page["typed_fallback"]
+
+
+def test_typed_search_types_and_submits_when_focused(tmp_path, monkeypatch):
+    site, calls = _typed_site(tmp_path, monkeypatch, focused=[True, True])
+    page = site.typed_search("T1", "input#q", "weather", "https://example.com/search?q=weather")
+    assert calls["typed"] == ["weather"] and calls["keys"] == ["Enter"] and calls["nav"] == []
+    assert page["via"] == "typed"
+
+
+def test_box_focused_js_checks_url_focus_and_value():
+    import research_core as C
+    js = C.Site._box_focused_js("[data-test=header-search-input]", "https://x.com/a", "Weather Briefing ")
+    assert 'location.href === "https://x.com/a"' in js and "document.activeElement" in js
+    assert '"weather briefing"' in js and "textarea" in js
