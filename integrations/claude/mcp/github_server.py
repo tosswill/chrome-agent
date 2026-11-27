@@ -75,7 +75,7 @@ def _call(cmd: str, raw_dir: str, args: list, fn) -> str:
     saved = core.save_raw(cmd, argv, result)
     if saved:
         result["raw_file"] = f"github/{saved}"
-    return json.dumps(result, ensure_ascii=False)[:200_000]
+    return core.compact_output(result, result.get("raw_file"))
 
 
 def _cap(n: int, hi: int = 100) -> int:

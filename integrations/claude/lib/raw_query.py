@@ -32,7 +32,7 @@ from pathlib import Path
 ROOT = Path(os.environ.get("RAW_QUERY_REPORTS_ROOT",
                            str(Path(__file__).resolve().parents[4] / "reports"))).resolve()
 WRAP_KEYS = ("cmd", "args", "saved_at", "result")
-MAX_OUT = 60_000
+MAX_OUT = int(os.environ.get("RESEARCH_MAX_PRINT", "20000"))  # under Claude Code's ~30k spill size
 
 
 class QueryError(Exception):

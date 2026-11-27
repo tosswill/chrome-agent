@@ -1910,6 +1910,44 @@ def end_command(result) -> None:
                   if isinstance(result, dict) else None, **_brief(result))
 
 
+# Claude Code saves tool output past ~30k characters to a file outside reports/, which the research guard (rightly)
+# won't let agents read. So helpers print at most MAX_PRINT characters; the full result is already in raw_file.
+MAX_PRINT = int(os.environ.get("RESEARCH_MAX_PRINT", "20000"))
+
+
+def _shrink(o, chars: int, items: int, depth: int = 0):
+    if isinstance(o, str):
+        return o if len(o) <= chars else o[:chars] + f"… [{len(o)} chars]"
+    if isinstance(o, list):
+        kept = [_shrink(v, chars, items, depth + 1) for v in o[:items]]
+        return kept + ([f"… [{len(o) - items} more items]"] if len(o) > items else [])
+    if isinstance(o, dict):
+        if depth > 6:
+            return "… [nested]"
+        return {k: _shrink(v, chars, items, depth + 1) for k, v in o.items()}
+    return o
+
+
+def compact_output(result, raw_file: str | None, raw_prefix: str = "", limit: int | None = None,
+                   indent: int | None = None) -> str:
+    """JSON text of `result`, or, when that is longer than `limit` and the full result was saved, a shrunken
+    preview (long strings and lists cut) plus a note naming the raw file to read the rest from."""
+    limit = MAX_PRINT if limit is None else limit
+    text = json.dumps(result, indent=indent, ensure_ascii=False, default=str)
+    if len(text) <= limit or not raw_file:
+        return text
+    for chars, items in ((400, 20), (200, 10), (120, 5), (60, 3), (40, 1)):
+        prev = _shrink(result, chars, items)
+        prev["output_cut"] = {"full_chars": len(text), "raw_file": f"{raw_prefix}{raw_file}",
+                              "how": "read the full result from raw_file with raw_query.py <raw dir> <raw_file> "
+                                     "--path result.<key> (or raw_query_saved), not by rerunning"}
+        out = json.dumps(prev, indent=indent, ensure_ascii=False, default=str)
+        if len(out) <= limit:
+            return out
+    return json.dumps({"output_cut": prev["output_cut"], "keys": list(result)[:50]} if isinstance(result, dict)
+                      else {"output_cut": prev["output_cut"]}, ensure_ascii=False)
+
+
 def run_cli(doc: str, dispatch: Callable[[str, list[str]], object], argv: list[str]) -> int:
     import sys
     if len(argv) < 2:
@@ -1934,7 +1972,7 @@ def run_cli(doc: str, dispatch: Callable[[str, list[str]], object], argv: list[s
         saved = save_raw(cmd, argv[2:], result)
         if saved:
             result["raw_file"] = saved
-        print(json.dumps(result, indent=2, ensure_ascii=False))
+        print(compact_output(result, saved, indent=2))
         return 0
     except Fail as e:
         out = attach_timings({"error": str(e)})
