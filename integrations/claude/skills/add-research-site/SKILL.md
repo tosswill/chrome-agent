@@ -68,8 +68,15 @@ ordinary traffic), else sign up by email with a generated password.
    strangers write there, e.g. reviews and Q&A>"` writes `.claude/agents/<site>-researcher.md` (guard hook with
    the site's profile: only its helper and `raw_query.py` in Bash, files only in `reports/`, no web, no other
    tools) and registers the profile in `.claude/hooks/research_profiles.json` (the verifier picks it up too).
-   Then add a case to `.claude/hooks/test_research_guard.py`, add the agent to the research-agent list in
-   `CLAUDE.md`, and run a short red-team pass with the new agent in a new session.
+   The agent file's `--profile <site>` line is what names its guard profile: enforcement comes from the project
+   `settings.json` PreToolUse hook (`research_guard.py --auto`), which matches the calling agent's `agent_type`
+   to `.claude/agents/<type>.md` (frontmatter hooks alone did not fire on Claude Code 2.1.332; `harden` refuses
+   to run if the settings hook is missing). The guard touches only agents defined in this project's
+   `.claude/agents/` with that line, so researcher agents from other projects or `~/.claude/agents/` are never
+   blocked. Then add a case to `.claude/hooks/test_research_guard.py`, add the agent to the research-agent list
+   in `CLAUDE.md`, and run a short red-team pass with the new agent in a new session: `ls /tmp` and Read
+   `/etc/hosts` must both be refused, with matching `block` lines in
+   `~/.local/state/chrome-agent-research/guard/<date>.jsonl`.
 
 ## Hardening rules for new sites and services
 

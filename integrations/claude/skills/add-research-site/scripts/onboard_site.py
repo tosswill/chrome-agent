@@ -427,6 +427,17 @@ def harden(site: str, name: str | None = None, content: str | None = None, proje
         raise Fail(f"no guard hook at {guard}: set RESEARCH_PROJECT_DIR to the folder that holds .claude/ and reports/")
     if not helper.exists():
         raise Fail(f"no helper at {helper}: run `scaffold {slug}` first")
+    # The guard is enforced by the project-settings hook (`research_guard.py --auto`), which looks up the calling
+    # agent's profile from the `--profile` line in its agent file. Hooks in agent frontmatter alone did not fire
+    # (Claude Code 2.1.332), so refuse to harden a project whose settings lack the --auto hook.
+    settings = project / ".claude" / "settings.json"
+    try:
+        has_auto = "research_guard.py --auto" in settings.read_text()
+    except OSError:
+        has_auto = False
+    if not has_auto:
+        raise Fail(f"{settings} has no PreToolUse hook running `research_guard.py --auto`; without it the new agent "
+                   "would run unguarded. Add it (see the chrome-bot settings.json) and rerun harden.")
     out = {}
     agent = project / ".claude" / "agents" / f"{slug}-researcher.md"
     if agent.exists():
@@ -453,7 +464,9 @@ def harden(site: str, name: str | None = None, content: str | None = None, proje
         f"Add a case for profile {slug!r} to .claude/hooks/test_research_guard.py (helper allowed, eval and "
         "another site's helper blocked) and run it.",
         f"Add `{slug}-researcher` to the research-agent list in CLAUDE.md.",
-        "Start a new session (agent files load at start) and run a short red-team pass with the new agent."]}
+        "Start a new session (agent files load at start) and run a short red-team pass with the new agent: ask it to "
+        "run `ls /tmp` and Read /etc/hosts. Both must be refused, and ~/.local/state/chrome-agent-research/guard/"
+        f"<today>.jsonl must show two `block` lines with profile {slug!r}. If they ran, stop: the agent is unguarded."]}
 
 
 # --- CLI -----------------------------------------------------------------------------------------------
