@@ -60,6 +60,8 @@ def test_harden_writes_agent_and_profile(tmp_path, monkeypatch):
     project = tmp_path / "proj"
     (project / ".claude" / "hooks").mkdir(parents=True)
     (project / ".claude" / "hooks" / "research_guard.py").write_text("# guard")
+    (project / ".claude" / "settings.json").write_text(
+        '{"hooks": {"PreToolUse": [{"hooks": [{"type": "command", "command": "python3 x/research_guard.py --auto"}]}]}}')
     skills = tmp_path / "claude" / "skills"
     helper = skills / "shopsite-research" / "scripts" / "shopsite_tab.py"
     helper.parent.mkdir(parents=True)
@@ -87,3 +89,16 @@ def test_harden_needs_guard_and_helper(tmp_path, monkeypatch):
     (tmp_path / ".claude" / "hooks" / "research_guard.py").write_text("")
     with pytest.raises(O.Fail, match="scaffold"):
         O.harden("shopsite", project=tmp_path)
+
+
+def test_harden_refuses_without_settings_guard_hook(tmp_path, monkeypatch):
+    """Frontmatter hooks didn't fire on Claude Code 2.1.332, so harden insists on the project-settings hook."""
+    monkeypatch.setattr(O, "ROOT", tmp_path / "claude")
+    (tmp_path / ".claude" / "hooks").mkdir(parents=True)
+    (tmp_path / ".claude" / "hooks" / "research_guard.py").write_text("")
+    helper = tmp_path / "claude" / "skills" / "shopsite-research" / "scripts" / "shopsite_tab.py"
+    helper.parent.mkdir(parents=True)
+    helper.write_text("# helper")
+    with pytest.raises(O.Fail, match="--auto"):
+        O.harden("shopsite", project=tmp_path)
+    assert not (tmp_path / ".claude" / "agents").exists()

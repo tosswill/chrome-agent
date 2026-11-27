@@ -20,7 +20,7 @@ default <chrome-bot>/reports).
 Saved files wrap the command's output in {"cmd", "args", "saved_at", "result"}; a path that doesn't start with
 one of those keys is looked up under `result`. --fields picks keys from each item of a list (dotted keys work:
 `owner.login`). --grep keeps list items whose text contains T; --where F=V keeps items whose field equals V
-(F>V, F<V for numbers). Strings longer than --chars (default 400) are cut, with their full length noted.
+(F!=V; F>N, F>=N, F<N, F<=N for numbers; quote the condition in the shell). Strings longer than --chars (default 400) are cut, with their full length noted.
 Output is JSON; lists come back as {"total", "matched", "offset", "items"}.
 """
 import json
@@ -142,23 +142,29 @@ def text_of(o) -> str:
     return json.dumps(o, ensure_ascii=False).lower() if not isinstance(o, str) else o.lower()
 
 
+_OPS = {">=": lambda a, b: a >= b, "<=": lambda a, b: a <= b, ">": lambda a, b: a > b, "<": lambda a, b: a < b}
+
+
 def _where(items: list, cond: str) -> list:
-    m = re.match(r"^([\w.]+)\s*(=|>|<)\s*(.*)$", cond)
+    """FIELD=VALUE, FIELD!=VALUE (case-insensitive text), or FIELD>N, >=N, <N, <=N (numbers). Quote the condition
+    in the shell ("sec>=780"): unquoted, `>` is a redirect."""
+    m = re.match(r"^([\w.]+)\s*(!=|>=|<=|=|>|<)\s*(.*)$", cond)
     if not m:
-        raise QueryError("--where needs FIELD=VALUE, FIELD>NUMBER or FIELD<NUMBER")
+        raise QueryError(f"--where needs FIELD=VALUE, FIELD!=VALUE or FIELD>N / >=N / <N / <=N (got {cond!r}; "
+                         "quote it in the shell, e.g. --where \"sec>=780\")")
     f, op, v = m.groups()
     out = []
     for it in items:
         x = get_field(it, f)
-        if op == "=":
-            if str(x).lower() == v.lower():
+        if op in ("=", "!="):
+            if (str(x).lower() == v.lower()) == (op == "="):
                 out.append(it)
-        else:
-            try:
-                if (float(x) > float(v)) if op == ">" else (float(x) < float(v)):
-                    out.append(it)
-            except (TypeError, ValueError):
-                pass
+            continue
+        try:
+            if _OPS[op](float(x), float(v)):
+                out.append(it)
+        except (TypeError, ValueError):
+            pass
     return out
 
 
@@ -284,7 +290,9 @@ def main(argv: list[str]) -> int:
             raise QueryError(f"unexpected arguments: {rest}")
         out = query(raw_dir, target, **kw)
     except (QueryError, ValueError) as e:
-        print(json.dumps({"error": str(e)}))
+        msg = json.dumps({"error": str(e)})
+        print(msg)
+        print(msg, file=sys.stderr)  # still visible if stdout was redirected by mistake
         return 1
     s = json.dumps(out, ensure_ascii=False, indent=1)
     if len(s) > MAX_OUT:
