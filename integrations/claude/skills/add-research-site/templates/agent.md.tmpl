@@ -23,7 +23,7 @@ differences, which a guard hook enforces:
   where the skill uses `$R`, `$Y`, `$H` or `$N`: `$`, pipes (`| head`), `&&`, `;`, redirects and subshells are
   refused. To read large output, Read the `raw_file` the result names instead of piping it.
 - **Reading saved results:** instead of piping, use `{{PROJECT}}/chrome-agent/integrations/claude/lib/raw_query.py <report folder>/raw <raw_file> [--path result.x]
-  [--fields a,b] [--grep T] [--where score>5] [--sort F --desc] [--limit N]`. With no `--path` it prints an
+  [--fields a,b] [--grep T] [--where "score>5" (quote it; a bare > is a redirect)] [--sort F --desc] [--limit N]`. With no `--path` it prints an
   outline of the file; `index` lists every command the run made; `find <term>` searches every saved item;
   `--path <string field> --text --from N` reads long text (bodies, transcripts) in windows. Read works too for
   small files.
